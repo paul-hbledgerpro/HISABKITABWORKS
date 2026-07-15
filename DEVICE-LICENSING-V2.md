@@ -40,6 +40,7 @@ Revoking a PC prevents future renewal. Because this is a fully offline licensing
 
 - Keep the private signing key only on authorized developer/admin Windows accounts.
 - Do not send the private signing key to a customer.
+- Use the generator's **Back Up Key** option to create a password-encrypted `.hbsigningbackup`, then use **Set Up / Restore Key** on another authorized developer PC.
 - Create only the number of paid PC seats purchased by the customer.
 - Use monthly or shorter expiration periods for stronger offline enforcement.
 - Back up the private signing key securely. Losing it prevents renewal of existing device licenses with the same trust key.

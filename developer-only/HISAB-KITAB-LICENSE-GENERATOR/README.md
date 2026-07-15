@@ -7,9 +7,11 @@ This folder is a standalone developer project with its own `HISAB KITAB WORKS Li
 ## Security boundary
 
 - The RSA private signing key is not stored in this repository or compiled into the executable.
-- On first use, choose **Import Signing Key** and select either the original `LicenseGen_MainWindow.xaml.cs` file, a raw Base64 key file, or an RSA private-key PEM file.
+- The official V2 private signing key is created once and is never committed to GitHub or compiled into either application.
+- On another developer PC, choose **Set Up / Restore Key** and select the encrypted `.hbsigningbackup` created on the first developer PC.
 - The validated key is encrypted with Windows DPAPI for the current Windows user and stored under `%LOCALAPPDATA%\HISAB KITAB WORKS\License Generator`.
-- A different Windows user or computer must import the signing key separately.
+- Use **Back Up Key** to create a password-encrypted backup for another authorized developer PC. Keep both the backup file and its password away from customers.
+- A different Windows user or computer must restore the encrypted signing-key backup separately.
 
 ## Build and package
 
@@ -27,5 +29,7 @@ The separate admin installer is created under `installer_output`. Generated publ
 2. Enter the customer information and the purchased **Maximum PC Seats**, then generate the subscription key.
 3. Select **Import PC Request** and choose the customer's `.hbrequest` file.
 4. Confirm the paid PC seats and subscription expiration.
-5. Import the private signing key if this developer PC is not configured yet.
+5. Complete **Set Up / Restore Key** if this developer PC is not configured yet.
 6. Select **Issue / Renew License** and save the `.hblicense` file for the customer.
+
+The signing-key setup is required only once per authorized developer Windows account. It is intentionally required: without the private signature, customers could manufacture their own license files.

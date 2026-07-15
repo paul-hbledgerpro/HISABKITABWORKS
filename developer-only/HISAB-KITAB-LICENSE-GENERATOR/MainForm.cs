@@ -25,7 +25,8 @@ internal sealed partial class MainForm : Form
     private readonly Button _deviceLicenses = AdminTheme.Button("IMPORT PC REQUEST", primary: true);
     private readonly Button _copyKey = AdminTheme.Button("COPY KEY");
     private readonly Button _exportLicense = AdminTheme.Button("OPEN DEVICE LICENSES");
-    private readonly Button _importSigningKey = AdminTheme.Button("IMPORT SIGNING KEY");
+    private readonly Button _importSigningKey = AdminTheme.Button("SET UP / RESTORE KEY");
+    private readonly Button _backupSigningKey = AdminTheme.Button("BACK UP KEY");
     private readonly Label _dbStatus = AdminTheme.Label("●  Not connected", AdminTheme.Muted, 9.5f);
     private readonly Label _signingStatus = AdminTheme.Label("", AdminTheme.Muted, 9.5f);
     private readonly Label _keyValue = AdminTheme.Label("—", AdminTheme.Copper, 22, true);
@@ -60,6 +61,7 @@ internal sealed partial class MainForm : Form
         _deviceLicenses.Enabled = false;
         _copyKey.Enabled = false;
         _exportLicense.Enabled = false;
+        _backupSigningKey.Enabled = false;
 
         Controls.Add(BuildLayout());
         WireEvents();
@@ -95,6 +97,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         _copyKey.Click += (_, _) => CopyLicenseKey();
         _exportLicense.Click += (_, _) => OpenDeviceLicenseManager();
         _importSigningKey.Click += (_, _) => ImportSigningKey();
+        _backupSigningKey.Click += (_, _) => BackupSigningKey();
 
         foreach (var field in new[] { _server, _username, _password })
             field.TextChanged += (_, _) => MarkConnectionStale();
@@ -519,21 +522,64 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     {
         using var dialog = new OpenFileDialog
         {
-            Title = "Import HISAB KITAB WORKS Offline-License Signing Key",
-            Filter = "Signing key or legacy generator source (*.txt;*.pem;*.key;*.cs)|*.txt;*.pem;*.key;*.cs|All files (*.*)|*.*"
+            Title = "Set Up or Restore HISAB KITAB WORKS Signing Key",
+            Filter = "Encrypted signing-key backup (*.hbsigningbackup)|*.hbsigningbackup|Signing key or legacy source (*.txt;*.pem;*.key;*.cs)|*.txt;*.pem;*.key;*.cs|All files (*.*)|*.*"
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
 
         try
         {
-            SigningKeyStore.Import(dialog.FileName);
+            if (Path.GetExtension(dialog.FileName).Equals(".hbsigningbackup", StringComparison.OrdinalIgnoreCase))
+            {
+                var password = SigningKeyPasswordForm.PromptForRestore(this);
+                if (password is null)
+                    return;
+                SigningKeyStore.ImportEncryptedBackup(dialog.FileName, password);
+            }
+            else
+            {
+                SigningKeyStore.Import(dialog.FileName);
+            }
             RefreshSigningKeyStatus();
-            ShowSuccess("The private signing key was validated and encrypted for this Windows admin account.");
+            ShowSuccess("Signing is ready on this PC. You can now import a PC request and issue its device license.");
         }
         catch (Exception ex)
         {
             ShowError($"Could not import the signing key.\r\n{ex.Message}");
+        }
+    }
+
+    private void BackupSigningKey()
+    {
+        if (!SigningKeyStore.IsConfigured)
+        {
+            ShowError("Set up the signing key on this PC first.");
+            return;
+        }
+
+        var password = SigningKeyPasswordForm.PromptForBackup(this);
+        if (password is null)
+            return;
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save Encrypted Signing-Key Backup",
+            Filter = "HISAB KITAB Signing-Key Backup (*.hbsigningbackup)|*.hbsigningbackup",
+            FileName = "HISAB_KITAB_SIGNING_KEY_BACKUP.hbsigningbackup",
+            AddExtension = true,
+            DefaultExt = ".hbsigningbackup"
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        try
+        {
+            SigningKeyStore.ExportEncryptedBackup(dialog.FileName, password);
+            ShowSuccess("Encrypted signing-key backup created. Keep the file and its password private. Use Set Up / Restore Key on your work PC.");
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Could not create the signing-key backup.\r\n{ex.Message}");
         }
     }
 
@@ -601,10 +647,11 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     {
         var configured = SigningKeyStore.IsConfigured;
         _signingStatus.Text = configured
-            ? "●  Configured and protected for this Windows user"
-            : "●  Not configured - required for device license signing";
+            ? "●  Ready - protected for this Windows user"
+            : "●  One-time setup required before issuing licenses";
         _signingStatus.ForeColor = configured ? AdminTheme.Green : AdminTheme.Muted;
-        _importSigningKey.Text = configured ? "REPLACE SIGNING KEY" : "IMPORT SIGNING KEY";
+        _importSigningKey.Text = configured ? "RESTORE / REPLACE KEY" : "SET UP / RESTORE KEY";
+        _backupSigningKey.Enabled = configured;
     }
 
     private void MarkConnectionStale()
@@ -631,6 +678,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         _lookup.Enabled = !busy && _isConnected;
         _deviceLicenses.Enabled = !busy && _isConnected;
         _importSigningKey.Enabled = !busy;
+        _backupSigningKey.Enabled = !busy && SigningKeyStore.IsConfigured;
         if (busy && !string.IsNullOrWhiteSpace(message))
             ShowInfo(message);
     }

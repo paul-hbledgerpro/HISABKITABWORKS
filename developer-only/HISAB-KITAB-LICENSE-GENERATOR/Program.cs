@@ -20,6 +20,28 @@ internal static class Program
                 return 2;
             }
         }
+        if (args.Length >= 1 && args[0].Equals("--self-test-signing", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                return SigningKeyStore.VerifyConfiguration() ? 0 : 2;
+            }
+            catch
+            {
+                return 2;
+            }
+        }
+        if (args.Length >= 1 && args[0].Equals("--self-test-signing-backup", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                return SigningKeyStore.VerifyEncryptedBackupRoundTrip() ? 0 : 2;
+            }
+            catch
+            {
+                return 2;
+            }
+        }
         Application.Run(new MainForm());
         return 0;
     }

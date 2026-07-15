@@ -182,10 +182,11 @@ internal sealed partial class MainForm
         card.Margin = new Padding(0, 0, 0, 10);
         card.Padding = new Padding(18, 12, 18, 12);
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 3, RowCount = 2 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 4, RowCount = 2 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 174));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 128));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var icon = AdminTheme.Label("\uE72E", AdminTheme.Copper, 20);
@@ -200,6 +201,10 @@ internal sealed partial class MainForm
         _importSigningKey.Margin = new Padding(10, 7, 0, 7);
         layout.Controls.Add(_importSigningKey, 2, 0);
         layout.SetRowSpan(_importSigningKey, 2);
+        _backupSigningKey.Dock = DockStyle.Fill;
+        _backupSigningKey.Margin = new Padding(8, 7, 0, 7);
+        layout.Controls.Add(_backupSigningKey, 3, 0);
+        layout.SetRowSpan(_backupSigningKey, 2);
         card.Controls.Add(layout);
         return card;
     }

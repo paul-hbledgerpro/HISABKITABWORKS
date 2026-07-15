@@ -22,12 +22,20 @@ internal sealed class DeviceLicenseManagerForm : Form
     private readonly Label _deviceId = AdminTheme.Label("—", AdminTheme.Copper, 11, true);
     private readonly Label _status = AdminTheme.Label("Import a PC request to begin.", AdminTheme.Muted, 10);
     private readonly NumericUpDown _maxDevices = new() { Minimum = 1, Maximum = 999, Value = 1, Font = AdminTheme.Body(11) };
-    private readonly DateTimePicker _expires = new() { Format = DateTimePickerFormat.Short, Font = AdminTheme.Body(11) };
+    private readonly DateTimePicker _expires = new()
+    {
+        Format = DateTimePickerFormat.Short,
+        Font = AdminTheme.Body(11),
+        MinDate = DateTime.Today,
+        MaxDate = DateTime.Today.AddYears(5),
+        Value = DateTime.Today.AddMonths(1)
+    };
     private readonly DataGridView _devices = new();
     private readonly JsonSerializerOptions _json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
     private DeviceLicenseRequestV2? _request;
     private SubscriptionRecord? _subscription;
     private List<DeviceRecord> _deviceRows = new();
+    private bool _legacyExpiryAdjusted;
 
     public DeviceLicenseManagerForm(string licensingConnectionString, string server, string username, string password, bool importRequestOnOpen = false)
     {
@@ -73,19 +81,19 @@ internal sealed class DeviceLicenseManagerForm : Form
             RowCount = 4,
             Padding = new Padding(18)
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 200));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 212));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
 
-        var header = new Panel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, Padding = new Padding(24, 12, 24, 12) };
+        var header = new Panel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, Padding = new Padding(24, 10, 24, 10) };
         header.Paint += (_, e) => AdminTheme.PaintGradient(e, header.ClientRectangle);
         header.Controls.Add(new Label
         {
             Text = "DEVICE LICENSE MANAGER",
             Dock = DockStyle.Top,
             Height = 40,
-            ForeColor = AdminTheme.Text,
+            ForeColor = Color.White,
             Font = AdminTheme.Header(21),
             BackColor = Color.Transparent
         });
@@ -154,7 +162,9 @@ internal sealed class DeviceLicenseManagerForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.Controls.Add(AdminTheme.Label("CURRENT PC REQUEST", AdminTheme.Copper, 10, true), 0, 0);
+        var requestHeading = AdminTheme.Label("CURRENT PC REQUEST", AdminTheme.Copper, 10, true);
+        requestHeading.Dock = DockStyle.Fill;
+        layout.Controls.Add(requestHeading, 0, 0);
         _business.Dock = DockStyle.Fill;
         _device.Dock = DockStyle.Fill;
         _deviceId.Dock = DockStyle.Fill;
@@ -162,7 +172,7 @@ internal sealed class DeviceLicenseManagerForm : Form
         layout.Controls.Add(_device, 0, 2);
         layout.Controls.Add(_deviceId, 0, 3);
         _importRequest.Dock = DockStyle.Fill;
-        _importRequest.Margin = new Padding(0, 6, 0, 0);
+        _importRequest.Margin = new Padding(0, 6, 0, 5);
         layout.Controls.Add(_importRequest, 0, 4);
         card.Controls.Add(layout);
         return card;
@@ -184,8 +194,12 @@ internal sealed class DeviceLicenseManagerForm : Form
         heading.Dock = DockStyle.Fill;
         layout.Controls.Add(heading, 0, 0);
         layout.SetColumnSpan(heading, 2);
-        layout.Controls.Add(AdminTheme.Label("PAID PC SEATS", AdminTheme.Muted, 8.5f, true), 0, 1);
-        layout.Controls.Add(AdminTheme.Label("SUBSCRIPTION EXPIRES", AdminTheme.Muted, 8.5f, true), 1, 1);
+        var seatsLabel = AdminTheme.Label("PAID PC SEATS", AdminTheme.Muted, 8.5f, true);
+        var expiresLabel = AdminTheme.Label("SUBSCRIPTION EXPIRES", AdminTheme.Muted, 8.5f, true);
+        seatsLabel.Dock = DockStyle.Fill;
+        expiresLabel.Dock = DockStyle.Fill;
+        layout.Controls.Add(seatsLabel, 0, 1);
+        layout.Controls.Add(expiresLabel, 1, 1);
         _maxDevices.Dock = DockStyle.Top;
         _expires.Dock = DockStyle.Top;
         layout.Controls.Add(_maxDevices, 0, 2);
@@ -283,7 +297,9 @@ END", connection);
             _device.Text = request.DeviceName;
             _deviceId.Text = request.DeviceId;
             LoadSubscription(request.BusinessName, request.SubscriptionKey);
-            SetStatus("PC request verified. Confirm seats and expiration, then issue the license.", false);
+            SetStatus(_legacyExpiryAdjusted
+                ? "PC request verified. The old 100-year expiry was replaced with a one-month renewal date. Confirm it, then issue the license."
+                : "PC request verified. Confirm seats and expiration, then issue the license.", false);
         }
         catch (Exception ex)
         {
@@ -319,7 +335,12 @@ ORDER BY l.Id DESC", connection);
             throw new InvalidOperationException($"No active customer subscription was found for '{businessName}'. Generate the customer license first.");
         _subscription = matches[0];
         _maxDevices.Value = Math.Clamp(_subscription.MaxDevices, 1, 999);
-        _expires.Value = _subscription.ExpiresDate < DateTime.Today ? DateTime.Today.AddMonths(1) : _subscription.ExpiresDate;
+        var storedExpiry = _subscription.ExpiresDate.Date;
+        _legacyExpiryAdjusted = storedExpiry > DateTime.Today.AddYears(5);
+        var proposedExpiry = storedExpiry < DateTime.Today || _legacyExpiryAdjusted
+            ? DateTime.Today.AddMonths(1)
+            : storedExpiry;
+        _expires.Value = proposedExpiry > _expires.MaxDate ? _expires.MaxDate : proposedExpiry;
         RefreshDevices();
     }
 
@@ -390,7 +411,14 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
         }
         if (!SigningKeyStore.IsConfigured)
         {
-            SetStatus("Import the private signing key in the main License Generator first.", true);
+            SetStatus("One-time signing setup is required. Close this window, select Set Up / Restore Key on the main screen, then reopen this PC request.", true);
+            MessageBox.Show(this,
+                "One-time signing setup is required on this developer PC.\r\n\r\n" +
+                "1. Close Device License Manager.\r\n" +
+                "2. Select SET UP / RESTORE KEY on the main generator.\r\n" +
+                "3. Restore the encrypted signing-key backup.\r\n" +
+                "4. Reopen the PC request and issue the license.",
+                "Signing Setup Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         if (_expires.Value.Date < DateTime.Today)
