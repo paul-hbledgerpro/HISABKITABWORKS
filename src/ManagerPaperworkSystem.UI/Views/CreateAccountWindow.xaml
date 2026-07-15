@@ -1,0 +1,226 @@
+<Window Icon="pack://application:,,,/Assets/HisabKitab.ico" x:Class="ManagerPaperworkSystem.UI.Views.CreateAccountWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="HISAB KITAB - Create Account" Height="600" Width="560" 
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{StaticResource BgBrush}" Foreground="{StaticResource TextBrush}" FontFamily="Segoe UI">
+
+  <Window.Resources>
+    <!-- Local style for labels - Gold color -->
+    <Style x:Key="FormLabel" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="FontWeight" Value="Normal"/>
+      <Setter Property="Margin" Value="0,10,0,0"/>
+    </Style>
+    
+    <!-- Local style for TextBox - White background, gold border, black font -->
+    <Style x:Key="FormTextBox" TargetType="TextBox">
+      <Setter Property="MinHeight" Value="38"/>
+      <Setter Property="Background" Value="#FFFFFFFF"/>
+      <Setter Property="Foreground" Value="#FF000000"/>
+      <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="10,8"/>
+      <Setter Property="Margin" Value="0,4,0,0"/>
+    </Style>
+    
+    <!-- Local style for PasswordBox - White background, gold border, black font -->
+    <Style x:Key="FormPasswordBox" TargetType="PasswordBox">
+      <Setter Property="MinHeight" Value="38"/>
+      <Setter Property="Background" Value="#FFFFFFFF"/>
+      <Setter Property="Foreground" Value="#FF000000"/>
+      <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="10,8"/>
+      <Setter Property="Margin" Value="0,4,0,0"/>
+    </Style>
+    
+    <!-- Local style for ComboBox - White background, gold border, black font -->
+    <Style x:Key="FormComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+      <Setter Property="MinHeight" Value="38"/>
+      <Setter Property="Background" Value="#FFFFFFFF"/>
+      <Setter Property="Foreground" Value="#FF000000"/>
+      <Setter Property="TextElement.Foreground" Value="#FF000000"/>
+      <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="Margin" Value="0,4,0,0"/>
+    </Style>
+    
+    <!-- Animated Gold Button Style -->
+    <Style x:Key="AnimatedGoldButton" TargetType="Button">
+      <Setter Property="MinHeight" Value="40"/>
+      <Setter Property="MinWidth" Value="110"/>
+      <Setter Property="Padding" Value="14,8"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Foreground" Value="#FF000000"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Border x:Name="Shadow" CornerRadius="12" Background="#1A000000" Margin="0,2,0,0" Opacity="0.22"/>
+              <Border x:Name="Bd" CornerRadius="12" BorderThickness="1" BorderBrush="#FFD4AF37">
+                <Border.Background>
+                  <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#FFFFF5D6" Offset="0"/>
+                    <GradientStop Color="#FFE8C872" Offset="0.55"/>
+                    <GradientStop Color="#FFD4AF37" Offset="1"/>
+                  </LinearGradientBrush>
+                </Border.Background>
+                <Border.Effect>
+                  <DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.14" Color="#FFD4AF37"/>
+                </Border.Effect>
+                <Grid>
+                  <Border x:Name="Gloss" CornerRadius="12" Margin="1" Opacity="0.25" IsHitTestVisible="False">
+                    <Border.Background>
+                      <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#FFFFFFFF" Offset="0"/>
+                        <GradientStop Color="#55FFFFFF" Offset="0.28"/>
+                        <GradientStop Color="#00FFFFFF" Offset="0.8"/>
+                      </LinearGradientBrush>
+                    </Border.Background>
+                  </Border>
+                  <Rectangle x:Name="ShimmerX" IsHitTestVisible="False" Opacity="0" RadiusX="12" RadiusY="12">
+                    <Rectangle.Fill>
+                      <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="#00FFFFFF" Offset="0"/>
+                        <GradientStop Color="#44FFFFFF" Offset="0.5"/>
+                        <GradientStop Color="#00FFFFFF" Offset="1"/>
+                      </LinearGradientBrush>
+                    </Rectangle.Fill>
+                  </Rectangle>
+                  <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"
+                                    TextElement.Foreground="#FF000000" TextElement.FontWeight="SemiBold"/>
+                </Grid>
+              </Border>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background">
+                  <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                      <GradientStop Color="#FFFFFFFF" Offset="0"/>
+                      <GradientStop Color="#FFFFE9B0" Offset="0.55"/>
+                      <GradientStop Color="#FFF1D27A" Offset="1"/>
+                    </LinearGradientBrush>
+                  </Setter.Value>
+                </Setter>
+                <Setter TargetName="ShimmerX" Property="Opacity" Value="0.4"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background">
+                  <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                      <GradientStop Color="#FFB68B1E" Offset="0"/>
+                      <GradientStop Color="#FF9A7014" Offset="1"/>
+                    </LinearGradientBrush>
+                  </Setter.Value>
+                </Setter>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.55"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="Create a User Account" FontSize="20" FontWeight="SemiBold" 
+               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,12"/>
+
+    <TextBlock Grid.Row="1" x:Name="lblInfo" Opacity="0.85" TextWrapping="Wrap" Margin="0,0,0,10"
+               Foreground="{StaticResource WhiteTextBrush}"/>
+
+    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+
+        <!-- New user fields -->
+        <TextBlock Text="User Details" FontWeight="SemiBold" Margin="0,0,0,6" 
+                   Foreground="{StaticResource WhiteTextBrush}"/>
+
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="12"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <StackPanel Grid.Column="0">
+            <TextBlock Text="First Name" Style="{StaticResource FormLabel}"/>
+            <TextBox x:Name="txtFirstName" Style="{StaticResource FormTextBox}"/>
+          </StackPanel>
+          <StackPanel Grid.Column="2">
+            <TextBlock Text="Last Name" Style="{StaticResource FormLabel}"/>
+            <TextBox x:Name="txtLastName" Style="{StaticResource FormTextBox}"/>
+          </StackPanel>
+        </Grid>
+
+        <TextBlock Text="Role" Style="{StaticResource FormLabel}"/>
+        <ComboBox x:Name="cmbRole" Style="{StaticResource FormComboBox}"/>
+
+        <TextBlock Text="Username" Style="{StaticResource FormLabel}"/>
+        <TextBox x:Name="txtUsername" Style="{StaticResource FormTextBox}"/>
+
+        <TextBlock Text="Email Address (for web/mobile login)" Style="{StaticResource FormLabel}"/>
+        <TextBox x:Name="txtEmail" Style="{StaticResource FormTextBox}"/>
+
+        <Grid Margin="0,10,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="12"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <StackPanel Grid.Column="0">
+            <TextBlock Text="Password" Style="{StaticResource FormLabel}"/>
+            <PasswordBox x:Name="pwd1" Style="{StaticResource FormPasswordBox}"/>
+          </StackPanel>
+          <StackPanel Grid.Column="2">
+            <TextBlock Text="Confirm Password" Style="{StaticResource FormLabel}"/>
+            <PasswordBox x:Name="pwd2" Style="{StaticResource FormPasswordBox}"/>
+          </StackPanel>
+        </Grid>
+
+        <TextBlock Text="Security Question" Style="{StaticResource FormLabel}" Margin="0,12,0,0"/>
+        <ComboBox x:Name="cmbSecurityQuestion" Style="{StaticResource FormComboBox}"/>
+
+        <TextBlock Text="Security Answer" Style="{StaticResource FormLabel}"/>
+        <PasswordBox x:Name="pwdSecurityAnswer" Style="{StaticResource FormPasswordBox}"/>
+
+        <!-- Admin auth gate -->
+        <Border x:Name="adminGate" Margin="0,16,0,0" Padding="14" CornerRadius="10" 
+                BorderThickness="1" BorderBrush="{StaticResource AccentBrush}" Background="#FF0B0B0F">
+          <StackPanel>
+            <TextBlock Text="Admin Authorization" FontWeight="SemiBold" Margin="0,0,0,6" 
+                       Foreground="{StaticResource WhiteTextBrush}"/>
+            <TextBlock Text="For security, an Owner/Admin must authorize creating new accounts." 
+                       Opacity="0.85" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
+
+            <TextBlock Text="Admin Username" Style="{StaticResource FormLabel}"/>
+            <TextBox x:Name="txtAdminUser" Style="{StaticResource FormTextBox}"/>
+
+            <TextBlock Text="Admin Password" Style="{StaticResource FormLabel}"/>
+            <PasswordBox x:Name="pwdAdmin" Style="{StaticResource FormPasswordBox}"/>
+          </StackPanel>
+        </Border>
+
+        <TextBlock x:Name="lblError" Foreground="#FFFF6B6B" TextWrapping="Wrap" Margin="0,12,0,0"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+          <Button Content="Cancel" Style="{StaticResource AnimatedGoldButton}" Width="110" Margin="0,0,12,0" Click="Cancel_Click"/>
+          <Button Content="Create" Style="{StaticResource AnimatedGoldButton}" Width="110" Click="Create_Click"/>
+        </StackPanel>
+
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</Window>

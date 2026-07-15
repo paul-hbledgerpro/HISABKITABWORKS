@@ -1,0 +1,12 @@
+ManagerPaperworkSystem - Phase 1 Patch (Backend groundwork)
+
+Applied changes:
+- Added multi-store data model (Store entity, StoreId on ShiftLogs/CashOnHand/CheckPayouts/Vendors/Purposes).
+- Added purchase invoice + cost tracking models (PurchaseInvoice, Lines, ProductCost, PriceAlert).
+- Updated EF Core DbContext with new DbSets, indexes, DateOnly conversions.
+- Implemented Option B in-place SQLite upgrader (DbMigrator) using PRAGMA user_version.
+- Wired DbInitializer to run DbMigrator on startup, preserving existing data.
+
+Notes:
+- UI is still single-store; StoreId defaults to 1 so existing workflows should behave the same.
+- Purchases UI & branding are not included in this phase zip.

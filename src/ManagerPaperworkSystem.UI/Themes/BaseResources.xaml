@@ -1,0 +1,45 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    Base resources that MUST exist regardless of the selected theme.
+    The app references these keys via DynamicResource in styles/views.
+    If a key is missing, WPF can supply DependencyProperty.UnsetValue,
+    which can trigger runtime exceptions during layout/render.
+
+    Theme files (HBLightTheme, DarkTheme, etc.) can override any of these.
+  -->
+
+  <!-- Core text + borders -->
+  <SolidColorBrush x:Key="TextBrush" Color="#FF0F172A" />
+  <SolidColorBrush x:Key="MutedTextBrush" Color="#FF475569" />
+  <SolidColorBrush x:Key="BorderBrush" Color="#FFD7E3F3" />
+  <SolidColorBrush x:Key="ErrorBrush" Color="#FFE11D48" />
+
+  <!-- Default field/background brushes -->
+  <!-- Light input field background and text (dropdowns/textboxes) -->
+  <!-- WHITE background with BLACK text for maximum visibility -->
+  <SolidColorBrush x:Key="FieldBrush" Color="#FFFFFFFF" />
+  <SolidColorBrush x:Key="FieldTextBrush" Color="#FF000000" />
+
+  <!-- Accent defaults (used for buttons/headers). These get replaced by ThemeManager.ApplyAccent() at runtime. -->
+  <SolidColorBrush x:Key="AccentBrush" Color="#FF0EA5E9" />
+  <SolidColorBrush x:Key="AccentBrush2" Color="#FF22C55E" />
+
+  <LinearGradientBrush x:Key="AccentButtonBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Color="#FF0EA5E9" Offset="0" />
+    <GradientStop Color="#FF22C55E" Offset="1" />
+  </LinearGradientBrush>
+
+  <!-- Some screens still use ButtonFill / ButtonFill2 keys -->
+  <LinearGradientBrush x:Key="ButtonFill" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Color="#FF0EA5E9" Offset="0" />
+    <GradientStop Color="#FF22C55E" Offset="1" />
+  </LinearGradientBrush>
+
+  <LinearGradientBrush x:Key="ButtonFill2" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Color="#FF22C55E" Offset="0" />
+    <GradientStop Color="#FF0EA5E9" Offset="1" />
+  </LinearGradientBrush>
+
+</ResourceDictionary>

@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <!-- App version (used for assemblies + packaging). Bump this with each release. -->
+    <Version>1.0.72</Version>
+    <AssemblyVersion>1.0.72.0</AssemblyVersion>
+    <FileVersion>1.0.72.0</FileVersion>
+    <InformationalVersion>1.0.72</InformationalVersion>
+
+    <!--
+      Prevent build errors on some Windows setups caused by generating
+      obj\*.GeneratedMSBuildEditorConfig.editorconfig under very long paths.
+      (Users often unzip into a deeply nested Downloads folder.)
+    -->
+    <GenerateMSBuildEditorConfigFile>false</GenerateMSBuildEditorConfigFile>
+  </PropertyGroup>
+</Project>

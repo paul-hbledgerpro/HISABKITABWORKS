@@ -1,0 +1,14 @@
+<Application x:Class="ManagerPaperworkSystem.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/BaseResources.xaml"/>
+                <ResourceDictionary Source="Themes/HBLightTheme.xaml"/>
+                <!-- Gold DatePicker theme (pure WPF — no NuGet packages needed) -->
+                <ResourceDictionary Source="Themes/GoldDatePickerTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

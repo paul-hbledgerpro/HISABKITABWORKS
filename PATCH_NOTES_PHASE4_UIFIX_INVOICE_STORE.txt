@@ -1,0 +1,32 @@
+StoreLedger Pro — Phase 4 (UI Visibility Fixes + Invoice Import Improvements + Store Add Fix)
+
+What was fixed / improved
+
+1) Ultra-modern look (visible changes)
+- Added a left navigation sidebar with your logo + quick navigation buttons.
+- Added shortcut buttons for Reports and Store management.
+- Preserved all existing tabs/logic; this is a layout upgrade only.
+
+2) Dropdowns / Menus / Calendars visibility (your #1 issue)
+- Fixed unreadable popup text by overriding WPF SystemColors keys used by default templates.
+- Added explicit styles for:
+  - ComboBoxItem (hover/selected backgrounds + readable foreground)
+  - Menu / MenuItem / ContextMenu
+  - DatePicker + Calendar (day buttons, month/year buttons, popup background)
+
+3) Store Manager: Add Store now works (your #3 issue)
+- Store list now uses ObservableCollection so the DataGrid updates instantly.
+- "Add Store" saves immediately so the new store gets an ID right away.
+
+4) Invoice auto-import is more reliable (your #2 issue)
+- Better line-item extraction patterns:
+  - Supports optional UOM (EA/PCS/BOX/PK etc.)
+  - Supports extra columns between Qty and Unit/Amount (common distributor layouts)
+  - If only Amount is reliable, UnitCost is derived (Amount / Qty)
+- Better total detection:
+  - For PDF: searches the bottom portion and prioritizes "Grand Total / Amount Due" etc.
+  - For Excel: scans the sheet for total labels and values near the bottom
+
+Notes
+- Best results are from text-based PDFs, XLSX/XLS, or CSV.
+- Scanned/image-only invoices still require an OCR step (not included in this version).

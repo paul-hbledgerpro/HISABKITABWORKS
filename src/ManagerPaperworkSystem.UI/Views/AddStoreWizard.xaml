@@ -1,0 +1,147 @@
+<Window x:Class="ManagerPaperworkSystem.UI.Views.AddStoreWizard"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add New Store — Hisab Kitab"
+        Height="580" Width="560" WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="#FF0B0B0F" Foreground="#FFf0ece0" FontFamily="Segoe UI">
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- HEADER -->
+    <Border Grid.Row="0" Background="#FF111118" BorderBrush="#FFD4AF37" BorderThickness="0,0,0,2" Padding="20,14">
+      <StackPanel>
+        <TextBlock Text="➕ ADD NEW STORE" FontSize="18" FontWeight="ExtraBold" Foreground="#FFD4AF37"/>
+        <TextBlock x:Name="txtSubtitle" Text="Step 1: Connect to SQL Server" FontSize="12" Foreground="#FF8a8a9a" Margin="0,4,0,0"/>
+      </StackPanel>
+    </Border>
+
+    <!-- STEP INDICATOR -->
+    <Border Grid.Row="1" Background="#FF0f0f16" Padding="20,10">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <StackPanel HorizontalAlignment="Center">
+          <Border x:Name="step1Circle" Width="32" Height="32" CornerRadius="16" Background="#FFD4AF37" HorizontalAlignment="Center">
+            <TextBlock Text="1" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" Foreground="#FF000000"/>
+          </Border>
+          <TextBlock Text="Connect" HorizontalAlignment="Center" FontSize="10" Foreground="#FFD4AF37" Margin="0,4,0,0"/>
+        </StackPanel>
+        <Border Grid.Column="1" Height="2" Width="60" Background="#FF222230" VerticalAlignment="Center" Margin="0,0,0,14"/>
+        <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+          <Border x:Name="step2Circle" Width="32" Height="32" CornerRadius="16" Background="#FF222230" HorizontalAlignment="Center">
+            <TextBlock x:Name="step2Text" Text="2" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" Foreground="#FF8a8a9a"/>
+          </Border>
+          <TextBlock x:Name="step2Label" Text="Select Store" HorizontalAlignment="Center" FontSize="10" Foreground="#FF8a8a9a" Margin="0,4,0,0"/>
+        </StackPanel>
+        <Border Grid.Column="3" Height="2" Width="60" Background="#FF222230" VerticalAlignment="Center" Margin="0,0,0,14"/>
+        <StackPanel Grid.Column="4" HorizontalAlignment="Center">
+          <Border x:Name="step3Circle" Width="32" Height="32" CornerRadius="16" Background="#FF222230" HorizontalAlignment="Center">
+            <TextBlock x:Name="step3Text" Text="3" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" Foreground="#FF8a8a9a"/>
+          </Border>
+          <TextBlock x:Name="step3Label" Text="Activate" HorizontalAlignment="Center" FontSize="10" Foreground="#FF8a8a9a" Margin="0,4,0,0"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- STEP PANELS -->
+    <Grid Grid.Row="2" Margin="20,16,20,0">
+
+      <!-- STEP 1: SQL Server Connection -->
+      <StackPanel x:Name="panelStep1">
+        <TextBlock Text="SQL SERVER" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,0,0,4"/>
+        <TextBox x:Name="txtSqlServer" Height="36" Padding="10,6" FontSize="14" FontFamily="Consolas"
+                 Background="#FF13131a" Foreground="#FFf0ece0" BorderBrush="#FF222230"
+                 Text="hbstoreledger-server.database.windows.net"/>
+
+        <TextBlock Text="USERNAME" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,14,0,4"/>
+        <TextBox x:Name="txtSqlUser" Height="36" Padding="10,6" FontSize="14"
+                 Background="#FF13131a" Foreground="#FFf0ece0" BorderBrush="#FF222230"/>
+
+        <TextBlock Text="PASSWORD" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,14,0,4"/>
+        <PasswordBox x:Name="txtSqlPass" Height="36" Padding="10,6" FontSize="14"
+                     Background="#FF13131a" Foreground="#FFf0ece0" BorderBrush="#FF222230"/>
+
+        <Button x:Name="btnConnect" Content="🔌 Connect to Server" Height="40" Margin="0,20,0,0"
+                FontWeight="Bold" FontSize="14" Click="Connect_Click"/>
+
+        <TextBlock x:Name="lblStep1Status" Text="" FontSize="12" Foreground="#FF8a8a9a" Margin="0,12,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+
+      <!-- STEP 2: Select Database -->
+      <StackPanel x:Name="panelStep2" Visibility="Collapsed">
+        <TextBlock Text="SELECT A STORE DATABASE" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,0,0,8"/>
+        <TextBlock Text="Choose the database for this store from the list below:" FontSize="12" Foreground="#FF8a8a9a" Margin="0,0,0,10"/>
+        
+        <Border Background="#FF13131a" BorderBrush="#FF222230" BorderThickness="1" CornerRadius="6" Padding="2" MaxHeight="260">
+          <ListBox x:Name="lstDatabases" Background="Transparent" BorderThickness="0" Foreground="#FFf0ece0"
+                   FontSize="14" FontFamily="Consolas"/>
+        </Border>
+
+        <Grid Margin="0,14,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Button x:Name="btnBackToStep1" Content="◀ Back" Height="38" Margin="0,0,6,0" Click="BackToStep1_Click"
+                  Background="#FF222230" Foreground="#FF8a8a9a" FontWeight="SemiBold" BorderThickness="0"/>
+          <Button x:Name="btnSelectDb" Content="Select Database ▶" Grid.Column="1" Height="38" Margin="6,0,0,0"
+                  FontWeight="Bold" FontSize="13" Click="SelectDatabase_Click"/>
+        </Grid>
+
+        <TextBlock x:Name="lblStep2Status" Text="" FontSize="12" Foreground="#FF8a8a9a" Margin="0,10,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+
+      <!-- STEP 3: License Activation -->
+      <StackPanel x:Name="panelStep3" Visibility="Collapsed">
+        <Border Background="#FF1a1a24" CornerRadius="8" Padding="14" Margin="0,0,0,14">
+          <StackPanel>
+            <TextBlock Text="SELECTED STORE" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,0,0,4"/>
+            <TextBlock x:Name="txtSelectedDb" Text="" FontSize="16" FontWeight="Bold" Foreground="#FFD4AF37" FontFamily="Consolas"/>
+          </StackPanel>
+        </Border>
+
+        <TextBlock Text="STORE NAME" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,0,0,4"/>
+        <TextBox x:Name="txtFinalStoreName" Height="34" Padding="10,4" FontSize="14"
+                 Background="#FF13131a" Foreground="#FFf0ece0" BorderBrush="#FF222230"/>
+
+        <TextBlock Text="STORE ADDRESS (optional)" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,12,0,4"/>
+        <TextBox x:Name="txtFinalAddress" Height="34" Padding="10,4" FontSize="14"
+                 Background="#FF13131a" Foreground="#FFf0ece0" BorderBrush="#FF222230"/>
+
+        <TextBlock Text="LICENSE KEY" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,12,0,4"/>
+        <TextBox x:Name="txtFinalLicenseKey" Height="40" Padding="10,6" FontSize="18" FontFamily="Consolas"
+                 CharacterCasing="Upper"
+                 Background="#FF13131a" Foreground="#FFD4AF37" BorderBrush="#FF222230"/>
+
+        <Grid Margin="0,16,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Button x:Name="btnBackToStep2" Content="◀ Back" Height="40" Margin="0,0,6,0" Click="BackToStep2_Click"
+                  Background="#FF222230" Foreground="#FF8a8a9a" FontWeight="SemiBold" BorderThickness="0"/>
+          <Button x:Name="btnActivateAndAdd" Content="Select License File &amp; Add Store" Grid.Column="1" Height="40" Margin="6,0,0,0"
+                  FontWeight="Bold" FontSize="13" Click="ActivateAndAdd_Click"/>
+        </Grid>
+
+        <TextBlock x:Name="lblStep3Status" Text="" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+    </Grid>
+
+    <!-- FOOTER -->
+    <Border Grid.Row="3" Background="#FF0f0f16" Padding="20,10" BorderBrush="#FF222230" BorderThickness="0,1,0,0">
+      <TextBlock Text="🔒 Secured by Plaid — Your credentials are never shared" FontSize="10" Foreground="#FF555560" HorizontalAlignment="Center"/>
+    </Border>
+  </Grid>
+</Window>

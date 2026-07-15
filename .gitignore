@@ -1,0 +1,63 @@
+# Visual Studio and local IDE state
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# .NET build output
+**/[Bb]in/
+**/[Oo]bj/
+artifacts/
+TestResults/
+*.pdb
+*.cache
+
+# Machine-specific Visual Studio publish profiles
+**/Properties/PublishProfiles/
+
+# Generated application and installer packages
+installer/publish/
+installer/InnoSetup/[Oo]utput*/
+installer/InnoSetup/installer_output/
+installer/InnoSetup/app/
+installer/InnoSetup/previous_version/
+installer/InnoSetup/*.zip
+installer/InnoSetup/*.dll
+installer/InnoSetup/*.deps.json
+
+# Local databases, runtime settings, logs, and backups
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.mdf
+*.ldf
+*.log
+Backups/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+appsettings.*.local.json
+connection_settings.json
+store_connections.json
+license.json
+pending_store_info.json
+*.pfx
+*.snk
+*.pem
+*.key
+
+# OS and temporary files
+.DS_Store
+Thumbs.db
+Desktop.ini
+~$*
+*.tmp
+*.bak
+

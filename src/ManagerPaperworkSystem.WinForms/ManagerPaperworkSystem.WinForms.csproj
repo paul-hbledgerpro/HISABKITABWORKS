@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Version>1.0.0</Version>
+    <AssemblyName>HISAB KITAB</AssemblyName>
+    <Product>HISAB KITAB</Product>
+    <Title>HISAB KITAB</Title>
+    <Company>Hisab Kitab</Company>
+    <ApplicationIcon>..\ManagerPaperworkSystem.UI\Assets\HisabKitab.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ManagerPaperworkSystem.Core\ManagerPaperworkSystem.Core.csproj" />
+    <ProjectReference Include="..\ManagerPaperworkSystem.Data\ManagerPaperworkSystem.Data.csproj" />
+    <ProjectReference Include="..\ManagerPaperworkSystem.Reports\ManagerPaperworkSystem.Reports.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.102.3" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.8" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.8" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageReference Include="PdfPig" Version="0.1.13" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\SessionState.cs" Link="Shared\SessionState.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Views\StoreConnectionService.cs" Link="Shared\StoreConnectionService.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\PdfRuntime.cs" Link="Shared\PdfRuntime.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\ReportService.cs" Link="Shared\ReportService.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\PurchaseService.cs" Link="Shared\PurchaseService.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\InvoiceImportService.cs" Link="Shared\InvoiceImportService.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\PosReportImportService.cs" Link="Shared\PosReportImportService.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\CheckPrintService.cs" Link="Shared\CheckPrintService.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\ManagerPaperworkSystem.UI\Assets\HisabKitab_Logo.png" Link="Assets\HisabKitab_Logo.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\ManagerPaperworkSystem.UI\Assets\HisabKitab_Icon.png" Link="Assets\HisabKitab_Icon.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\ManagerPaperworkSystem.UI\Assets\HisabKitab_LoginHero.png" Link="Assets\HisabKitab_LoginHero.png" Condition="Exists('..\ManagerPaperworkSystem.UI\Assets\HisabKitab_LoginHero.png')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\ManagerPaperworkSystem.UI\Assets\HisabKitab_LoginLeftArt.png" Link="Assets\HisabKitab_LoginLeftArt.png" Condition="Exists('..\ManagerPaperworkSystem.UI\Assets\HisabKitab_LoginLeftArt.png')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\ManagerPaperworkSystem.UI\Assets\HisabKitab.ico" Link="Assets\HisabKitab.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\ManagerPaperworkSystem.UI\Assets\CheckPrintTemplate.xlsm" Link="Assets\CheckPrintTemplate.xlsm" Condition="Exists('..\ManagerPaperworkSystem.UI\Assets\CheckPrintTemplate.xlsm')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

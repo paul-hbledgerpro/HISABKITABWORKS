@@ -1,0 +1,24 @@
+PHASE 5 – Invoice Auto-Save + Stronger PDF Parsing (Option A)
+
+What changed
+1) Purchase invoices are now 100% “upload → auto-save”
+   - Single-page invoices: upload imports + saves immediately (no manual entry, no clicking Add).
+   - Multi-page PDFs: auto-imports and saves every page immediately.
+
+2) Invoice file saving fixed for batch imports
+   - Batch imports may tag the source as "file.pdf#page2".
+   - File copy now strips the #page fragment so the PDF always copies correctly into AppData.
+
+3) PDF parsing improvements (AK Wholesale + American Distributors)
+   - Totals are detected using reconstructed lines and can handle cases where the value is on the next line.
+   - American Distributors line-items parser now reads "item blocks" (SKU+QTY line + continuation lines),
+     so wrapped descriptions/prices are still extracted.
+
+Where to test
+- Purchases tab → Browse/Upload invoice:
+  - Upload Invoice_2025-12-30.pdf (AK) → lines + total should populate in the invoice list.
+  - Upload B251206_960.pdf (American) → lines + total should populate in the invoice list.
+- Product Costs + Price Alerts should update after import.
+
+Notes
+- Manual invoice entry is still available via "Allow manual edits" if needed.

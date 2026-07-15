@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <!-- We keep WinForms enabled only for ColorDialog, but we must prevent WinForms
+         implicit global-usings from polluting the WPF project (MessageBox/Application/Binding/etc.). -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Prevent WinForms implicit global-usings (System.Windows.Forms, System.Drawing, etc.) from polluting this WPF project. -->
+    <DisableImplicitNamespaceImports>true</DisableImplicitNamespaceImports>
+
+    <!-- Windows-only build: publish win-x64 (Snapdragon/Windows-on-ARM runs via x64 emulation). -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <!-- Branding (display name + exe filename) -->
+    <!-- Version — bump this with each release. Shows in About, Update checker, and file properties. -->
+    <Version>1.0.72</Version>
+    <AssemblyName>HISAB KITAB</AssemblyName>
+    <Product>HISAB KITAB</Product>
+    <Title>HISAB KITAB</Title>
+    <Company>Hisab Kitab</Company>
+    <ApplicationIcon>Assets\\HisabKitab.ico</ApplicationIcon>
+    <RootNamespace>ManagerPaperworkSystem</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\HisabKitab_Logo.png" />
+    <Resource Include="Assets\HisabKitab_Icon.png" />
+    <Resource Include="Assets\HisabKitab.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ManagerPaperworkSystem.Core\ManagerPaperworkSystem.Core.csproj" />
+    <ProjectReference Include="..\ManagerPaperworkSystem.Data\ManagerPaperworkSystem.Data.csproj" />
+    <ProjectReference Include="..\ManagerPaperworkSystem.Reports\ManagerPaperworkSystem.Reports.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.8" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.8" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.8" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.7" />
+    <!-- POS Report Imports (XLSX + PDF) -->
+    <PackageReference Include="ClosedXML" Version="0.102.3" />
+    <PackageReference Include="PdfPig" Version="0.1.13" />
+    <!-- PDF print preview (embedded browser) -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3800.47" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      NOTE: Some environments (OneDrive/AV/blocked file types) may remove or not hydrate .xlsm files.
+      Make the template optional at build/publish time so the app can still publish/run.
+      When the template is missing, the Check Print feature will show a friendly error at runtime.
+    -->
+    <None Include="Assets\\CheckPrintTemplate.xlsm" Condition="Exists('Assets\\CheckPrintTemplate.xlsm')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Copy Update.exe from Updater project output to our output directory -->
+  <Target Name="CopyUpdater" AfterTargets="Build">
+    <PropertyGroup>
+      <UpdaterExe>$(SolutionDir)src\ManagerPaperworkSystem.Updater\bin\$(Configuration)\net8.0-windows\win-x64\Update.exe</UpdaterExe>
+      <UpdaterPublish>$(SolutionDir)src\ManagerPaperworkSystem.Updater\bin\$(Configuration)\net8.0-windows\win-x64\publish\Update.exe</UpdaterPublish>
+    </PropertyGroup>
+    <!-- Try publish output first, then regular build output -->
+    <Copy SourceFiles="$(UpdaterPublish)" DestinationFolder="$(OutputPath)" Condition="Exists('$(UpdaterPublish)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(UpdaterExe)" DestinationFolder="$(OutputPath)" Condition="!Exists('$(UpdaterPublish)') AND Exists('$(UpdaterExe)')" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

@@ -1,0 +1,22 @@
+StoreLedger Pro - Phase 2 Snapshot (UI + Purchases + Branding)
+
+This is a TEST snapshot zip (requested by user). It is intended for you to build/run and validate the new UI and Purchases workflow.
+
+Included:
+- Store selector on Main screen (multi-store data separation).
+- Store Manager window (Owner/Admin only).
+- Vendor/Purpose lists are store-scoped (add/update/delete affects the selected store).
+- Purchases tab (invoice header + invoice lines + invoice file attach/copy).
+- Product Costs tab (latest cost per product, per store).
+- Price Alerts tab (auto-created when unit cost changes up/down).
+- Role permission rule: Managers can ADD invoices; Owner/Admin can Update/Delete invoices and Delete alerts.
+- Branding: app title "StoreLedger Pro", watermark background, icon.
+
+Known Snapshot Limitations (will be fixed in final release):
+- Close Month currently EXPORTS/CLEARS ALL STORES (not store-scoped yet). Avoid using Close Month during snapshot testing if you have multiple stores.
+- Monthly reports export folder does not include store name yet.
+
+Build/Run:
+- Open ManagerPaperworkSystem.sln in Visual Studio 2022/2026
+- Build/Run the UI project.
+- To create Setup.exe: run installer\publish.bat then compile installer\InnoSetup\ManagerPaperworkSystem.iss
