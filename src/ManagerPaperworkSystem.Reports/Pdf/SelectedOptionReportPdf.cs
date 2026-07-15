@@ -8,15 +8,16 @@ namespace ManagerPaperworkSystem.Reports.Pdf;
 
 public static class SelectedOptionReportPdf
 {
-    private const string Navy = "#051C2B";
-    private const string Panel = "#0A3047";
-    private const string PanelAlt = "#08283D";
-    private const string Copper = "#E0A157";
-    private const string Text = "#F5FAFF";
-    private const string Muted = "#95B0C1";
-    private const string Green = "#26CD6F";
-    private const string Red = "#FF4A4A";
-    private const string Blue = "#4591FF";
+    private const string Navy = "#071D3A";
+    private const string Panel = "#FFFFFF";
+    private const string PanelAlt = "#F4F7FA";
+    private const string Copper = "#D98224";
+    private const string Text = "#071D3A";
+    private const string Muted = "#60748A";
+    private const string Border = "#B8C7D6";
+    private const string Green = "#187A35";
+    private const string Red = "#D52B2B";
+    private const string Blue = "#2769B3";
 
     public static void GenerateSalesSummary(string storeName, string storeAddress, DateOnly from, DateOnly to, IReadOnlyList<ShiftLogEntry> entries, string outputPath)
     {
@@ -39,9 +40,9 @@ public static class SelectedOptionReportPdf
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
             BuildHeader(page, storeName, storeAddress, "Sales Summary by Date", "Daily sales totals with cash, card, tax, gross and net sales.", from, to);
-            page.Content().Padding(18).Column(col =>
+            page.Content().PaddingHorizontal(14).PaddingVertical(8).Column(col =>
             {
-                col.Spacing(12);
+                col.Spacing(8);
                 col.Item().Row(row =>
                 {
                     Metric(row, "Net Sales", Money(rows.Sum(x => x.Net)), "Month total", Green);
@@ -65,9 +66,9 @@ public static class SelectedOptionReportPdf
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
             BuildHeader(page, storeName, storeAddress, "Shift Log Report", "End-of-shift cash drop activity, payout reason, and variance review.", from, to);
-            page.Content().Padding(18).Column(col =>
+            page.Content().PaddingHorizontal(14).PaddingVertical(8).Column(col =>
             {
-                col.Spacing(12);
+                col.Spacing(8);
                 col.Item().Row(row =>
                 {
                     Metric(row, "Total Cash", Money(rows.Sum(x => x.CashTotal)), "POS reported", Copper);
@@ -93,9 +94,9 @@ public static class SelectedOptionReportPdf
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
             BuildHeader(page, storeName, storeAddress, "Cash On Hand Report", "Cash added, payouts, carry forward balance, and check references.", from, to);
-            page.Content().Padding(18).Column(col =>
+            page.Content().PaddingHorizontal(14).PaddingVertical(8).Column(col =>
             {
-                col.Spacing(12);
+                col.Spacing(8);
                 col.Item().Row(row =>
                 {
                     Metric(row, "Opening Balance", Money(0), "Beginning selected period", Copper);
@@ -132,9 +133,9 @@ public static class SelectedOptionReportPdf
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
             BuildHeader(page, storeName, storeAddress, "Check Payouts Report", "Vendor check payout register, cleared status, and print controls.", from, to);
-            page.Content().Padding(18).Column(col =>
+            page.Content().PaddingHorizontal(14).PaddingVertical(8).Column(col =>
             {
-                col.Spacing(12);
+                col.Spacing(8);
                 col.Item().Row(row =>
                 {
                     Metric(row, "Uncleared Total", Money(uncleared), "Open checks", Red);
@@ -162,9 +163,9 @@ public static class SelectedOptionReportPdf
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
             BuildHeader(page, storeName, storeAddress, "Profit & Loss Statement", "Sales, COGS, expenses, net profit, and margin by period.", from, to);
-            page.Content().Padding(18).Column(col =>
+            page.Content().PaddingHorizontal(14).PaddingVertical(8).Column(col =>
             {
-                col.Spacing(12);
+                col.Spacing(8);
                 col.Item().Row(row =>
                 {
                     Metric(row, "Net Sales", Money(netSales), "Selected period", Green);
@@ -195,9 +196,9 @@ public static class SelectedOptionReportPdf
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
             BuildHeader(page, storeName, storeAddress, "All Reports Bundle", "Combined report packet: sales, shifts, cash, checks, purchases, and profit summary.", from, to);
-            page.Content().Padding(18).Column(col =>
+            page.Content().PaddingHorizontal(14).PaddingVertical(8).Column(col =>
             {
-                col.Spacing(12);
+                col.Spacing(8);
                 col.Item().Row(row =>
                 {
                     Metric(row, "Sales Summary", "Ready", Money(shifts.Sum(x => x.NetSales)), Green);
@@ -237,59 +238,64 @@ public static class SelectedOptionReportPdf
         {
             page.Size(pageSize);
             page.Margin(0);
-            page.DefaultTextStyle(x => x.FontSize(9).FontColor(Text));
-            page.PageColor(Navy);
+            page.DefaultTextStyle(x => x.FontSize(8).FontColor(Text));
+            page.PageColor(Colors.White);
             content(page);
         })).GeneratePdf(outputPath);
     }
 
     private static void BuildHeader(PageDescriptor page, string storeName, string storeAddress, string title, string subtitle, DateOnly from, DateOnly to)
     {
-        page.Header().Background("#041827").PaddingHorizontal(22).PaddingVertical(16).Column(col =>
+        var businessName = string.IsNullOrWhiteSpace(storeName) ? "BUSINESS" : storeName.Trim();
+        page.Header().Background(Colors.White).PaddingHorizontal(18).PaddingTop(9).PaddingBottom(5).Column(col =>
         {
-            col.Spacing(5);
+            col.Spacing(2);
             col.Item().Row(row =>
             {
-                row.RelativeItem().Column(left =>
+                row.ConstantItem(150);
+                row.RelativeItem().AlignCenter().Column(center =>
                 {
-                    left.Item().Text("HISAB KITAB WORKS").Bold().FontSize(12).FontColor(Copper);
-                    left.Item().Text(storeName ?? "").Bold().FontSize(20).FontColor(Text);
+                    center.Item().AlignCenter().Text(businessName).Bold().FontSize(16).FontColor(Navy);
                     if (!string.IsNullOrWhiteSpace(storeAddress))
-                        left.Item().Text(storeAddress).FontSize(9).FontColor(Muted);
+                        center.Item().AlignCenter().Text(storeAddress.Trim()).FontSize(7).FontColor(Muted);
                 });
-                row.ConstantItem(250).AlignRight().Column(right =>
+                row.ConstantItem(150).AlignRight().Column(right =>
                 {
-                    right.Item().Text($"Period: {Date(from)} - {Date(to)}").FontSize(10).FontColor(Copper);
-                    right.Item().Text($"Generated: {DateTime.Now:g}").FontSize(9).FontColor(Muted);
+                    right.Item().AlignRight().Text($"Generated {DateTime.Now:g}").FontSize(6.5f).FontColor(Muted);
                 });
             });
-            col.Item().PaddingTop(10).Text(title).Bold().FontSize(24).FontColor(Copper);
-            col.Item().Text(subtitle).FontSize(10).FontColor(Muted);
+            col.Item().PaddingHorizontal(150).PaddingTop(2).BorderTop(1).BorderColor(Copper);
+            col.Item().AlignCenter().PaddingTop(2).Text(title.ToUpperInvariant()).Bold().FontSize(13).FontColor(Navy);
+            col.Item().AlignCenter().Text($"{Date(from)} - {Date(to)}").Bold().FontSize(8).FontColor(Copper);
+            col.Item().AlignCenter().Text(subtitle).FontSize(7).FontColor(Muted);
         });
     }
 
     private static void BuildFooter(PageDescriptor page)
     {
-        page.Footer().Background("#041827").PaddingHorizontal(22).PaddingVertical(10).Row(row =>
+        page.Footer().Background(Colors.White).PaddingHorizontal(18).PaddingBottom(6).Column(col =>
         {
-            row.RelativeItem().Text("Hisab Kitab Works").FontSize(9).FontColor(Muted);
-            row.ConstantItem(180).AlignRight().Text(t =>
+            col.Item().BorderTop(1).BorderColor(Copper).PaddingTop(4).Row(row =>
             {
-                t.Span("Page ").FontColor(Muted);
-                t.CurrentPageNumber().FontColor(Muted);
-                t.Span(" / ").FontColor(Muted);
-                t.TotalPages().FontColor(Muted);
+                row.RelativeItem().AlignCenter().Text("Confidential Business Report").FontSize(6.5f).FontColor(Muted);
+                row.ConstantItem(100).AlignRight().DefaultTextStyle(x => x.FontSize(6.5f)).Text(t =>
+                {
+                    t.Span("Page ").FontColor(Muted);
+                    t.CurrentPageNumber().FontColor(Text);
+                    t.Span(" of ").FontColor(Muted);
+                    t.TotalPages().FontColor(Text);
+                });
             });
         });
     }
 
     private static void Metric(RowDescriptor row, string title, string value, string subtitle, string color)
     {
-        row.RelativeItem().PaddingRight(8).Background(Panel).Border(1).BorderColor(Copper).Padding(12).Column(col =>
+        row.RelativeItem().PaddingRight(6).Background(Panel).Border(1).BorderColor(Border).PaddingVertical(7).PaddingHorizontal(9).Column(col =>
         {
-            col.Item().Text(title).Bold().FontSize(10).FontColor(Text);
-            col.Item().PaddingTop(6).Text(value).Bold().FontSize(18).FontColor(color);
-            col.Item().PaddingTop(4).Text(subtitle).FontSize(8).FontColor(Muted);
+            col.Item().Text(title.ToUpperInvariant()).Bold().FontSize(7.5f).FontColor(Copper);
+            col.Item().PaddingTop(2).Text(value).Bold().FontSize(13).FontColor(color);
+            col.Item().PaddingTop(1).Text(subtitle).FontSize(6.5f).FontColor(Muted);
         });
     }
 
@@ -297,11 +303,11 @@ public static class SelectedOptionReportPdf
     {
         if (rows.Count == 0)
         {
-            container.Background(Panel).Border(1).BorderColor(Copper).Padding(24).AlignCenter().Text("No records found for the selected period.").FontColor(Muted);
+            container.Background(Panel).Border(1).BorderColor(Border).Padding(20).AlignCenter().Text("No records found for the selected period.").FontColor(Muted);
             return;
         }
 
-        container.Background(Panel).Border(1).BorderColor(Copper).Table(table =>
+        container.Background(Panel).Border(1).BorderColor(Border).Table(table =>
         {
             table.ColumnsDefinition(cols =>
             {
@@ -329,10 +335,10 @@ public static class SelectedOptionReportPdf
     }
 
     private static IContainer HeaderCell(IContainer c)
-        => c.Background(Copper).PaddingVertical(7).PaddingHorizontal(6).DefaultTextStyle(x => x.Bold().FontColor(Colors.Black).FontSize(8));
+        => c.Background(Navy).PaddingVertical(5).PaddingHorizontal(5).DefaultTextStyle(x => x.Bold().FontColor(Colors.White).FontSize(7));
 
     private static IContainer BodyCell(IContainer c, bool even)
-        => c.Background(even ? Panel : PanelAlt).BorderBottom(1).BorderColor("#24485C").PaddingVertical(6).PaddingHorizontal(6).DefaultTextStyle(x => x.FontSize(7));
+        => c.Background(even ? Panel : PanelAlt).BorderBottom(1).BorderColor(Border).PaddingVertical(3.5f).PaddingHorizontal(5).DefaultTextStyle(x => x.FontSize(6.5f).FontColor(Text));
 
     private static string ValueColor(string value)
     {
