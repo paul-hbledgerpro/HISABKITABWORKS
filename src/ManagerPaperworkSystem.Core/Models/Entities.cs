@@ -164,7 +164,7 @@ public sealed class ShiftLogEntry : Entity
     public decimal GrossSales => CashTotal + CardTotal + Tax;
 
     [NotMapped]
-    public decimal Variance => CashDropReceived - CashTotal;
+    public decimal Variance => CashDropReceived + RegisterPayout - CashTotal;
 
     // Audit
     public int CreatedByUserId { get; set; }

@@ -1,5 +1,5 @@
 #define MyAppName "HISAB KITAB"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "1.0.72"
 #define MyAppPublisher "Hisab Kitab"
 #define MyAppExeName "HISAB KITAB.exe"
 #define MySourceDir "..\publish\win-x64"
@@ -36,6 +36,7 @@ Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdir
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\Check for Updates"; Filename: "{app}\Upgrade.exe"; IconFilename: "{app}\Upgrade.exe"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 

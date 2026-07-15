@@ -11,6 +11,7 @@ internal sealed class ReportViewerForm : Form
     private readonly WebView2 _pdfView;
     private readonly Label _status;
     private readonly Label _loadingMessage;
+    private readonly ToolTip _actionToolTip = new();
     private Button? _saveButton;
     private Button? _printButton;
     private Button? _openButton;
@@ -28,38 +29,35 @@ internal sealed class ReportViewerForm : Form
         Height = 860;
         MinimumSize = new Size(960, 680);
         BackColor = WinTheme.Bg;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        ControlBox = true;
+        MinimizeBox = true;
+        MaximizeBox = true;
+        ShowIcon = true;
+        Icon = WinTheme.TryLoadIcon();
 
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = WinTheme.Bg,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 2,
             Padding = new Padding(14)
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         Controls.Add(root);
 
         var heading = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = WinTheme.Bg,
-            ColumnCount = 2,
+            ColumnCount = 3,
             RowCount = 1
         };
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-        heading.Controls.Add(new Label
-        {
-            Text = title,
-            Dock = DockStyle.Fill,
-            ForeColor = WinTheme.Copper,
-            Font = WinTheme.HeaderFont(18),
-            TextAlign = ContentAlignment.MiddleLeft,
-            AutoEllipsis = true
-        }, 0, 0);
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 156));
         _status = new Label
         {
             Text = "Generating report...",
@@ -70,6 +68,20 @@ internal sealed class ReportViewerForm : Form
             AutoEllipsis = true
         };
         heading.Controls.Add(_status, 1, 0);
+
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 7, 0, 7),
+            Margin = Padding.Empty
+        };
+        _printButton = AddActionButton(actions, "\uE749", "Print report", async (_, _) => await PrintReportAsync(), false);
+        _saveButton = AddActionButton(actions, "\uE74E", "Save as PDF", async (_, _) => await SavePdfAsync(), true);
+        _openButton = AddActionButton(actions, "\uE8E5", "Open externally", async (_, _) => await OpenExternallyAsync(), false);
+        heading.Controls.Add(actions, 2, 0);
         root.Controls.Add(heading, 0, 0);
 
         var previewHost = WinTheme.BorderedPanel(8);
@@ -97,34 +109,23 @@ internal sealed class ReportViewerForm : Form
         previewHost.Controls.Add(_loadingMessage);
         _loadingMessage.BringToFront();
 
-        var actions = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = WinTheme.Bg,
-            FlowDirection = FlowDirection.RightToLeft,
-            WrapContents = false,
-            Padding = new Padding(0, 10, 0, 0)
-        };
-        root.Controls.Add(actions, 0, 2);
-
-        AddButton(actions, "Close", (_, _) => Close(), false);
-        _printButton = AddButton(actions, "Print Report", async (_, _) => await PrintReportAsync(), false);
-        _saveButton = AddButton(actions, "Save as PDF", async (_, _) => await SavePdfAsync(), true);
-        _openButton = AddButton(actions, "Open Externally", async (_, _) => await OpenExternallyAsync(), false);
-        _openButton.Visible = false;
         SetActionButtons(false);
 
         Shown += async (_, _) => await GenerateAndDisplayReportAsync();
         FormClosed += (_, _) => DisposePreview();
     }
 
-    private static Button AddButton(FlowLayoutPanel host, string text, EventHandler click, bool primary)
+    private Button AddActionButton(FlowLayoutPanel host, string glyph, string accessibleName, EventHandler click, bool primary)
     {
-        var button = WinTheme.Button(text, primary);
-        button.Width = text.Length > 13 ? 175 : 145;
-        button.Height = 42;
-        button.Margin = new Padding(8, 0, 0, 0);
+        var button = WinTheme.Button(glyph, primary);
+        button.Width = 44;
+        button.Height = 40;
+        button.Margin = new Padding(6, 0, 0, 0);
+        button.Padding = Padding.Empty;
+        button.Font = WinTheme.IconFont(13);
+        button.AccessibleName = accessibleName;
         button.Click += click;
+        _actionToolTip.SetToolTip(button, accessibleName);
         host.Controls.Add(button);
         return button;
     }
@@ -163,8 +164,6 @@ internal sealed class ReportViewerForm : Form
             _loadingMessage.Visible = true;
             _loadingMessage.Text = "The embedded PDF viewer is unavailable.\nUse Open Externally to view this report.";
             _status.Text = "External viewer available";
-            if (_openButton is not null)
-                _openButton.Visible = true;
             MessageBox.Show(this,
                 $"The report was generated, but Windows could not start the embedded PDF viewer.\n\n{AppBootstrap.RedactSensitiveText(ex.Message)}",
                 "Report Viewer", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -266,6 +265,8 @@ internal sealed class ReportViewerForm : Form
 
     private void DisposePreview()
     {
+        _actionToolTip.Dispose();
+
         try
         {
             _pdfView.Dispose();

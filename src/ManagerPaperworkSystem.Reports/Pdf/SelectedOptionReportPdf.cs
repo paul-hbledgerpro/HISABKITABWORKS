@@ -32,6 +32,7 @@ public static class SelectedOptionReportPdf
                 Gross = g.Sum(x => x.GrossSales),
                 Net = g.Sum(x => x.NetSales),
                 Drop = g.Sum(x => x.CashDropReceived),
+                Payout = g.Sum(x => x.RegisterPayout),
                 Variance = g.Sum(x => x.Variance)
             })
             .OrderBy(x => x.Date)
@@ -48,12 +49,13 @@ public static class SelectedOptionReportPdf
                     Metric(row, "Net Sales", Money(rows.Sum(x => x.Net)), "Month total", Green);
                     Metric(row, "Gross Sales", Money(rows.Sum(x => x.Gross)), "Cash + card + tax", Copper);
                     Metric(row, "Cash Drop", Money(rows.Sum(x => x.Drop)), "Deposited", Green);
-                    Metric(row, "Variance", Money(rows.Sum(x => x.Variance)), "Over / short", rows.Sum(x => x.Variance) < 0 ? Red : Green);
+                    Metric(row, "Variance", Money(rows.Sum(x => x.Variance)), "Drop + payout - cash", VarianceColor(rows.Sum(x => x.Variance)));
                 });
                 col.Item().Element(c => Table(c,
-                    new[] { "Date", "Cash", "Card", "Tax", "Gross", "Net", "Drop", "Variance" },
-                    rows.Select(x => new[] { Date(x.Date), Money(x.Cash), Money(x.Card), Money(x.Tax), Money(x.Gross), Money(x.Net), Money(x.Drop), Money(x.Variance) }).ToList(),
-                    new[] { 1.1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f }));
+                    new[] { "Date", "Cash", "Card", "Tax", "Gross", "Net", "Drop", "Register Payout", "Variance" },
+                    rows.Select(x => new[] { Date(x.Date), Money(x.Cash), Money(x.Card), Money(x.Tax), Money(x.Gross), Money(x.Net), Money(x.Drop), Money(x.Payout), Money(x.Variance) }).ToList(),
+                    new[] { 1.05f, .9f, .9f, .8f, .9f, .9f, .9f, 1.15f, .9f },
+                    varianceColumnIndex: 8));
             });
             BuildFooter(page);
         });
@@ -74,12 +76,13 @@ public static class SelectedOptionReportPdf
                     Metric(row, "Total Cash", Money(rows.Sum(x => x.CashTotal)), "POS reported", Copper);
                     Metric(row, "Cash Drop", Money(rows.Sum(x => x.CashDropReceived)), "Manager counted", Green);
                     Metric(row, "Payouts", Money(rows.Sum(x => x.RegisterPayout)), "Register payouts", Copper);
-                    Metric(row, "Variance", Money(rows.Sum(x => x.Variance)), "Over / short", rows.Sum(x => x.Variance) < 0 ? Red : Green);
+                    Metric(row, "Variance", Money(rows.Sum(x => x.Variance)), "Drop + payout - cash", VarianceColor(rows.Sum(x => x.Variance)));
                 });
                 col.Item().Element(c => Table(c,
                     new[] { "Date", "Shift", "Employee", "Cash", "Card", "Gross", "Drop", "Payout", "Reason", "Variance" },
                     rows.Select(x => new[] { Date(x.Date), x.ShiftNo, x.Employee, Money(x.CashTotal), Money(x.CardTotal), Money(x.GrossSales), Money(x.CashDropReceived), Money(x.RegisterPayout), x.PayoutReason, Money(x.Variance) }).ToList(),
-                    new[] { .9f, .75f, 1.25f, .9f, .9f, .9f, .9f, .9f, 1.5f, .9f }));
+                    new[] { .9f, .75f, 1.25f, .9f, .9f, .9f, .9f, .9f, 1.5f, .9f },
+                    varianceColumnIndex: 9));
             });
             BuildFooter(page);
         });
@@ -238,7 +241,7 @@ public static class SelectedOptionReportPdf
         {
             page.Size(pageSize);
             page.Margin(0);
-            page.DefaultTextStyle(x => x.FontSize(8).FontColor(Text));
+            page.DefaultTextStyle(x => x.FontSize(9).FontColor(Text));
             page.PageColor(Colors.White);
             content(page);
         })).GeneratePdf(outputPath);
@@ -293,13 +296,13 @@ public static class SelectedOptionReportPdf
     {
         row.RelativeItem().PaddingRight(6).Background(Panel).Border(1).BorderColor(Border).PaddingVertical(7).PaddingHorizontal(9).Column(col =>
         {
-            col.Item().Text(title.ToUpperInvariant()).Bold().FontSize(7.5f).FontColor(Copper);
-            col.Item().PaddingTop(2).Text(value).Bold().FontSize(13).FontColor(color);
-            col.Item().PaddingTop(1).Text(subtitle).FontSize(6.5f).FontColor(Muted);
+            col.Item().Text(title.ToUpperInvariant()).Bold().FontSize(10).FontColor(Copper);
+            col.Item().PaddingTop(2).Text(value).Bold().FontSize(18).FontColor(color);
+            col.Item().PaddingTop(1).Text(subtitle).FontSize(8).FontColor(Muted);
         });
     }
 
-    private static void Table(IContainer container, string[] headers, IReadOnlyList<string[]> rows, float[] widths)
+    private static void Table(IContainer container, string[] headers, IReadOnlyList<string[]> rows, float[] widths, int? varianceColumnIndex = null)
     {
         if (rows.Count == 0)
         {
@@ -327,7 +330,8 @@ public static class SelectedOptionReportPdf
                 for (var i = 0; i < headers.Length; i++)
                 {
                     var value = i < row.Length ? row[i] : "";
-                    table.Cell().Element(c => BodyCell(c, even)).Text(value).FontColor(ValueColor(value));
+                    var color = varianceColumnIndex == i ? VarianceValueColor(value) : ValueColor(value);
+                    table.Cell().Element(c => BodyCell(c, even)).Text(value).FontColor(color);
                 }
                 even = !even;
             }
@@ -335,10 +339,10 @@ public static class SelectedOptionReportPdf
     }
 
     private static IContainer HeaderCell(IContainer c)
-        => c.Background(Navy).PaddingVertical(5).PaddingHorizontal(5).DefaultTextStyle(x => x.Bold().FontColor(Colors.White).FontSize(7));
+        => c.Background(Navy).PaddingVertical(5).PaddingHorizontal(5).DefaultTextStyle(x => x.Bold().FontColor(Colors.White).FontSize(9));
 
     private static IContainer BodyCell(IContainer c, bool even)
-        => c.Background(even ? Panel : PanelAlt).BorderBottom(1).BorderColor(Border).PaddingVertical(3.5f).PaddingHorizontal(5).DefaultTextStyle(x => x.FontSize(6.5f).FontColor(Text));
+        => c.Background(even ? Panel : PanelAlt).BorderBottom(1).BorderColor(Border).PaddingVertical(3.5f).PaddingHorizontal(5).DefaultTextStyle(x => x.FontSize(8).FontColor(Text));
 
     private static string ValueColor(string value)
     {
@@ -348,6 +352,21 @@ public static class SelectedOptionReportPdf
             return Green;
         return Text;
     }
+
+    private static string VarianceValueColor(string value)
+    {
+        var isNegative = value.Contains('(') || value.StartsWith("-", StringComparison.Ordinal);
+        var normalized = value.Replace("(", "").Replace(")", "").Trim();
+        if (!decimal.TryParse(normalized, NumberStyles.Currency, CultureInfo.CurrentCulture, out var amount))
+            return Text;
+
+        if (isNegative)
+            amount = -Math.Abs(amount);
+        return VarianceColor(amount);
+    }
+
+    private static string VarianceColor(decimal value)
+        => value > 0 ? Green : value < 0 ? Red : Text;
 
     private static string Money(decimal value)
     {

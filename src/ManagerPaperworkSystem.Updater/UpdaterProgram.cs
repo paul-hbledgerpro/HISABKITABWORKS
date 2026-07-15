@@ -20,8 +20,11 @@ internal static class Program
             // Clean up any leftover .old files from previous self-update
             try
             {
-                var oldFile = Path.Combine(AppContext.BaseDirectory, "Update.exe.old");
-                if (File.Exists(oldFile)) File.Delete(oldFile);
+                foreach (var oldName in new[] { "Upgrade.exe.old", "Update.exe.old" })
+                {
+                    var oldFile = Path.Combine(AppContext.BaseDirectory, oldName);
+                    if (File.Exists(oldFile)) File.Delete(oldFile);
+                }
             }
             catch { }
 
@@ -50,7 +53,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Update.exe failed to start:\n\n{ex}", "HISAB KITAB Updater", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show($"Upgrade.exe failed to start:\n\n{ex}", "HISAB KITAB Upgrade", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -146,7 +149,7 @@ internal static class Program
             var dest = Path.Combine(installDir, rel);
             try
             {
-                // If the destination file is locked (e.g. Update.exe replacing itself),
+                // If the destination file is locked (Upgrade.exe replacing itself),
                 // rename the old file first, then copy the new one
                 if (File.Exists(dest))
                 {
@@ -160,15 +163,15 @@ internal static class Program
                 {
                     File.Copy(src, dest, overwrite: true);
                 }
-                catch (IOException) when (rel.Equals("Update.exe", StringComparison.OrdinalIgnoreCase))
+                catch (IOException) when (rel.Equals("Upgrade.exe", StringComparison.OrdinalIgnoreCase) || rel.Equals("Update.exe", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Update.exe is locked because it's currently running.
+                    // The updater is locked because it is currently running.
                     // Rename old one to .old, copy new one, schedule cleanup.
                     var oldPath = dest + ".old";
                     try { File.Delete(oldPath); } catch { }
                     File.Move(dest, oldPath);
                     File.Copy(src, dest, overwrite: true);
-                    Log("Update.exe self-updated via rename trick");
+                    Log($"{rel} self-updated via rename trick");
                 }
 
                 copied++;

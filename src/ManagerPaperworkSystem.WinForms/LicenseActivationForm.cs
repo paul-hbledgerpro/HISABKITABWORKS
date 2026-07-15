@@ -18,18 +18,28 @@ internal sealed class LicenseActivationForm : Form
     private readonly TextBox _storeZip = WinTheme.TextBox();
     private readonly TextBox _licenseKey = WinTheme.TextBox();
     private readonly Label _status = WinTheme.Label("");
+    private readonly Label _statusDetail = WinTheme.Label("");
+    private readonly Label _offlineStatus = WinTheme.Label("");
     private readonly Button _activate = WinTheme.Button("Activate License", true);
     private readonly Button _offline = WinTheme.Button("Import License File");
     private readonly Button _cancel = WinTheme.Button("Cancel");
+    private Button? _onlineTab;
+    private Button? _offlineTab;
+    private Control? _onlinePage;
+    private Control? _offlinePage;
+    private Panel? _statusCard;
+    private Label? _statusIcon;
 
     public LicenseActivationForm(bool keyOnly)
     {
         _keyOnly = keyOnly;
         WinTheme.Apply(this);
         Text = keyOnly ? "HISAB KITAB - License Key" : "HISAB KITAB - License Activation";
-        Size = new Size(680, keyOnly ? 420 : 560);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
+        Size = new Size(1120, keyOnly ? 660 : 760);
+        MinimumSize = new Size(900, keyOnly ? 580 : 730);
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MinimizeBox = true;
+        MaximizeBox = true;
 
         Controls.Add(Build());
         _activate.Click += async (_, _) => await ActivateOnlineAsync();
@@ -40,55 +50,369 @@ internal sealed class LicenseActivationForm : Form
 
     private Control Build()
     {
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Bg, Padding = new Padding(28), RowCount = 10, ColumnCount = 1 };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
-        for (var i = 1; i < 8; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        _licenseKey.PlaceholderText = "HBL-XXXX-XXXX-XXXX";
 
-        root.Controls.Add(new Label
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            RowCount = 4,
+            ColumnCount = 1,
+            Padding = Padding.Empty
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
+
+        root.Controls.Add(BuildHeader(), 0, 0);
+        root.Controls.Add(BuildTabs(), 0, 1);
+
+        var contentHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(16, 0, 16, 10),
+            AutoScroll = true
+        };
+        _onlinePage = BuildOnlinePage();
+        _offlinePage = BuildOfflinePage();
+        contentHost.Controls.Add(_offlinePage);
+        contentHost.Controls.Add(_onlinePage);
+        root.Controls.Add(contentHost, 0, 2);
+
+        _activate.Text = "ACTIVATE LICENSE";
+        _offline.Text = "IMPORT LICENSE FILE";
+        _cancel.Text = "CANCEL";
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(16, 12, 16, 10)
+        };
+        foreach (var button in new[] { _activate, _offline, _cancel })
+        {
+            button.Width = button == _cancel ? 170 : 230;
+            button.Height = 52;
+            actions.Controls.Add(button);
+        }
+        root.Controls.Add(actions, 0, 3);
+
+        SetActivationMode(online: true);
+        return root;
+    }
+
+    private Control BuildHeader()
+    {
+        var header = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, Padding = new Padding(42, 0, 42, 0) };
+        header.Paint += (_, e) => WinTheme.PaintGradient(e, header.ClientRectangle);
+
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.Transparent, ColumnCount = 3 };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 43));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 2));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 57));
+
+        var brand = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.Transparent,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(0, 27, 0, 0)
+        };
+        brand.Controls.Add(new Label { Text = "HISAB", AutoSize = true, ForeColor = WinTheme.Text, Font = WinTheme.HeaderFont(28), Margin = Padding.Empty });
+        brand.Controls.Add(new Label { Text = " KITAB", AutoSize = true, ForeColor = WinTheme.Copper, Font = WinTheme.HeaderFont(28), Margin = Padding.Empty });
+
+        var divider = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(90, WinTheme.Muted), Margin = new Padding(0, 25, 0, 25) };
+        var title = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.Transparent,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(30, 26, 0, 0)
+        };
+        title.Controls.Add(new Label { Text = "\uE72E", AutoSize = true, ForeColor = WinTheme.Copper, Font = WinTheme.IconFont(28), Margin = new Padding(0, 4, 18, 0) });
+        title.Controls.Add(new Label
         {
             Text = _keyOnly ? "LICENSE KEY" : "LICENSE ACTIVATION",
-            ForeColor = WinTheme.Copper,
+            AutoSize = true,
+            ForeColor = WinTheme.Text,
             Font = WinTheme.HeaderFont(22),
+            Margin = Padding.Empty
+        });
+
+        layout.Controls.Add(brand, 0, 0);
+        layout.Controls.Add(divider, 1, 0);
+        layout.Controls.Add(title, 2, 0);
+        header.Controls.Add(layout);
+        return header;
+    }
+
+    private Control BuildTabs()
+    {
+        var strip = new FlowLayoutPanel
+        {
             Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft
-        }, 0, 0);
+            BackColor = WinTheme.Bg,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(16, 6, 0, 0)
+        };
+        _onlineTab = CreateTabButton("ONLINE ACTIVATION");
+        _offlineTab = CreateTabButton("OFFLINE LICENSE FILE");
+        _onlineTab.Click += (_, _) => SetActivationMode(online: true);
+        _offlineTab.Click += (_, _) => SetActivationMode(online: false);
+        strip.Controls.Add(_onlineTab);
+        strip.Controls.Add(_offlineTab);
+        return strip;
+    }
+
+    private static Button CreateTabButton(string text)
+    {
+        var button = new Button
+        {
+            Text = text,
+            Width = 260,
+            Height = 48,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = WinTheme.Panel,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BoldFont(11),
+            Cursor = Cursors.Hand,
+            Margin = Padding.Empty,
+            UseVisualStyleBackColor = false
+        };
+        button.FlatAppearance.BorderColor = WinTheme.Panel2;
+        button.FlatAppearance.MouseOverBackColor = WinTheme.Panel2;
+        button.FlatAppearance.MouseDownBackColor = WinTheme.Panel2;
+        return button;
+    }
+
+    private Control BuildOnlinePage()
+    {
+        var page = CreateBorderedSurface(WinTheme.Panel, WinTheme.Panel2);
+        page.Dock = DockStyle.Fill;
+        page.Padding = new Padding(26, 22, 26, 20);
+
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, ColumnCount = 1, RowCount = 4 };
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, _keyOnly ? 0 : 204));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 122));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         if (!_keyOnly)
         {
-            root.Controls.Add(WinTheme.Label("Store / Business Name *", true), 0, 1);
-            root.Controls.Add(_storeName, 0, 2);
-            root.Controls.Add(WinTheme.Label("Store Address", true), 0, 3);
-            root.Controls.Add(_storeAddress, 0, 4);
-            root.Controls.Add(WinTheme.Label("Store Zip Code", true), 0, 5);
-            root.Controls.Add(_storeZip, 0, 6);
+            var businessFields = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, ColumnCount = 2, RowCount = 2 };
+            businessFields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            businessFields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            businessFields.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            businessFields.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            businessFields.Controls.Add(BuildField("Store / Business Name *", _storeName), 0, 0);
+            businessFields.Controls.Add(BuildField("Store Address", _storeAddress), 1, 0);
+            businessFields.Controls.Add(BuildField("Store Zip Code", _storeZip, compact: true), 0, 1);
+            content.Controls.Add(businessFields, 0, 0);
         }
 
-        var licensePanel = new Panel { Dock = DockStyle.Fill, Height = 116, Padding = new Padding(0, 10, 0, 0) };
-        var licenseLabel = WinTheme.Label("License Key *", true);
-        licenseLabel.Dock = DockStyle.Top;
-        _licenseKey.Dock = DockStyle.Top;
-        licensePanel.Controls.Add(_licenseKey);
-        licensePanel.Controls.Add(licenseLabel);
-        root.Controls.Add(licensePanel, 0, _keyOnly ? 1 : 7);
+        var licenseCard = CreateBorderedSurface(WinTheme.Panel2, Color.FromArgb(80, WinTheme.Muted));
+        licenseCard.Dock = DockStyle.Fill;
+        licenseCard.Margin = new Padding(0, 4, 0, 10);
+        licenseCard.Padding = new Padding(18, 10, 18, 12);
+        var licenseLayout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel2, ColumnCount = 2, RowCount = 2 };
+        licenseLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        licenseLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 58));
+        licenseLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        licenseLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var licenseLabel = WinTheme.FixedLabel("License Key *", false, 11, true);
+        licenseLabel.Dock = DockStyle.Fill;
+        _licenseKey.Dock = DockStyle.Fill;
+        _licenseKey.Margin = new Padding(0, 0, 8, 0);
+        var copy = WinTheme.Button("\uE8C8");
+        copy.Dock = DockStyle.Fill;
+        copy.Font = WinTheme.IconFont(14);
+        copy.Margin = Padding.Empty;
+        copy.AccessibleName = "Copy license key";
+        new ToolTip().SetToolTip(copy, "Copy license key");
+        copy.Click += (_, _) => CopyLicenseKey();
+        licenseLayout.Controls.Add(licenseLabel, 0, 0);
+        licenseLayout.SetColumnSpan(licenseLabel, 2);
+        licenseLayout.Controls.Add(_licenseKey, 0, 1);
+        licenseLayout.Controls.Add(copy, 1, 1);
+        licenseCard.Controls.Add(licenseLayout);
+        content.Controls.Add(licenseCard, 0, 1);
 
-        _status.ForeColor = WinTheme.Muted;
+        _statusCard = CreateBorderedSurface(WinTheme.Panel, WinTheme.Green);
+        _statusCard.Dock = DockStyle.Fill;
+        _statusCard.Margin = new Padding(0, 4, 0, 4);
+        _statusCard.Padding = new Padding(22, 14, 22, 14);
+        var statusLayout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, ColumnCount = 2, RowCount = 2 };
+        statusLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 84));
+        statusLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        statusLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
+        statusLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+        _statusIcon = new Label
+        {
+            Text = "\uE73E",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Green,
+            Font = WinTheme.IconFont(34),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
         _status.AutoSize = false;
         _status.Dock = DockStyle.Fill;
-        _status.Text = _keyOnly
-            ? "Enter a license key or import the downloaded .hblicense file."
-            : "Enter store information and license key, or import the downloaded .hblicense file.";
-        root.Controls.Add(_status, 0, _keyOnly ? 2 : 8);
+        _status.ForeColor = WinTheme.Green;
+        _status.Font = WinTheme.BoldFont(14);
+        _status.TextAlign = ContentAlignment.BottomLeft;
+        _status.Margin = Padding.Empty;
+        _status.Text = "Ready to activate";
+        _statusDetail.AutoSize = false;
+        _statusDetail.Dock = DockStyle.Fill;
+        _statusDetail.ForeColor = WinTheme.Text;
+        _statusDetail.Font = WinTheme.BodyFont(10.5f);
+        _statusDetail.TextAlign = ContentAlignment.TopLeft;
+        _statusDetail.Margin = Padding.Empty;
+        _statusDetail.Text = "Your activation details stay securely on this computer.";
+        statusLayout.Controls.Add(_statusIcon, 0, 0);
+        statusLayout.SetRowSpan(_statusIcon, 2);
+        statusLayout.Controls.Add(_status, 1, 0);
+        statusLayout.Controls.Add(_statusDetail, 1, 1);
+        _statusCard.Controls.Add(statusLayout);
+        content.Controls.Add(_statusCard, 0, 2);
 
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, Height = 58 };
-        foreach (var b in new[] { _activate, _offline, _cancel })
+        page.Controls.Add(content);
+        return page;
+    }
+
+    private Control BuildOfflinePage()
+    {
+        var page = CreateBorderedSurface(WinTheme.Panel, WinTheme.Panel2);
+        page.Dock = DockStyle.Fill;
+        page.Padding = new Padding(60);
+
+        var card = CreateBorderedSurface(WinTheme.Panel2, WinTheme.CopperDark);
+        card.Dock = DockStyle.Fill;
+        card.Padding = new Padding(40);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel2, ColumnCount = 1, RowCount = 4 };
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 28));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 72));
+        layout.Controls.Add(new Label
         {
-            b.Width = 170;
-            actions.Controls.Add(b);
+            Text = "\uE8E5",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Copper,
+            Font = WinTheme.IconFont(38),
+            TextAlign = ContentAlignment.BottomCenter
+        }, 0, 0);
+        layout.Controls.Add(new Label
+        {
+            Text = "IMPORT OFFLINE LICENSE FILE",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.HeaderFont(19),
+            TextAlign = ContentAlignment.MiddleCenter
+        }, 0, 1);
+        layout.Controls.Add(new Label
+        {
+            Text = "Use this option when the computer cannot connect to the activation server.\r\nSelect the signed .hblicense file supplied for this installation.",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BodyFont(11),
+            TextAlign = ContentAlignment.TopCenter
+        }, 0, 2);
+        _offlineStatus.AutoSize = false;
+        _offlineStatus.Dock = DockStyle.Fill;
+        _offlineStatus.ForeColor = WinTheme.Muted;
+        _offlineStatus.Font = WinTheme.BodyFont(10.5f);
+        _offlineStatus.TextAlign = ContentAlignment.TopCenter;
+        _offlineStatus.Text = "Select IMPORT LICENSE FILE below to continue.";
+        layout.Controls.Add(_offlineStatus, 0, 3);
+        card.Controls.Add(layout);
+        page.Controls.Add(card);
+        return page;
+    }
+
+    private static Control BuildField(string labelText, TextBox input, bool compact = false)
+    {
+        var field = new TableLayoutPanel
+        {
+            Dock = compact ? DockStyle.Left : DockStyle.Fill,
+            Width = compact ? 340 : 0,
+            BackColor = WinTheme.Panel,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0, 0, 28, 8)
+        };
+        field.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        field.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        var label = WinTheme.FixedLabel(labelText, false, 11);
+        label.Dock = DockStyle.Fill;
+        input.Dock = DockStyle.Fill;
+        input.Margin = Padding.Empty;
+        field.Controls.Add(label, 0, 0);
+        field.Controls.Add(input, 0, 1);
+        return field;
+    }
+
+    private static Panel CreateBorderedSurface(Color background, Color border)
+    {
+        var panel = new Panel { BackColor = background, Tag = border };
+        panel.Paint += (_, e) =>
+        {
+            using var pen = new Pen(panel.Tag is Color currentBorder ? currentBorder : border);
+            e.Graphics.DrawRectangle(pen, 0, 0, Math.Max(0, panel.Width - 1), Math.Max(0, panel.Height - 1));
+        };
+        return panel;
+    }
+
+    private void SetActivationMode(bool online)
+    {
+        if (_onlinePage is null || _offlinePage is null || _onlineTab is null || _offlineTab is null)
+            return;
+
+        _onlinePage.Visible = online;
+        _offlinePage.Visible = !online;
+        if (online)
+            _onlinePage.BringToFront();
+        else
+            _offlinePage.BringToFront();
+
+        StyleTab(_onlineTab, online);
+        StyleTab(_offlineTab, !online);
+        _activate.Visible = online;
+        _offline.Visible = !online;
+    }
+
+    private static void StyleTab(Button button, bool active)
+    {
+        button.BackColor = active ? WinTheme.Panel2 : WinTheme.Panel;
+        button.ForeColor = active ? WinTheme.Text : WinTheme.Muted;
+        button.FlatAppearance.BorderColor = active ? WinTheme.Copper : WinTheme.Panel2;
+        button.FlatAppearance.BorderSize = active ? 2 : 1;
+    }
+
+    private void CopyLicenseKey()
+    {
+        var value = _licenseKey.Text.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            SetStatus("Enter a license key before copying it.", true);
+            _licenseKey.Focus();
+            return;
         }
-        root.Controls.Add(actions, 0, 9);
-        return root;
+
+        try
+        {
+            Clipboard.SetText(value);
+            SetStatus("License key copied to the clipboard.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not copy the license key: {ex.Message}", true);
+        }
     }
 
     private async Task ActivateOnlineAsync()
@@ -296,13 +620,38 @@ internal sealed class LicenseActivationForm : Form
         _activate.Enabled = !busy;
         _offline.Enabled = !busy;
         _cancel.Enabled = !busy;
-        _status.Text = busy ? "Working..." : _status.Text;
+        if (busy)
+        {
+            _status.Text = "Working...";
+            _status.ForeColor = WinTheme.Copper;
+            if (_statusIcon is not null)
+            {
+                _statusIcon.Text = "\uE895";
+                _statusIcon.ForeColor = WinTheme.Copper;
+            }
+        }
     }
 
     private void SetStatus(string text, bool error = false)
     {
-        _status.ForeColor = error ? WinTheme.Red : WinTheme.Muted;
+        var color = error ? WinTheme.Red : WinTheme.Green;
+        _status.ForeColor = color;
         _status.Text = text;
+        _offlineStatus.ForeColor = color;
+        _offlineStatus.Text = text;
+        _statusDetail.Text = error
+            ? "Review the highlighted message and try again."
+            : "Your activation details stay securely on this computer.";
+        if (_statusIcon is not null)
+        {
+            _statusIcon.Text = error ? "\uEA39" : "\uE73E";
+            _statusIcon.ForeColor = color;
+        }
+        if (_statusCard is not null)
+        {
+            _statusCard.Tag = color;
+            _statusCard.Invalidate();
+        }
     }
 }
 

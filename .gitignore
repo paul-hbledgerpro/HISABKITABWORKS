@@ -20,6 +20,7 @@ TestResults/
 
 # Generated application and installer packages
 installer/publish/
+installer/release/
 installer/InnoSetup/[Oo]utput*/
 installer/InnoSetup/installer_output/
 installer/InnoSetup/app/
@@ -27,6 +28,9 @@ installer/InnoSetup/previous_version/
 installer/InnoSetup/*.zip
 installer/InnoSetup/*.dll
 installer/InnoSetup/*.deps.json
+tools/**/publish/
+tools/**/installer_output/
+tools/**/secrets/
 
 # Local databases, runtime settings, logs, and backups
 *.db
@@ -47,6 +51,7 @@ appsettings.*.local.json
 connection_settings.json
 store_connections.json
 license.json
+*.hblicense
 pending_store_info.json
 *.pfx
 *.snk

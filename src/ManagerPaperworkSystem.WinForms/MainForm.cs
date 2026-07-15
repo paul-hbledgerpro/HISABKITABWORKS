@@ -1004,6 +1004,14 @@ internal sealed class MainForm : Form
         var payout = SectionTextBox("0", rightAlign: true);
         var reason = SectionTextBox();
         var posReport = SectionTextBox("Upload using buttons below", readOnly: true);
+        var managerEntryMode = _session.Role == UserRole.Manager;
+        date.Enabled = !managerEntryMode;
+        employee.ReadOnly = managerEntryMode;
+        shift.ReadOnly = managerEntryMode;
+        cash.ReadOnly = managerEntryMode;
+        card.ReadOnly = managerEntryMode;
+        net.ReadOnly = managerEntryMode;
+        tax.ReadOnly = managerEntryMode;
 
         var shiftInfo = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = WinTheme.Panel };
         var salesSummary = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = WinTheme.Panel };
@@ -1049,15 +1057,16 @@ internal sealed class MainForm : Form
             var cardValue = Money(card.Text);
             var taxValue = Money(tax.Text);
             var dropValue = Money(drop.Text);
+            var payoutValue = Money(payout.Text);
             var grossValue = cashValue + cardValue + taxValue;
             var dueValue = cashValue;
-            var receivedValue = dropValue;
-            var varianceValue = dropValue - cashValue;
+            var receivedValue = dropValue + payoutValue;
+            var varianceValue = receivedValue - cashValue;
             grossBox.Text = grossValue.ToString("C2");
             dueBox.Text = dueValue.ToString("C2");
             receivedBox.Text = receivedValue.ToString("C2");
             varianceBox.Text = varianceValue.ToString("C2");
-            varianceBox.ForeColor = varianceValue < 0 ? WinTheme.Red : WinTheme.Green;
+            varianceBox.ForeColor = varianceValue > 0 ? WinTheme.Green : varianceValue < 0 ? WinTheme.Red : WinTheme.Text;
         }
         foreach (var box in new[] { cash, card, tax, net, drop, payout })
             box.TextChanged += (_, _) => recalc();
@@ -1069,9 +1078,20 @@ internal sealed class MainForm : Form
                 .ToList();
             HideId(grid);
         }
+        grid.CellFormatting += (_, e) =>
+        {
+            if (e.RowIndex < 0 || !string.Equals(grid.Columns[e.ColumnIndex].DataPropertyName, "Variance", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var value = Convert.ToDecimal(e.Value ?? 0m, CultureInfo.CurrentCulture);
+            if (e.CellStyle is not null)
+                e.CellStyle.ForeColor = value > 0 ? WinTheme.Green : value < 0 ? WinTheme.Red : WinTheme.Text;
+        };
         void clearImported()
         {
+            date.Value = DateTime.Today;
             employee.Clear();
+            shift.Clear();
             cash.Clear();
             card.Clear();
             net.Clear();
@@ -1084,6 +1104,7 @@ internal sealed class MainForm : Form
         }
         void clearAllShiftFields()
         {
+            date.Value = DateTime.Today;
             employee.Clear();
             shift.Clear();
             cash.Clear();
@@ -1091,17 +1112,25 @@ internal sealed class MainForm : Form
             net.Clear();
             tax.Clear();
             drop.Clear();
-            payout.Text = "0";
+            payout.Clear();
             reason.Clear();
             posReport.Text = "Upload using buttons below";
             posReport.ForeColor = WinTheme.Text;
             grid.ClearSelection();
-            shift.Focus();
+            if (managerEntryMode)
+                drop.Focus();
+            else
+                shift.Focus();
         }
         async Task saveNewAsync()
         {
             if (date.Value == DateTime.MinValue)
                 throw new InvalidOperationException("Date is required.");
+            if (managerEntryMode && !posReport.Text.StartsWith("Imported:", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this, "Import the POS report before adding a Shift Cash Drop entry.", "Shift Cash Drop", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
             using var db = CreateDb();
             var entry = new ShiftLogEntry
@@ -1288,7 +1317,18 @@ internal sealed class MainForm : Form
         correction.Click += async (_, _) => await updateSelectedAsync();
         actions.Controls.Add(correction);
         var add = MockActionButton("", "Add", true, 135);
-        add.Click += async (_, _) => await saveNewAsync();
+        add.Click += async (_, _) =>
+        {
+            add.Enabled = false;
+            try
+            {
+                await saveNewAsync();
+            }
+            finally
+            {
+                add.Enabled = true;
+            }
+        };
         actions.Controls.Add(add);
         var update = MockActionButton("", "Update Selected", width: 200);
         update.Enabled = _session.IsAdmin;
@@ -1415,6 +1455,21 @@ internal sealed class MainForm : Form
         }
         void refresh() => _ = refreshAsync();
 
+        void clearCashOnHandFields()
+        {
+            date.Value = DateTime.Today;
+            cash.Clear();
+            isPayout.SelectedIndex = 0;
+            payout.Clear();
+            vendor.SelectedIndex = -1;
+            purpose.SelectedIndex = -1;
+            desc.Clear();
+            carryForward.Clear();
+            grid.ClearSelection();
+            grid.CurrentCell = null;
+            cash.Focus();
+        }
+
         async Task setCarryForwardAsync()
         {
             using var db = CreateDb();
@@ -1474,22 +1529,31 @@ internal sealed class MainForm : Form
         var add = MockActionButton("", "Add", true, 145);
         add.Click += async (_, _) =>
         {
-            using var db = CreateDb();
-            db.CashOnHand.Add(new CashOnHandEntry
+            add.Enabled = false;
+            try
             {
-                StoreId = _currentStoreId,
-                Date = DateOnly.FromDateTime(date.Value),
-                CashAdded = Money(cash.Text),
-                IsPayout = isPayout.SelectedIndex == 1,
-                PayoutAmount = Money(payout.Text),
-                VendorId = ComboId(vendor),
-                PurposeId = ComboId(purpose),
-                Description = desc.Text.Trim(),
-                CreatedByUserId = _session.UserId,
-                CreatedByName = _session.DisplayName
-            });
-            await db.SaveChangesAsync();
-            await refreshAsync();
+                using var db = CreateDb();
+                db.CashOnHand.Add(new CashOnHandEntry
+                {
+                    StoreId = _currentStoreId,
+                    Date = DateOnly.FromDateTime(date.Value),
+                    CashAdded = Money(cash.Text),
+                    IsPayout = isPayout.SelectedIndex == 1,
+                    PayoutAmount = Money(payout.Text),
+                    VendorId = ComboId(vendor),
+                    PurposeId = ComboId(purpose),
+                    Description = desc.Text.Trim(),
+                    CreatedByUserId = _session.UserId,
+                    CreatedByName = _session.DisplayName
+                });
+                await db.SaveChangesAsync();
+                await refreshAsync();
+                clearCashOnHandFields();
+            }
+            finally
+            {
+                add.Enabled = true;
+            }
         };
         actions.Controls.Add(add);
         var correction = MockActionButton("", "Add Correction", width: 190);
@@ -2192,7 +2256,7 @@ internal sealed class MainForm : Form
             ("\uE716", "Vendor Ledger", "Ledger summary by vendor", () => { ShowModule("Vendors & Purposes"); return Task.CompletedTask; }),
             ("\uE8B7", "Stock Summary", "Current stock overview", () => { ShowModule("Product Costs"); return Task.CompletedTask; }),
             ("\uE825", "Bank Reconciliation", "Reconciliation reports", () => { ShowModule("Bank Statement"); return Task.CompletedTask; }),
-            ("\uE9D9", "P&L Statement", "Profit and loss summary", async () => await QuickExportReportAsync("Profit & Loss")),
+            ("\uE9D9", "P&L Statement", "Profit and loss summary", async () => await QuickViewReportAsync("Profit & Loss")),
             ("\uE7C3", "Balance Sheet", "Financial position overview", () => { ShowModule("Reports"); return Task.CompletedTask; }),
             ("\uE9D2", "Tax Reports", "Tax summaries and filings", () => { ShowModule("Reports"); return Task.CompletedTask; }),
             ("\uE713", "Custom Reports", "Build your own reports", () => { ShowModule("Reports"); return Task.CompletedTask; })
@@ -3453,16 +3517,25 @@ internal sealed class MainForm : Form
         gen.Controls.Add(new Label { Text = "Generate Report", Dock = DockStyle.Fill, ForeColor = WinTheme.Copper, Font = WinTheme.BoldFont(12), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         gen.SetColumnSpan(gen.GetControlFromPosition(0, 0)!, 4);
         var type = SectionCombo("All", "Shift Log", "Cash On Hand", "Check Payouts", "Sales Summary by Date", "Profit & Loss");
-        var from = WinTheme.DatePicker();
-        from.Value = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-        var to = WinTheme.DatePicker();
-        var group = SectionCombo("Day", "Week", "Month");
+        var reportFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var reportTo = DateTime.Today;
+        var period = SectionCombo(
+            "Today",
+            "Yesterday",
+            "Current Week",
+            "Previous Week",
+            "Current Month",
+            "Previous Month",
+            "Current Year",
+            "Previous Year",
+            "Custom");
+        period.SelectedItem = "Current Month";
         var format = SectionCombo("PDF", "Excel");
         var includeDetails = SectionCombo("Include Details", "Summary Only");
         AddMockField(gen, "Report Type *", type, 0, 1, 120);
-        AddMockField(gen, "From *", from, 1, 1, 80);
-        AddMockField(gen, "To *", to, 2, 1, 70);
-        AddMockField(gen, "Group By", group, 3, 1, 85);
+        gen.SetColumnSpan(gen.GetControlFromPosition(0, 1)!, 2);
+        AddMockField(gen, "Period *", period, 2, 1, 70);
+        gen.SetColumnSpan(gen.GetControlFromPosition(2, 1)!, 2);
         AddMockField(gen, "Format", format, 0, 2, 80);
         AddMockField(gen, "Details", includeDetails, 1, 2, 80);
         var generate = WinTheme.Button("Generate Report", true);
@@ -3491,7 +3564,7 @@ internal sealed class MainForm : Form
         quick.RowStyles.Add(new RowStyle(SizeType.Percent, 33));
         quick.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
         quickShell.Controls.Add(quick);
-        quick.Controls.Add(new Label { Text = "Quick Exports", Dock = DockStyle.Fill, ForeColor = WinTheme.Copper, Font = WinTheme.BoldFont(12), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        quick.Controls.Add(new Label { Text = "Quick View", Dock = DockStyle.Fill, ForeColor = WinTheme.Copper, Font = WinTheme.BoldFont(12), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         quick.SetColumnSpan(quick.GetControlFromPosition(0, 0)!, 2);
         var quickButtons = new[] { "Sales Summary", "Shift Log", "Cash On Hand", "Check Payouts", "Profit & Loss" };
         for (var i = 0; i < quickButtons.Length; i++)
@@ -3500,7 +3573,7 @@ internal sealed class MainForm : Form
             var b = WinTheme.Button(reportName);
             b.Dock = DockStyle.Fill;
             b.Margin = new Padding(6);
-            b.Click += async (_, _) => await QuickExportReportAsync(reportName);
+            b.Click += async (_, _) => await OpenReportViewerAsync(reportName, DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo));
             quick.Controls.Add(b, i % 2, 1 + i / 2);
             if (i == 4) quick.SetColumnSpan(b, 2);
         }
@@ -3537,15 +3610,15 @@ internal sealed class MainForm : Form
         {
             using var db = CreateDb();
             var shifts = db.ShiftLogs.AsNoTracking()
-                .Where(x => x.StoreId == _currentStoreId && x.Date >= DateOnly.FromDateTime(from.Value) && x.Date <= DateOnly.FromDateTime(to.Value))
+                .Where(x => x.StoreId == _currentStoreId && x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo))
                 .OrderBy(x => x.Date)
                 .ToList();
             var purchases = db.PurchaseInvoices.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
-                .Where(x => x.InvoiceDate >= DateOnly.FromDateTime(from.Value) && x.InvoiceDate <= DateOnly.FromDateTime(to.Value)).ToList();
+                .Where(x => x.InvoiceDate >= DateOnly.FromDateTime(reportFrom) && x.InvoiceDate <= DateOnly.FromDateTime(reportTo)).ToList();
             var cash = db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
-                .Where(x => x.Date >= DateOnly.FromDateTime(from.Value) && x.Date <= DateOnly.FromDateTime(to.Value)).ToList();
+                .Where(x => x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo)).ToList();
             var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
-                .Where(x => x.Date >= DateOnly.FromDateTime(from.Value) && x.Date <= DateOnly.FromDateTime(to.Value)).ToList();
+                .Where(x => x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo)).ToList();
             var netSales = shifts.Sum(x => x.NetSales);
             var cogs = purchases.Sum(x => x.Total);
             var expenses = cash.Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount);
@@ -3559,27 +3632,88 @@ internal sealed class MainForm : Form
             txLabel.Text = shifts.Count.ToString(CultureInfo.InvariantCulture);
             grid.DataSource = new[]
             {
-                new { ReportName = "Sales Summary by Date", DateRange = $"{from.Value:M/d/yyyy} - {to.Value:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
-                new { ReportName = "Shift Log", DateRange = $"{from.Value:M/d/yyyy} - {to.Value:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
-                new { ReportName = "Cash On Hand Report", DateRange = $"{from.Value:M/d/yyyy} - {to.Value:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
-                new { ReportName = "Check Payouts", DateRange = $"{from.Value:M/d/yyyy} - {to.Value:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
-                new { ReportName = "Profit & Loss Statement", DateRange = $"{from.Value:M/d/yyyy} - {to.Value:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" }
+                new { ReportName = "Sales Summary by Date", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
+                new { ReportName = "Shift Log", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
+                new { ReportName = "Cash On Hand Report", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
+                new { ReportName = "Check Payouts", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
+                new { ReportName = "Profit & Loss Statement", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" }
             }.ToList();
         }
 
+        var previousPeriod = "Current Month";
+        var changingPeriod = false;
+        period.SelectedIndexChanged += (_, _) =>
+        {
+            if (changingPeriod)
+                return;
+
+            var today = DateTime.Today;
+            var firstDayOfWeek = CultureInfo.CurrentCulture.DateTimeFormat.FirstDayOfWeek;
+            var daysFromWeekStart = (7 + (int)today.DayOfWeek - (int)firstDayOfWeek) % 7;
+            var currentWeekStart = today.AddDays(-daysFromWeekStart);
+
+            switch (period.Text)
+            {
+                case "Today":
+                    reportFrom = reportTo = today;
+                    break;
+                case "Yesterday":
+                    reportFrom = reportTo = today.AddDays(-1);
+                    break;
+                case "Current Week":
+                    reportFrom = currentWeekStart;
+                    reportTo = today;
+                    break;
+                case "Previous Week":
+                    reportFrom = currentWeekStart.AddDays(-7);
+                    reportTo = currentWeekStart.AddDays(-1);
+                    break;
+                case "Current Month":
+                    reportFrom = new DateTime(today.Year, today.Month, 1);
+                    reportTo = today;
+                    break;
+                case "Previous Month":
+                    reportTo = new DateTime(today.Year, today.Month, 1).AddDays(-1);
+                    reportFrom = new DateTime(reportTo.Year, reportTo.Month, 1);
+                    break;
+                case "Current Year":
+                    reportFrom = new DateTime(today.Year, 1, 1);
+                    reportTo = today;
+                    break;
+                case "Previous Year":
+                    reportFrom = new DateTime(today.Year - 1, 1, 1);
+                    reportTo = new DateTime(today.Year - 1, 12, 31);
+                    break;
+                case "Custom":
+                    if (!TrySelectCustomReportPeriod(reportFrom, reportTo, out var customFrom, out var customTo))
+                    {
+                        changingPeriod = true;
+                        period.SelectedItem = previousPeriod;
+                        changingPeriod = false;
+                        return;
+                    }
+                    reportFrom = customFrom;
+                    reportTo = customTo;
+                    break;
+            }
+
+            previousPeriod = period.Text;
+            previewReport();
+        };
+
         generate.Click += async (_, _) =>
         {
-            await OpenReportViewerAsync(type.Text, DateOnly.FromDateTime(from.Value), DateOnly.FromDateTime(to.Value));
+            await OpenReportViewerAsync(type.Text, DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo));
             previewReport();
         };
         print.Click += async (_, _) =>
         {
-            await GenerateSelectedReportAsync(type.Text, DateOnly.FromDateTime(from.Value), DateOnly.FromDateTime(to.Value), printAfter: true);
+            await GenerateSelectedReportAsync(type.Text, DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo), printAfter: true);
             previewReport();
         };
         exportAll.Click += async (_, _) =>
         {
-            await ExportAllReportsToFolderAsync(DateOnly.FromDateTime(from.Value), DateOnly.FromDateTime(to.Value));
+            await ExportAllReportsToFolderAsync(DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo));
             previewReport();
         };
         grid.CellDoubleClick += async (_, e) =>
@@ -3591,11 +3725,116 @@ internal sealed class MainForm : Form
             if (string.IsNullOrWhiteSpace(reportName))
                 return;
 
-            await OpenReportViewerAsync(reportName, DateOnly.FromDateTime(from.Value), DateOnly.FromDateTime(to.Value));
+            await OpenReportViewerAsync(reportName, DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo));
             previewReport();
         };
         previewReport();
         return ModuleShell("\uE749", "Reports", "Generate, export, and review store reports.", root);
+    }
+
+    private bool TrySelectCustomReportPeriod(DateTime currentFrom, DateTime currentTo, out DateTime selectedFrom, out DateTime selectedTo)
+    {
+        using var dialog = new Form
+        {
+            Text = "Select Custom Report Period",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            ClientSize = new Size(590, 360),
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            BackColor = WinTheme.Bg
+        };
+        dialog.Icon = WinTheme.TryLoadIcon();
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(18),
+            ColumnCount = 2,
+            RowCount = 3
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        dialog.Controls.Add(layout);
+
+        layout.Controls.Add(new Label
+        {
+            Text = "FROM DATE",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Copper,
+            Font = WinTheme.BoldFont(10),
+            TextAlign = ContentAlignment.MiddleCenter
+        }, 0, 0);
+        layout.Controls.Add(new Label
+        {
+            Text = "TO DATE",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Copper,
+            Font = WinTheme.BoldFont(10),
+            TextAlign = ContentAlignment.MiddleCenter
+        }, 1, 0);
+
+        var fromCalendar = new MonthCalendar
+        {
+            MaxSelectionCount = 1,
+            SelectionStart = currentFrom,
+            SelectionEnd = currentFrom,
+            ShowToday = true,
+            ShowTodayCircle = true,
+            Anchor = AnchorStyles.None
+        };
+        var toCalendar = new MonthCalendar
+        {
+            MaxSelectionCount = 1,
+            SelectionStart = currentTo,
+            SelectionEnd = currentTo,
+            ShowToday = true,
+            ShowTodayCircle = true,
+            Anchor = AnchorStyles.None
+        };
+        layout.Controls.Add(fromCalendar, 0, 1);
+        layout.Controls.Add(toCalendar, 1, 1);
+
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(0, 8, 0, 0)
+        };
+        layout.Controls.Add(actions, 0, 2);
+        layout.SetColumnSpan(actions, 2);
+
+        var apply = WinTheme.Button("Use This Period", true);
+        apply.Width = 170;
+        apply.DialogResult = DialogResult.OK;
+        var cancel = WinTheme.Button("Cancel");
+        cancel.Width = 120;
+        cancel.DialogResult = DialogResult.Cancel;
+        actions.Controls.Add(apply);
+        actions.Controls.Add(cancel);
+        dialog.AcceptButton = apply;
+        dialog.CancelButton = cancel;
+
+        while (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            selectedFrom = fromCalendar.SelectionStart.Date;
+            selectedTo = toCalendar.SelectionStart.Date;
+            if (selectedTo >= selectedFrom)
+                return true;
+
+            MessageBox.Show(dialog, "To date must be on or after From date.", "Custom Report Period", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        selectedFrom = currentFrom;
+        selectedTo = currentTo;
+        return false;
     }
 
     private Task OpenReportViewerAsync(string reportName, DateOnly from, DateOnly to)
@@ -3670,21 +3909,11 @@ internal sealed class MainForm : Form
         }
     }
 
-    private async Task QuickExportReportAsync(string reportName)
+    private Task QuickViewReportAsync(string reportName)
     {
-        using var dialog = new SaveFileDialog
-        {
-            Title = $"Save {reportName} PDF",
-            Filter = "PDF files (*.pdf)|*.pdf",
-            FileName = $"HisabKitab_{SafeReportFilePart(reportName)}_{DateTime.Now:yyyyMMdd_HHmm}.pdf"
-        };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
-            return;
         var from = new DateOnly(DateTime.Today.Year, DateTime.Today.Month, 1);
         var to = DateOnly.FromDateTime(DateTime.Today);
-        await GenerateReportPdfAsync(ResolveReportType(reportName), from, to, dialog.FileName);
-        OpenGeneratedFile(dialog.FileName);
-        MessageBox.Show(this, $"Report saved:\n{dialog.FileName}", "Reports", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return OpenReportViewerAsync(reportName, from, to);
     }
 
     private static ReportType ResolveReportType(string? reportName)
