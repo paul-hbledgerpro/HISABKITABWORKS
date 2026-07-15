@@ -121,7 +121,7 @@ internal sealed class MainForm : Form
     {
         var menu = new MenuStrip
         {
-            BackColor = Color.FromArgb(3, 23, 36),
+            BackColor = WinTheme.BlueDark,
             ForeColor = Color.White,
             RenderMode = ToolStripRenderMode.Professional,
             GripStyle = ToolStripGripStyle.Hidden,
@@ -158,9 +158,9 @@ internal sealed class MainForm : Form
 
     private Control BuildSidebarHeader()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(4, 25, 38), Padding = new Padding(12) };
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.BlueDark, Padding = new Padding(12) };
         var logo = new PictureBox { Dock = DockStyle.Top, Height = 92, SizeMode = PictureBoxSizeMode.Zoom, Image = WinTheme.TryLoadLogo() };
-        var role = new Label { Text = _session.IsAdmin ? "ADMIN VIEW" : "MANAGER VIEW", Dock = DockStyle.Top, Height = 22, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(9) };
+        var role = new Label { Text = _session.IsAdmin ? "ADMIN VIEW" : "MANAGER VIEW", Dock = DockStyle.Top, Height = 22, ForeColor = Color.FromArgb(203, 222, 242), Font = WinTheme.BodyFont(9) };
         panel.Controls.Add(role);
         panel.Controls.Add(logo);
         return panel;
@@ -194,7 +194,7 @@ internal sealed class MainForm : Form
 
     private Control BuildSidebar()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(4, 25, 38), Padding = new Padding(10) };
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.BlueDark, Padding = new Padding(10) };
         _nav.BackColor = panel.BackColor;
         panel.Controls.Add(_nav);
 
@@ -225,7 +225,7 @@ internal sealed class MainForm : Form
         _nav.Controls.Add(new Label
         {
             Text = text,
-            ForeColor = WinTheme.Muted,
+            ForeColor = Color.FromArgb(203, 222, 242),
             Font = WinTheme.BoldFont(8),
             Width = 210,
             Height = 28,
@@ -241,6 +241,11 @@ internal sealed class MainForm : Form
         button.Text = $"  {text}";
         button.TextAlign = ContentAlignment.MiddleLeft;
         button.Font = WinTheme.BoldFont(9);
+        button.BackColor = WinTheme.BlueDark;
+        button.ForeColor = Color.White;
+        button.FlatAppearance.BorderColor = Color.FromArgb(53, 91, 130);
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(31, 78, 125);
+        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(19, 49, 80);
         button.Enabled = !adminOnly || _session.IsAdmin;
         button.Click += (_, _) =>
         {
@@ -285,9 +290,9 @@ internal sealed class MainForm : Form
         foreach (var kvp in _navButtons)
         {
             var active = kvp.Key == module;
-            kvp.Value.BackColor = active ? Color.FromArgb(113, 76, 48) : WinTheme.Panel;
-            kvp.Value.ForeColor = active ? Color.White : WinTheme.Copper;
-            kvp.Value.FlatAppearance.BorderColor = active ? WinTheme.Copper : WinTheme.CopperDark;
+            kvp.Value.BackColor = active ? WinTheme.Copper : WinTheme.BlueDark;
+            kvp.Value.ForeColor = Color.White;
+            kvp.Value.FlatAppearance.BorderColor = active ? WinTheme.CopperDark : Color.FromArgb(53, 91, 130);
         }
 
         _content.SuspendLayout();
@@ -310,6 +315,7 @@ internal sealed class MainForm : Form
                 "Reports" => BuildReports(),
                 _ => BuildDashboard()
             };
+            ApplyLightModuleTheme(control);
             _content.Controls.Add(control);
         }
         catch (Exception ex)
@@ -320,6 +326,48 @@ internal sealed class MainForm : Form
         {
             _content.ResumeLayout();
         }
+    }
+
+    private static void ApplyLightModuleTheme(Control root)
+    {
+        if (controlIsWorkSurface(root) && IsLegacyDarkSurface(root.BackColor))
+            root.BackColor = root is TableLayoutPanel or FlowLayoutPanel ? WinTheme.Bg : WinTheme.Panel;
+
+        foreach (Control control in root.Controls)
+            ApplyLightModuleTheme(control);
+
+        if (root is Label label && label.ForeColor == Color.White && !HasDarkParent(label))
+            label.ForeColor = WinTheme.Text;
+
+        if (root is TextBoxBase textBox)
+        {
+            if (IsLegacyDarkSurface(textBox.BackColor))
+                textBox.BackColor = Color.White;
+            if (textBox.ForeColor == Color.White)
+                textBox.ForeColor = WinTheme.Text;
+        }
+
+        if (root is ComboBox combo)
+        {
+            if (IsLegacyDarkSurface(combo.BackColor))
+                combo.BackColor = Color.White;
+            if (combo.ForeColor == Color.White)
+                combo.ForeColor = WinTheme.Text;
+        }
+
+        static bool controlIsWorkSurface(Control control)
+            => control is Panel or TableLayoutPanel or FlowLayoutPanel or GroupBox;
+
+        static bool HasDarkParent(Control control)
+            => control.Parent is not null && control.Parent.BackColor.GetBrightness() < 0.42f;
+
+        static bool IsLegacyDarkSurface(Color color)
+            => color == Color.FromArgb(6, 30, 44)
+               || color == Color.FromArgb(10, 42, 62)
+               || color == Color.FromArgb(16, 55, 80)
+               || color == Color.FromArgb(9, 36, 54)
+               || color == Color.FromArgb(12, 47, 54)
+               || color == Color.FromArgb(7, 24, 40);
     }
 
     private async Task LoadStoresAsync()

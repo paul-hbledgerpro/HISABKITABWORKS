@@ -151,7 +151,11 @@ internal sealed class ReportViewerForm : Form
             _status.Text = "Loading report preview...";
             await _pdfView.EnsureCoreWebView2Async();
             _pdfView.CoreWebView2.Settings.AreDevToolsEnabled = false;
-            _pdfView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+            _pdfView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+            _pdfView.CoreWebView2.Settings.HiddenPdfToolbarItems =
+                CoreWebView2PdfToolbarItems.Save |
+                CoreWebView2PdfToolbarItems.SaveAs |
+                CoreWebView2PdfToolbarItems.Print;
             _pdfView.CoreWebView2.Navigate(new Uri(_previewPath).AbsoluteUri);
             _pdfView.Visible = true;
             _pdfView.BringToFront();

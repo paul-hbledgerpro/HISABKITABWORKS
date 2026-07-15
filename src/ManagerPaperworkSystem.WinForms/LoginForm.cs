@@ -109,7 +109,7 @@ internal sealed class LoginForm : Form
             Top = 86,
             Width = 460,
             Height = 52,
-            ForeColor = Color.White,
+            ForeColor = WinTheme.Text,
             Font = WinTheme.HeaderFont(30),
             BackColor = Color.Transparent,
             TextAlign = ContentAlignment.MiddleLeft
@@ -157,12 +157,12 @@ internal sealed class LoginForm : Form
             Height = 38,
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.Transparent,
-            ForeColor = Color.FromArgb(170, 188, 210),
+            ForeColor = WinTheme.Muted,
             Font = WinTheme.IconFont(18),
             Cursor = Cursors.Hand
         };
         eye.FlatAppearance.BorderSize = 0;
-        eye.FlatAppearance.MouseOverBackColor = Color.FromArgb(18, 46, 70);
+        eye.FlatAppearance.MouseOverBackColor = WinTheme.Panel2;
         eye.Click += (_, _) =>
         {
             _password.UseSystemPasswordChar = !_password.UseSystemPasswordChar;
@@ -233,8 +233,8 @@ internal sealed class LoginForm : Form
 
     private static void StyleLoginBox(TextBox box)
     {
-        box.BackColor = Color.FromArgb(7, 24, 40);
-        box.ForeColor = Color.White;
+        box.BackColor = Color.White;
+        box.ForeColor = WinTheme.Text;
         box.BorderStyle = BorderStyle.None;
         box.Font = WinTheme.BodyFont(16);
         box.Margin = Padding.Empty;
@@ -242,8 +242,8 @@ internal sealed class LoginForm : Form
 
     private static void StyleLoginCombo(ComboBox combo)
     {
-        combo.BackColor = Color.FromArgb(7, 24, 40);
-        combo.ForeColor = Color.White;
+        combo.BackColor = Color.White;
+        combo.ForeColor = WinTheme.Text;
         combo.FlatStyle = FlatStyle.Flat;
         combo.DropDownStyle = ComboBoxStyle.DropDownList;
         combo.Font = WinTheme.BodyFont(15);
@@ -252,12 +252,12 @@ internal sealed class LoginForm : Form
     private static void StylePrimaryLoginButton(Button button)
     {
         button.BackColor = WinTheme.Copper;
-        button.ForeColor = Color.Black;
+        button.ForeColor = Color.White;
         button.FlatStyle = FlatStyle.Flat;
         button.Font = WinTheme.BoldFont(22);
         button.Cursor = Cursors.Hand;
         button.FlatAppearance.BorderColor = WinTheme.CopperDark;
-        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 186, 124);
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(224, 118, 22);
         button.FlatAppearance.MouseDownBackColor = WinTheme.CopperDark;
         button.TextAlign = ContentAlignment.MiddleCenter;
     }
@@ -265,14 +265,14 @@ internal sealed class LoginForm : Form
     private static void StyleOutlineLoginButton(Button button)
     {
         button.BackColor = Color.Transparent;
-        button.ForeColor = WinTheme.Copper;
+        button.ForeColor = WinTheme.BlueDark;
         button.FlatStyle = FlatStyle.Flat;
         button.Font = WinTheme.BoldFont(14);
         button.Cursor = Cursors.Hand;
-        button.FlatAppearance.BorderColor = WinTheme.CopperDark;
+        button.FlatAppearance.BorderColor = WinTheme.Blue;
         button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(18, 46, 70);
-        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(30, 60, 85);
+        button.FlatAppearance.MouseOverBackColor = WinTheme.Panel2;
+        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(229, 238, 248);
     }
 
     private static Label IconLabel(string glyph, int x, int y, int width, int height, float size)
@@ -297,7 +297,7 @@ internal sealed class LoginForm : Form
             Top = y,
             Width = width,
             Height = height,
-            BackColor = Color.FromArgb(7, 24, 40)
+            BackColor = Color.White
         };
         shell.Controls.Add(IconLabel(glyph, 18, 11, 34, 38, 20));
         input.SetBounds(66, input is ComboBox ? 15 : 18, width - 92, 32);
@@ -353,7 +353,7 @@ internal sealed class LoginForm : Form
     private static void SetPlaceholder(TextBox box, string placeholder, bool password)
     {
         box.Text = placeholder;
-        box.ForeColor = Color.FromArgb(165, 172, 186);
+        box.ForeColor = WinTheme.Muted;
         box.UseSystemPasswordChar = false;
 
         box.Enter += (_, _) =>
@@ -361,7 +361,7 @@ internal sealed class LoginForm : Form
             if (box.Text == placeholder)
             {
                 box.Text = "";
-                box.ForeColor = Color.White;
+                box.ForeColor = WinTheme.Text;
                 if (password)
                     box.UseSystemPasswordChar = true;
             }
@@ -372,7 +372,7 @@ internal sealed class LoginForm : Form
             {
                 box.UseSystemPasswordChar = false;
                 box.Text = placeholder;
-                box.ForeColor = Color.FromArgb(165, 172, 186);
+                box.ForeColor = WinTheme.Muted;
             }
         };
     }
@@ -947,7 +947,7 @@ internal sealed class LoginBackgroundPanel : Panel
         if (bounds.Width <= 0 || bounds.Height <= 0)
             return;
 
-        using var brush = new LinearGradientBrush(bounds, Color.FromArgb(4, 17, 31), Color.FromArgb(9, 35, 56), 0f);
+        using var brush = new LinearGradientBrush(bounds, Color.White, WinTheme.Panel2, 0f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }
@@ -972,7 +972,7 @@ internal sealed class LoginLeftPanel : Panel
         if (bounds.Width <= 0 || bounds.Height <= 0)
             return;
 
-        using var brush = new LinearGradientBrush(bounds, Color.FromArgb(4, 17, 33), Color.FromArgb(9, 30, 52), 90f);
+        using var brush = new LinearGradientBrush(bounds, Color.FromArgb(231, 241, 252), Color.White, 90f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }
@@ -991,7 +991,7 @@ internal sealed class LoginRightPanel : Panel
         if (bounds.Width <= 0 || bounds.Height <= 0)
             return;
 
-        using var brush = new LinearGradientBrush(bounds, Color.FromArgb(3, 15, 29), Color.FromArgb(8, 29, 51), 20f);
+        using var brush = new LinearGradientBrush(bounds, Color.White, Color.FromArgb(248, 251, 255), 20f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }
@@ -1007,7 +1007,7 @@ internal sealed class BorderedLoginPanel : Panel
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        using var pen = new Pen(Color.FromArgb(75, 91, 114));
+        using var pen = new Pen(WinTheme.Border);
         e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
     }
 }

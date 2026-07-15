@@ -4,15 +4,19 @@ namespace ManagerPaperworkSystem.WinForms;
 
 internal static class WinTheme
 {
-    public static readonly Color Bg = Color.FromArgb(6, 30, 44);
-    public static readonly Color Panel = Color.FromArgb(10, 42, 62);
-    public static readonly Color Panel2 = Color.FromArgb(16, 55, 80);
-    public static readonly Color Copper = Color.FromArgb(219, 157, 91);
-    public static readonly Color CopperDark = Color.FromArgb(175, 103, 39);
-    public static readonly Color Text = Color.White;
-    public static readonly Color Muted = Color.FromArgb(170, 188, 210);
-    public static readonly Color Green = Color.FromArgb(45, 211, 111);
-    public static readonly Color Red = Color.FromArgb(255, 69, 58);
+    // Professional light palette: white work surfaces with orange, blue and green accents.
+    public static readonly Color Bg = Color.White;
+    public static readonly Color Panel = Color.White;
+    public static readonly Color Panel2 = Color.FromArgb(244, 248, 252);
+    public static readonly Color Copper = Color.FromArgb(242, 140, 40);
+    public static readonly Color CopperDark = Color.FromArgb(201, 106, 18);
+    public static readonly Color Blue = Color.FromArgb(37, 99, 235);
+    public static readonly Color BlueDark = Color.FromArgb(22, 58, 95);
+    public static readonly Color Text = Color.FromArgb(22, 50, 79);
+    public static readonly Color Muted = Color.FromArgb(100, 116, 139);
+    public static readonly Color Border = Color.FromArgb(210, 220, 232);
+    public static readonly Color Green = Color.FromArgb(46, 157, 87);
+    public static readonly Color Red = Color.FromArgb(214, 69, 69);
 
     public static Font HeaderFont(float size = 18) => new("Segoe UI", size, FontStyle.Bold);
     public static Font BodyFont(float size = 10) => new("Segoe UI", size, FontStyle.Regular);
@@ -59,8 +63,8 @@ internal static class WinTheme
             Text = text,
             Height = 44,
             FlatStyle = FlatStyle.Flat,
-            ForeColor = filled ? Color.Black : Copper,
-            BackColor = filled ? Copper : Panel,
+            ForeColor = filled ? Color.White : BlueDark,
+            BackColor = filled ? Copper : Color.White,
             Font = BoldFont(),
             Cursor = Cursors.Hand,
             Margin = new Padding(4),
@@ -68,10 +72,10 @@ internal static class WinTheme
             Padding = new Padding(8, 0, 8, 0),
             UseVisualStyleBackColor = false
         };
-        b.FlatAppearance.BorderColor = CopperDark;
+        b.FlatAppearance.BorderColor = filled ? CopperDark : Border;
         b.FlatAppearance.BorderSize = 1;
-        b.FlatAppearance.MouseOverBackColor = filled ? Color.FromArgb(234, 180, 115) : Panel2;
-        b.FlatAppearance.MouseDownBackColor = CopperDark;
+        b.FlatAppearance.MouseOverBackColor = filled ? Color.FromArgb(224, 118, 22) : Panel2;
+        b.FlatAppearance.MouseDownBackColor = filled ? CopperDark : Color.FromArgb(229, 238, 248);
         return b;
     }
 
@@ -79,7 +83,7 @@ internal static class WinTheme
     {
         return new TextBox
         {
-            BackColor = Panel,
+            BackColor = Color.White,
             ForeColor = Text,
             BorderStyle = BorderStyle.FixedSingle,
             Font = BodyFont(11),
@@ -131,13 +135,13 @@ internal static class WinTheme
     {
         var panel = new Panel
         {
-            BackColor = Panel,
+            BackColor = Color.White,
             Padding = new Padding(12),
             Margin = new Padding(8)
         };
         panel.Paint += (_, e) =>
         {
-            using var pen = new Pen(CopperDark);
+            using var pen = new Pen(Border);
             e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
         };
         return panel;
@@ -155,9 +159,9 @@ internal static class WinTheme
     {
         var grid = new DataGridView
         {
-            BackgroundColor = Panel,
+            BackgroundColor = Color.White,
             BorderStyle = BorderStyle.FixedSingle,
-            GridColor = Color.FromArgb(57, 76, 96),
+            GridColor = Border,
             ForeColor = Text,
             EnableHeadersVisualStyles = false,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
@@ -171,14 +175,14 @@ internal static class WinTheme
             RowTemplate = { Height = 34 }
         };
         grid.ColumnHeadersHeight = 38;
-        grid.ColumnHeadersDefaultCellStyle.BackColor = Copper;
-        grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.Black;
+        grid.ColumnHeadersDefaultCellStyle.BackColor = BlueDark;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
         grid.ColumnHeadersDefaultCellStyle.Font = BoldFont();
-        grid.DefaultCellStyle.BackColor = Panel;
+        grid.DefaultCellStyle.BackColor = Color.White;
         grid.DefaultCellStyle.ForeColor = Text;
-        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(38, 76, 106);
-        grid.DefaultCellStyle.SelectionForeColor = Text;
-        grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(8, 36, 54);
+        grid.DefaultCellStyle.SelectionBackColor = Blue;
+        grid.DefaultCellStyle.SelectionForeColor = Color.White;
+        grid.AlternatingRowsDefaultCellStyle.BackColor = Panel2;
         grid.DefaultCellStyle.Font = BodyFont(10);
         grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
         grid.DefaultCellStyle.Padding = new Padding(6, 0, 6, 0);
@@ -237,10 +241,10 @@ internal static class WinTheme
 
     public static Panel BorderedPanel(int padding = 12)
     {
-        var panel = new Panel { BackColor = Panel, Padding = new Padding(padding) };
+        var panel = new Panel { BackColor = Color.White, Padding = new Padding(padding) };
         panel.Paint += (_, e) =>
         {
-            using var pen = new Pen(CopperDark);
+            using var pen = new Pen(Border);
             e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
         };
         return panel;
@@ -248,7 +252,7 @@ internal static class WinTheme
 
     public static void PaintGradient(PaintEventArgs e, Rectangle bounds)
     {
-        using var brush = new LinearGradientBrush(bounds, Color.FromArgb(7, 28, 43), Color.FromArgb(20, 55, 78), 0f);
+        using var brush = new LinearGradientBrush(bounds, BlueDark, Blue, 0f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }
