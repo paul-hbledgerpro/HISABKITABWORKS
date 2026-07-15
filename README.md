@@ -7,10 +7,10 @@ HISAB KITAB is a Windows desktop bookkeeping and manager-paperwork application. 
 On Windows, install the .NET 8 SDK and Visual Studio 2022 with the **.NET desktop development** workload, then run:
 
 ```powershell
-.\setup-workstation.ps1
+.\setup-workstation.cmd
 ```
 
-Open `ManagerPaperworkSystem.sln` and select `ManagerPaperworkSystem.WinForms` as the startup project. The setup script restores packages and performs a Release build without launching the app.
+Open `ManagerPaperworkSystem.sln` and select `ManagerPaperworkSystem.WinForms` as the startup project. The setup launcher works with the default Windows PowerShell execution policy, restores packages, and performs a Release build without launching the app.
 
 For cloning, private-repository setup, daily synchronization, and runtime-data guidance, see [WORK_PC_SETUP.md](WORK_PC_SETUP.md).
 
@@ -39,4 +39,3 @@ Runtime data is stored separately from source code under `%LOCALAPPDATA%\Hisab K
 - `src/ManagerPaperworkSystem.Updater` — updater application
 - `src/ManagerPaperworkSystem.UI` — legacy WPF implementation retained for reference
 - `installer` — publishing and Inno Setup files
-

@@ -28,13 +28,19 @@ mkdir C:\Dev
 cd C:\Dev
 git clone <PRIVATE_REPOSITORY_URL> HisabKitab
 cd HisabKitab
-.\setup-workstation.ps1
+.\setup-workstation.cmd
 ```
 
-The setup script verifies .NET 8, restores packages, and builds the active WinForms project in Release mode. It does not launch the app. To open Visual Studio after a successful build:
+The CMD launcher works with the default Windows PowerShell execution policy. It verifies .NET 8, restores packages, and builds the active WinForms project in Release mode. It does not launch the app. To open Visual Studio after a successful build:
 
 ```powershell
-.\setup-workstation.ps1 -OpenSolution
+.\setup-workstation.cmd -OpenSolution
+```
+
+You can also invoke the PowerShell script directly when execution policy permits it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup-workstation.ps1
 ```
 
 Use `ManagerPaperworkSystem.WinForms` as the startup project. `ManagerPaperworkSystem.UI` is the older WPF implementation and is not the active conversion target.
@@ -79,4 +85,3 @@ dotnet build .\src\ManagerPaperworkSystem.WinForms\ManagerPaperworkSystem.WinFor
 ```
 
 Inno Setup is optional and only needed when producing `HISAB_KITAB_Setup.exe` from `installer\InnoSetup\ManagerPaperworkSystem.iss`.
-
