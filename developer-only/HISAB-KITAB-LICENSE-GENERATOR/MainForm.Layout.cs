@@ -10,9 +10,10 @@ internal sealed partial class MainForm
             BackColor = AdminTheme.Bg,
             ColumnCount = 1,
             RowCount = 2,
-            Padding = Padding.Empty
+            Padding = Padding.Empty,
+            AutoScroll = true
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 118));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.Controls.Add(BuildHeader(), 0, 0);
 
@@ -34,42 +35,51 @@ internal sealed partial class MainForm
 
     private Control BuildHeader()
     {
-        var header = new Panel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, Padding = new Padding(28, 12, 32, 12) };
+        var header = new Panel { Dock = DockStyle.Fill, BackColor = AdminTheme.BlueDark, Padding = new Padding(24, 10, 28, 10) };
         header.Paint += (_, e) => AdminTheme.PaintGradient(e, header.ClientRectangle);
-
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.Transparent, ColumnCount = 3 };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 245));
 
         var logo = new PictureBox
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Left,
+            Width = 76,
             Image = AdminTheme.LoadLogo(),
             SizeMode = PictureBoxSizeMode.Zoom,
             BackColor = Color.Transparent,
             Margin = new Padding(0, 0, 12, 0)
         };
-        layout.Controls.Add(logo, 0, 0);
 
-        var titles = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.Transparent, RowCount = 2 };
-        titles.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
-        titles.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
-        titles.Controls.Add(AdminTheme.Label("HISAB KITAB WORKS", AdminTheme.Text, 24, true), 0, 0);
-        titles.Controls.Add(AdminTheme.Label("ADMIN LICENSE GENERATOR", AdminTheme.Copper, 10.5f, true), 0, 1);
-        layout.Controls.Add(titles, 1, 0);
+        var titles = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.Transparent,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Padding = new Padding(12, 8, 0, 0)
+        };
+        var title = AdminTheme.Label("HISAB KITAB WORKS", Color.White, 19, true);
+        title.Size = new Size(420, 40);
+        var subtitle = AdminTheme.Label("ADMIN LICENSE GENERATOR", AdminTheme.Copper, 10.5f, true);
+        subtitle.Size = new Size(320, 26);
+        subtitle.Margin = new Padding(0, 4, 0, 0);
+        titles.Controls.Add(title);
+        titles.Controls.Add(subtitle);
 
         var adminBadge = AdminTheme.Card(AdminTheme.CopperDark);
-        adminBadge.Dock = DockStyle.Fill;
-        adminBadge.Margin = new Padding(12, 15, 0, 15);
-        var badgeText = AdminTheme.Label("\uE7EF  ADMIN-ONLY TOOL", AdminTheme.Copper, 10.5f, true);
+        adminBadge.Dock = DockStyle.Right;
+        adminBadge.Width = 240;
+        adminBadge.BackColor = AdminTheme.BlueDark;
+        adminBadge.Margin = new Padding(12, 12, 0, 12);
+        var badgeText = AdminTheme.Label("ADMIN-ONLY TOOL", AdminTheme.Copper, 9.5f, true);
         badgeText.Dock = DockStyle.Fill;
         badgeText.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
         badgeText.TextAlign = ContentAlignment.MiddleCenter;
         adminBadge.Controls.Add(badgeText);
-        layout.Controls.Add(adminBadge, 2, 0);
 
-        header.Controls.Add(layout);
+        // Docked controls are processed in reverse z-order: add the fill control first,
+        // then the right and left controls so the title receives the remaining width.
+        header.Controls.Add(titles);
+        header.Controls.Add(adminBadge);
+        header.Controls.Add(logo);
         return header;
     }
 
@@ -83,7 +93,7 @@ internal sealed partial class MainForm
             RowCount = 2,
             Margin = new Padding(0, 0, 9, 0)
         };
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 250));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 262));
         column.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         column.Controls.Add(BuildConnectionCard(), 0, 0);
         column.Controls.Add(BuildCustomerCard(), 0, 1);
@@ -116,7 +126,7 @@ internal sealed partial class MainForm
         connectionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 154));
         connectionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _connect.Dock = DockStyle.Fill;
-        _connect.Margin = new Padding(0, 0, 12, 0);
+        _connect.Margin = new Padding(0, 0, 12, 4);
         connectionRow.Controls.Add(_connect, 0, 0);
         _dbStatus.Dock = DockStyle.Fill;
         _dbStatus.TextAlign = ContentAlignment.MiddleLeft;
@@ -164,9 +174,9 @@ internal sealed partial class MainForm
             RowCount = 4,
             Margin = new Padding(9, 0, 0, 0)
         };
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 250));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 266));
         column.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         column.Controls.Add(BuildSecurityCard(), 0, 0);
         column.Controls.Add(BuildActions(), 0, 1);
@@ -193,7 +203,7 @@ internal sealed partial class MainForm
         icon.Dock = DockStyle.Fill;
         layout.Controls.Add(icon, 0, 0);
         layout.SetRowSpan(icon, 2);
-        layout.Controls.Add(AdminTheme.Label("OFFLINE LICENSE SIGNING", AdminTheme.Text, 10.5f, true), 1, 0);
+        layout.Controls.Add(AdminTheme.Label("OFFLINE LICENSE SIGNING", AdminTheme.BlueDark, 10.5f, true), 1, 0);
         _signingStatus.Dock = DockStyle.Fill;
         layout.Controls.Add(_signingStatus, 1, 1);
         _importSigningKey.Dock = DockStyle.Fill;
@@ -207,9 +217,9 @@ internal sealed partial class MainForm
     private Control BuildActions()
     {
         var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 3, Padding = new Padding(0, 0, 0, 10) };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 22));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
         _generate.Dock = DockStyle.Fill;
         _lookup.Dock = DockStyle.Fill;
         _deviceLicenses.Dock = DockStyle.Fill;
@@ -227,14 +237,14 @@ internal sealed partial class MainForm
         _resultCard = AdminTheme.Card(AdminTheme.CopperDark);
         _resultCard.Dock = DockStyle.Fill;
         _resultCard.Margin = new Padding(0, 0, 0, 10);
-        _resultCard.Padding = new Padding(22, 14, 22, 14);
+        _resultCard.Padding = new Padding(22, 12, 22, 12);
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 1, RowCount = 5 };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         var heading = AdminTheme.Label("SUBSCRIPTION KEY - DEVICE FILES ARE ISSUED SEPARATELY", AdminTheme.Muted, 9.5f, true);
         heading.Dock = DockStyle.Fill;
         heading.TextAlign = ContentAlignment.MiddleCenter;
@@ -246,9 +256,9 @@ internal sealed partial class MainForm
         _databaseDetails.TextAlign = ContentAlignment.MiddleCenter;
         layout.Controls.Add(_databaseDetails, 0, 2);
 
-        var hint = AdminTheme.Label("After creating the customer, open Device Licenses and import the PC request.", AdminTheme.Muted, 10);
+        var hint = AdminTheme.Label("Import the customer's .hbrequest file to issue a license for that specific PC.", AdminTheme.Muted, 10);
         hint.Dock = DockStyle.Fill;
-        hint.TextAlign = ContentAlignment.TopCenter;
+        hint.TextAlign = ContentAlignment.MiddleCenter;
         layout.Controls.Add(hint, 0, 3);
 
         var resultActions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 2 };
@@ -256,8 +266,8 @@ internal sealed partial class MainForm
         resultActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
         _copyKey.Dock = DockStyle.Fill;
         _exportLicense.Dock = DockStyle.Fill;
-        _copyKey.Margin = new Padding(0, 0, 8, 0);
-        _exportLicense.Margin = new Padding(8, 0, 0, 0);
+        _copyKey.Margin = new Padding(0, 4, 8, 6);
+        _exportLicense.Margin = new Padding(8, 4, 0, 6);
         resultActions.Controls.Add(_copyKey, 0, 0);
         resultActions.Controls.Add(_exportLicense, 1, 0);
         layout.Controls.Add(resultActions, 0, 4);

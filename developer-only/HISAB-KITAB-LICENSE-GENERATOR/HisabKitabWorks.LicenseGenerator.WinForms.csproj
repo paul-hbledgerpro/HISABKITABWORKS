@@ -7,12 +7,15 @@
     <Nullable>enable</Nullable>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
+    <Version>1.0.72</Version>
+    <AssemblyVersion>1.0.72.0</AssemblyVersion>
+    <FileVersion>1.0.72.0</FileVersion>
     <AssemblyName>HISAB KITAB WORKS License Generator</AssemblyName>
     <RootNamespace>HisabKitabWorks.LicenseGenerator.WinForms</RootNamespace>
     <Title>HISAB KITAB WORKS - Admin License Generator</Title>
     <Product>HISAB KITAB WORKS License Generator</Product>
     <Company>Hisab Kitab Works</Company>
-    <ApplicationIcon>..\..\src\ManagerPaperworkSystem.UI\Assets\HisabKitab.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\HisabKitab.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
@@ -22,10 +25,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\src\ManagerPaperworkSystem.UI\Assets\HisabKitab_Logo.png" Link="Assets\HisabKitab_Logo.png">
+    <Content Include="Assets\HisabKitab_Logo.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\..\src\ManagerPaperworkSystem.UI\Assets\HisabKitab.ico" Link="Assets\HisabKitab.ico">
+    <Content Include="Assets\HisabKitab.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

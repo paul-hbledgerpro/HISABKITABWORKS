@@ -21,7 +21,7 @@ internal sealed partial class MainForm : Form
     private readonly Button _connect = AdminTheme.Button("CONNECT");
     private readonly Button _generate = AdminTheme.Button("GENERATE LICENSE KEY", primary: true);
     private readonly Button _lookup = AdminTheme.Button("LOOK UP");
-    private readonly Button _deviceLicenses = AdminTheme.Button("DEVICE LICENSES", primary: true);
+    private readonly Button _deviceLicenses = AdminTheme.Button("IMPORT PC REQUEST", primary: true);
     private readonly Button _copyKey = AdminTheme.Button("COPY KEY");
     private readonly Button _exportLicense = AdminTheme.Button("OPEN DEVICE LICENSES");
     private readonly Button _importSigningKey = AdminTheme.Button("IMPORT SIGNING KEY");
@@ -44,8 +44,10 @@ internal sealed partial class MainForm : Form
         Font = AdminTheme.Body();
         Icon = AdminTheme.LoadIcon();
         StartPosition = FormStartPosition.CenterScreen;
+        AutoScaleMode = AutoScaleMode.Font;
         Size = new Size(1320, 860);
         MinimumSize = new Size(1180, 760);
+        WindowState = FormWindowState.Normal;
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = true;
         MaximizeBox = true;
@@ -80,7 +82,7 @@ internal sealed partial class MainForm : Form
         _connect.Click += (_, _) => ConnectToDatabase();
         _generate.Click += (_, _) => GenerateLicense();
         _lookup.Click += (_, _) => LookupLicense();
-        _deviceLicenses.Click += (_, _) => OpenDeviceLicenseManager();
+        _deviceLicenses.Click += (_, _) => OpenDeviceLicenseManager(importRequest: true);
         _copyKey.Click += (_, _) => CopyLicenseKey();
         _exportLicense.Click += (_, _) => OpenDeviceLicenseManager();
         _importSigningKey.Click += (_, _) => ImportSigningKey();
@@ -519,24 +521,19 @@ internal sealed partial class MainForm : Form
         }
     }
 
-    private void OpenDeviceLicenseManager()
+    private void OpenDeviceLicenseManager(bool importRequest = false)
     {
         if (!_isConnected)
         {
             ShowError("Connect to the licensing database first.");
             return;
         }
-        if (!SigningKeyStore.IsConfigured)
-        {
-            ShowError("Import the private signing key before issuing device licenses.");
-            return;
-        }
-
         using var form = new DeviceLicenseManagerForm(
             ConnectionString(LicensingDatabase),
             _server.Text.Trim(),
             _username.Text.Trim(),
-            _password.Text);
+            _password.Text,
+            importRequest);
         form.ShowDialog(this);
     }
 

@@ -31,6 +31,9 @@ installer/InnoSetup/*.deps.json
 tools/**/publish/
 tools/**/installer_output/
 tools/**/secrets/
+developer-only/**/publish/
+developer-only/**/installer_output/
+developer-only/**/secrets/
 
 # Local databases, runtime settings, logs, and backups
 *.db

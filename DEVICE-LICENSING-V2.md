@@ -10,8 +10,8 @@ Version 2 replaces reusable business-wide offline licenses with a signed license
 2. The customer opens HISAB KITAB. If the PC is not licensed, the Device License Activation screen opens.
 3. The customer enters the exact business name and subscription key.
 4. The customer selects **Export PC Request** and sends the `.hbrequest` file to the developer.
-5. In the Admin License Generator, connect to the licensing database and select **Device Licenses**.
-6. Import the `.hbrequest` file. The generator verifies the request signature and finds the exact active subscription.
+5. Open the standalone developer-only Admin License Generator, connect to the licensing database, and select **Import PC Request**.
+6. Choose the `.hbrequest` file. The generator verifies the request signature and finds the exact active subscription.
 7. Set the paid PC-seat count and subscription expiration date.
 8. Select **Issue / Renew License** and send the generated `.hblicense` file to the customer.
 9. The customer imports the file. The app verifies the developer signature, device identity, private-key ownership, and expiration before saving it.

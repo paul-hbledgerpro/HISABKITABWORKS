@@ -4,15 +4,17 @@ namespace HisabKitabWorks.LicenseGenerator.WinForms;
 
 internal static class AdminTheme
 {
-    public static readonly Color Bg = Color.FromArgb(6, 30, 44);
-    public static readonly Color Panel = Color.FromArgb(10, 42, 62);
-    public static readonly Color Panel2 = Color.FromArgb(16, 55, 80);
-    public static readonly Color Copper = Color.FromArgb(219, 157, 91);
-    public static readonly Color CopperDark = Color.FromArgb(175, 103, 39);
-    public static readonly Color Text = Color.White;
-    public static readonly Color Muted = Color.FromArgb(170, 188, 210);
-    public static readonly Color Green = Color.FromArgb(45, 211, 111);
-    public static readonly Color Red = Color.FromArgb(255, 69, 58);
+    public static readonly Color Bg = Color.FromArgb(245, 248, 252);
+    public static readonly Color Panel = Color.White;
+    public static readonly Color Panel2 = Color.FromArgb(222, 232, 245);
+    public static readonly Color Copper = Color.FromArgb(242, 125, 30);
+    public static readonly Color CopperDark = Color.FromArgb(196, 82, 0);
+    public static readonly Color Blue = Color.FromArgb(27, 83, 151);
+    public static readonly Color BlueDark = Color.FromArgb(13, 48, 88);
+    public static readonly Color Text = Color.FromArgb(25, 44, 68);
+    public static readonly Color Muted = Color.FromArgb(91, 108, 131);
+    public static readonly Color Green = Color.FromArgb(24, 132, 82);
+    public static readonly Color Red = Color.FromArgb(196, 55, 55);
 
     public static Font Header(float size = 18) => new("Segoe UI", size, FontStyle.Bold);
     public static Font Body(float size = 10) => new("Segoe UI", size, FontStyle.Regular);
@@ -27,22 +29,23 @@ internal static class AdminTheme
             Height = 44,
             FlatStyle = FlatStyle.Flat,
             BackColor = primary ? Copper : Panel,
-            ForeColor = primary ? Color.Black : Copper,
+            ForeColor = primary ? Color.White : Blue,
             Font = Bold(),
             Cursor = Cursors.Hand,
             UseVisualStyleBackColor = false,
             Margin = new Padding(4)
         };
-        button.FlatAppearance.BorderColor = CopperDark;
-        button.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(234, 180, 115) : Panel2;
-        button.FlatAppearance.MouseDownBackColor = CopperDark;
+        button.FlatAppearance.BorderColor = primary ? CopperDark : Blue;
+        button.FlatAppearance.BorderSize = 1;
+        button.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(255, 151, 58) : Color.FromArgb(235, 242, 251);
+        button.FlatAppearance.MouseDownBackColor = primary ? CopperDark : Panel2;
         return button;
     }
 
     public static TextBox TextBox(bool password = false)
         => new()
         {
-            BackColor = Bg,
+            BackColor = Color.White,
             ForeColor = Text,
             BorderStyle = BorderStyle.FixedSingle,
             Font = Body(10.5f),
@@ -75,7 +78,7 @@ internal static class AdminTheme
 
     public static void PaintGradient(PaintEventArgs e, Rectangle bounds)
     {
-        using var brush = new LinearGradientBrush(bounds, Color.FromArgb(7, 28, 43), Color.FromArgb(20, 55, 78), 0f);
+        using var brush = new LinearGradientBrush(bounds, BlueDark, Blue, 0f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 

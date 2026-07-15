@@ -12,7 +12,8 @@ internal sealed class DeviceLicenseManagerForm : Form
     private readonly string _server;
     private readonly string _username;
     private readonly string _password;
-    private readonly Button _importRequest = AdminTheme.Button("IMPORT .HBREQUEST", true);
+    private readonly bool _importRequestOnOpen;
+    private readonly Button _importRequest = AdminTheme.Button("IMPORT PC REQUEST (.HBREQUEST)", true);
     private readonly Button _issueLicense = AdminTheme.Button("ISSUE / RENEW LICENSE", true);
     private readonly Button _revokeDevice = AdminTheme.Button("REVOKE SELECTED PC");
     private readonly Button _refresh = AdminTheme.Button("REFRESH");
@@ -28,12 +29,13 @@ internal sealed class DeviceLicenseManagerForm : Form
     private SubscriptionRecord? _subscription;
     private List<DeviceRecord> _deviceRows = new();
 
-    public DeviceLicenseManagerForm(string licensingConnectionString, string server, string username, string password)
+    public DeviceLicenseManagerForm(string licensingConnectionString, string server, string username, string password, bool importRequestOnOpen = false)
     {
         _licensingConnectionString = licensingConnectionString;
         _server = server;
         _username = username;
         _password = password;
+        _importRequestOnOpen = importRequestOnOpen;
 
         Text = "HISAB KITAB WORKS - Device License Manager";
         BackColor = AdminTheme.Bg;
@@ -41,8 +43,10 @@ internal sealed class DeviceLicenseManagerForm : Form
         Font = AdminTheme.Body();
         Icon = AdminTheme.LoadIcon();
         StartPosition = FormStartPosition.CenterParent;
+        AutoScaleMode = AutoScaleMode.Font;
         Size = new Size(1220, 820);
         MinimumSize = new Size(1060, 700);
+        WindowState = FormWindowState.Normal;
         Controls.Add(BuildLayout());
         ConfigureGrid();
 
@@ -51,7 +55,12 @@ internal sealed class DeviceLicenseManagerForm : Form
         _revokeDevice.Click += (_, _) => RevokeSelectedDevice();
         _refresh.Click += (_, _) => RefreshDevices();
         _devices.SelectionChanged += (_, _) => LoadSelectedDevice();
-        Shown += (_, _) => InitializeSchema();
+        Shown += (_, _) =>
+        {
+            InitializeSchema();
+            if (_importRequestOnOpen)
+                BeginInvoke(ImportRequest);
+        };
     }
 
     private Control BuildLayout()
@@ -67,7 +76,7 @@ internal sealed class DeviceLicenseManagerForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 200));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
 
         var header = new Panel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, Padding = new Padding(24, 12, 24, 12) };
         header.Paint += (_, e) => AdminTheme.PaintGradient(e, header.ClientRectangle);
@@ -118,20 +127,17 @@ internal sealed class DeviceLicenseManagerForm : Form
         gridCard.Controls.Add(gridLayout);
         root.Controls.Add(gridCard, 0, 2);
 
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 4, Padding = new Padding(0, 10, 0, 0) };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 3, Padding = new Padding(0, 10, 0, 0) };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
         _status.Dock = DockStyle.Fill;
         _status.TextAlign = ContentAlignment.MiddleLeft;
-        _importRequest.Dock = DockStyle.Fill;
         _revokeDevice.Dock = DockStyle.Fill;
         _issueLicense.Dock = DockStyle.Fill;
         footer.Controls.Add(_status, 0, 0);
-        footer.Controls.Add(_importRequest, 1, 0);
-        footer.Controls.Add(_revokeDevice, 2, 0);
-        footer.Controls.Add(_issueLicense, 3, 0);
+        footer.Controls.Add(_revokeDevice, 1, 0);
+        footer.Controls.Add(_issueLicense, 2, 0);
         root.Controls.Add(footer, 0, 3);
         return root;
     }
@@ -142,10 +148,11 @@ internal sealed class DeviceLicenseManagerForm : Form
         card.Dock = DockStyle.Fill;
         card.Margin = new Padding(0, 0, 8, 0);
         card.Padding = new Padding(18, 12, 18, 12);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, RowCount = 4 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, RowCount = 5 };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.Controls.Add(AdminTheme.Label("CURRENT PC REQUEST", AdminTheme.Copper, 10, true), 0, 0);
         _business.Dock = DockStyle.Fill;
@@ -154,6 +161,9 @@ internal sealed class DeviceLicenseManagerForm : Form
         layout.Controls.Add(_business, 0, 1);
         layout.Controls.Add(_device, 0, 2);
         layout.Controls.Add(_deviceId, 0, 3);
+        _importRequest.Dock = DockStyle.Fill;
+        _importRequest.Margin = new Padding(0, 6, 0, 0);
+        layout.Controls.Add(_importRequest, 0, 4);
         card.Controls.Add(layout);
         return card;
     }
@@ -186,7 +196,7 @@ internal sealed class DeviceLicenseManagerForm : Form
 
     private void ConfigureGrid()
     {
-        _devices.BackgroundColor = AdminTheme.Panel;
+        _devices.BackgroundColor = Color.White;
         _devices.ForeColor = AdminTheme.Text;
         _devices.GridColor = AdminTheme.Panel2;
         _devices.BorderStyle = BorderStyle.None;
@@ -199,12 +209,12 @@ internal sealed class DeviceLicenseManagerForm : Form
         _devices.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _devices.EnableHeadersVisualStyles = false;
         _devices.ColumnHeadersDefaultCellStyle.BackColor = AdminTheme.Copper;
-        _devices.ColumnHeadersDefaultCellStyle.ForeColor = Color.Black;
+        _devices.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
         _devices.ColumnHeadersDefaultCellStyle.Font = AdminTheme.Bold(9);
         _devices.DefaultCellStyle.BackColor = AdminTheme.Panel;
         _devices.DefaultCellStyle.ForeColor = AdminTheme.Text;
         _devices.DefaultCellStyle.SelectionBackColor = AdminTheme.Panel2;
-        _devices.DefaultCellStyle.SelectionForeColor = AdminTheme.Text;
+        _devices.DefaultCellStyle.SelectionForeColor = AdminTheme.BlueDark;
         _devices.Columns.Add("DeviceName", "Computer");
         _devices.Columns.Add("DeviceId", "Device ID");
         _devices.Columns.Add("Status", "Status");
