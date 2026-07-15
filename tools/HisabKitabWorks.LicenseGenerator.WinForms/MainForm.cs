@@ -1,6 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 
@@ -23,8 +21,9 @@ internal sealed partial class MainForm : Form
     private readonly Button _connect = AdminTheme.Button("CONNECT");
     private readonly Button _generate = AdminTheme.Button("GENERATE LICENSE KEY", primary: true);
     private readonly Button _lookup = AdminTheme.Button("LOOK UP");
+    private readonly Button _deviceLicenses = AdminTheme.Button("DEVICE LICENSES", primary: true);
     private readonly Button _copyKey = AdminTheme.Button("COPY KEY");
-    private readonly Button _exportLicense = AdminTheme.Button("EXPORT OFFLINE LICENSE");
+    private readonly Button _exportLicense = AdminTheme.Button("OPEN DEVICE LICENSES");
     private readonly Button _importSigningKey = AdminTheme.Button("IMPORT SIGNING KEY");
     private readonly Label _dbStatus = AdminTheme.Label("●  Not connected", AdminTheme.Muted, 9.5f);
     private readonly Label _signingStatus = AdminTheme.Label("", AdminTheme.Muted, 9.5f);
@@ -36,7 +35,6 @@ internal sealed partial class MainForm : Form
     private Panel _resultCard = null!;
     private Panel _statusCard = null!;
     private bool _isConnected;
-    private OfflineLicensePayload? _currentOfflineLicense;
 
     public MainForm()
     {
@@ -56,6 +54,7 @@ internal sealed partial class MainForm : Form
         _zip.MaxLength = 10;
         _generate.Enabled = false;
         _lookup.Enabled = false;
+        _deviceLicenses.Enabled = false;
         _copyKey.Enabled = false;
         _exportLicense.Enabled = false;
 
@@ -81,8 +80,9 @@ internal sealed partial class MainForm : Form
         _connect.Click += (_, _) => ConnectToDatabase();
         _generate.Click += (_, _) => GenerateLicense();
         _lookup.Click += (_, _) => LookupLicense();
+        _deviceLicenses.Click += (_, _) => OpenDeviceLicenseManager();
         _copyKey.Click += (_, _) => CopyLicenseKey();
-        _exportLicense.Click += (_, _) => ExportOfflineLicense();
+        _exportLicense.Click += (_, _) => OpenDeviceLicenseManager();
         _importSigningKey.Click += (_, _) => ImportSigningKey();
 
         foreach (var field in new[] { _server, _username, _password })
@@ -107,6 +107,7 @@ internal sealed partial class MainForm : Form
             _isConnected = true;
             _generate.Enabled = true;
             _lookup.Enabled = true;
+            _deviceLicenses.Enabled = true;
             SetDatabaseStatus("Connected to licensing database", AdminTheme.Green);
             ShowSuccess("Connection successful. Enter the customer information to generate or look up a license.");
         }
@@ -115,6 +116,7 @@ internal sealed partial class MainForm : Form
             _isConnected = false;
             _generate.Enabled = false;
             _lookup.Enabled = false;
+            _deviceLicenses.Enabled = false;
             SetDatabaseStatus($"Connection failed: {ex.Message}", AdminTheme.Red);
             ShowError($"Could not connect to the licensing database.\r\n{ex.Message}");
         }
@@ -245,7 +247,7 @@ internal sealed partial class MainForm : Form
                 customerId = Convert.ToInt32(insertCustomer.ExecuteScalar());
             }
 
-            var expiresDate = DateTime.UtcNow.AddYears(100);
+            var expiresDate = DateTime.UtcNow.AddMonths(1);
             using (var insertLicense = new SqlCommand(@"
                 INSERT INTO Licenses
                     (CustomerId, LicenseKey, MaxStores, MaxUsers, MonthlyFee, IsActive, ActivatedDate, ExpiresDate, AssignedDatabases)
@@ -261,13 +263,6 @@ internal sealed partial class MainForm : Form
                 insertLicense.ExecuteNonQuery();
             }
 
-            _currentOfflineLicense = CreateOfflineLicense(
-                licenseKey,
-                storeName,
-                databaseName,
-                expiresDate,
-                DefaultMaxStores,
-                DefaultMaxUsers);
             ShowLicense(licenseKey, $"Database: {databaseName}  |  Customer ID: {customerId}", canExport: true);
 
             if (!databaseExists)
@@ -290,7 +285,7 @@ internal sealed partial class MainForm : Form
             var action = isExistingCustomer
                 ? "A new key was issued for the existing customer and the old keys were deactivated."
                 : "The customer license was registered and the database was created.";
-            ShowSuccess($"{action}\r\nExport the offline license file for client activation when needed.");
+            ShowSuccess($"{action}\r\nOpen Device Licenses and import the customer's .hbrequest file.");
         }
         catch (Exception ex)
         {
@@ -411,7 +406,7 @@ internal sealed partial class MainForm : Form
             this,
             $"An active license already exists for this database.\r\n\r\n" +
             $"Business: {businessName}\r\nDatabase: {databaseName}\r\nActive Key: {existingKey}\r\n\r\n" +
-            "YES = reuse the existing key for another computer.\r\n" +
+            "YES = keep this subscription and open device licensing.\r\n" +
             "NO = issue a new key and deactivate the old one.",
             "Active License Found",
             MessageBoxButtons.YesNoCancel,
@@ -425,9 +420,8 @@ internal sealed partial class MainForm : Form
         if (choice != DialogResult.Yes)
             return false;
 
-        _currentOfflineLicense = CreateOfflineLicense(existingKey, businessName, databaseName, expiresDate, maxStores, maxUsers);
         ShowLicense(existingKey, $"Database: {databaseName}  |  Customer ID: {customerId}", canExport: true);
-        ShowSuccess($"The existing active key for '{businessName}' is ready. Export an offline license file for the new computer.");
+        ShowSuccess($"The existing subscription for '{businessName}' is ready. Open Device Licenses and import the PC request.");
         return true;
     }
 
@@ -484,15 +478,12 @@ internal sealed partial class MainForm : Form
             _ownerName.Text = ownerName;
             _email.Text = email;
             _phone.Text = phone;
-            _currentOfflineLicense = active
-                ? CreateOfflineLicense(key, businessName, database, expires, maxStores, maxUsers)
-                : null;
             ShowLicense(
                 key,
                 $"Database: {database}  |  Customer ID: {customerId}  |  Active: {(active ? "Yes" : "No")}  |  Expires: {expires:MM/dd/yyyy}",
                 canExport: active);
             if (active)
-                ShowSuccess($"Found the active license for '{businessName}'. It is ready to copy or export.");
+                ShowSuccess($"Found the active subscription for '{businessName}'. Open Device Licenses to issue or renew a PC license.");
             else
                 ShowInfo($"The latest license for '{businessName}' is inactive. Generate a fresh license key.");
         }
@@ -528,78 +519,25 @@ internal sealed partial class MainForm : Form
         }
     }
 
-    private void ExportOfflineLicense()
+    private void OpenDeviceLicenseManager()
     {
-        if (_currentOfflineLicense is null)
+        if (!_isConnected)
         {
-            ShowError("Generate or look up an active license first.");
+            ShowError("Connect to the licensing database first.");
             return;
         }
         if (!SigningKeyStore.IsConfigured)
         {
-            ShowError("Import the private signing key before exporting an offline license file.");
+            ShowError("Import the private signing key before issuing device licenses.");
             return;
         }
 
-        try
-        {
-            var safeName = Regex.Replace(_currentOfflineLicense.BusinessName, @"[^a-zA-Z0-9_-]+", "_").Trim('_');
-            if (string.IsNullOrWhiteSpace(safeName))
-                safeName = "Hisab_Kitab_Works";
-
-            using var dialog = new SaveFileDialog
-            {
-                Title = "Export HISAB KITAB WORKS Offline License",
-                FileName = $"{safeName}_{_currentOfflineLicense.LicenseKey}.hblicense",
-                Filter = "HISAB KITAB WORKS License (*.hblicense)|*.hblicense|JSON files (*.json)|*.json|All files (*.*)|*.*",
-                AddExtension = true,
-                DefaultExt = ".hblicense"
-            };
-            if (dialog.ShowDialog(this) != DialogResult.OK)
-                return;
-
-            File.WriteAllText(dialog.FileName, BuildSignedOfflineLicense(_currentOfflineLicense));
-            ShowSuccess($"Offline license file exported successfully.\r\n{dialog.FileName}");
-        }
-        catch (Exception ex)
-        {
-            ShowError($"Could not export the offline license.\r\n{ex.Message}");
-        }
-    }
-
-    private OfflineLicensePayload CreateOfflineLicense(
-        string licenseKey,
-        string businessName,
-        string databaseName,
-        DateTime expiresUtc,
-        int maxStores,
-        int maxUsers)
-        => new()
-        {
-            LicenseKey = licenseKey,
-            BusinessName = businessName,
-            Server = _server.Text.Trim(),
-            Database = databaseName,
-            Username = _username.Text.Trim(),
-            Password = _password.Text,
-            MaxStores = maxStores,
-            MaxUsers = maxUsers,
-            ExpiresUtc = DateTime.SpecifyKind(expiresUtc, DateTimeKind.Utc).ToString("O"),
-            IssuedUtc = DateTime.UtcNow.ToString("O")
-        };
-
-    private static string BuildSignedOfflineLicense(OfflineLicensePayload payload)
-    {
-        var payloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload));
-        using var rsa = RSA.Create();
-        rsa.ImportRSAPrivateKey(Convert.FromBase64String(SigningKeyStore.Load()), out _);
-        var signature = rsa.SignData(payloadBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        return JsonSerializer.Serialize(new OfflineLicenseFile
-        {
-            Version = 1,
-            Payload = Convert.ToBase64String(payloadBytes),
-            Signature = Convert.ToBase64String(signature)
-        }, new JsonSerializerOptions { WriteIndented = true });
+        using var form = new DeviceLicenseManagerForm(
+            ConnectionString(LicensingDatabase),
+            _server.Text.Trim(),
+            _username.Text.Trim(),
+            _password.Text);
+        form.ShowDialog(this);
     }
 
     private static string GenerateKey()
@@ -642,7 +580,6 @@ internal sealed partial class MainForm : Form
         _databaseDetails.Text = "No license selected";
         _copyKey.Enabled = false;
         _exportLicense.Enabled = false;
-        _currentOfflineLicense = null;
         _resultCard.Tag = AdminTheme.CopperDark;
         _resultCard.Invalidate();
     }
@@ -652,7 +589,7 @@ internal sealed partial class MainForm : Form
         var configured = SigningKeyStore.IsConfigured;
         _signingStatus.Text = configured
             ? "●  Configured and protected for this Windows user"
-            : "●  Not configured - required only for offline export";
+            : "●  Not configured - required for device license signing";
         _signingStatus.ForeColor = configured ? AdminTheme.Green : AdminTheme.Muted;
         _importSigningKey.Text = configured ? "REPLACE SIGNING KEY" : "IMPORT SIGNING KEY";
     }
@@ -679,6 +616,7 @@ internal sealed partial class MainForm : Form
         _connect.Enabled = !busy;
         _generate.Enabled = !busy && _isConnected;
         _lookup.Enabled = !busy && _isConnected;
+        _deviceLicenses.Enabled = !busy && _isConnected;
         _importSigningKey.Enabled = !busy;
         if (busy && !string.IsNullOrWhiteSpace(message))
             ShowInfo(message);

@@ -206,15 +206,19 @@ internal sealed partial class MainForm
 
     private Control BuildActions()
     {
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 2, Padding = new Padding(0, 0, 0, 10) };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 68));
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 3, Padding = new Padding(0, 0, 0, 10) };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32));
         _generate.Dock = DockStyle.Fill;
         _lookup.Dock = DockStyle.Fill;
+        _deviceLicenses.Dock = DockStyle.Fill;
         _generate.Margin = new Padding(0, 0, 8, 0);
-        _lookup.Margin = new Padding(8, 0, 0, 0);
+        _lookup.Margin = new Padding(8, 0, 8, 0);
+        _deviceLicenses.Margin = new Padding(8, 0, 0, 0);
         actions.Controls.Add(_generate, 0, 0);
         actions.Controls.Add(_lookup, 1, 0);
+        actions.Controls.Add(_deviceLicenses, 2, 0);
         return actions;
     }
 
@@ -231,7 +235,7 @@ internal sealed partial class MainForm
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        var heading = AdminTheme.Label("LICENSE KEY - PROVIDE TO THE CUSTOMER", AdminTheme.Muted, 9.5f, true);
+        var heading = AdminTheme.Label("SUBSCRIPTION KEY - DEVICE FILES ARE ISSUED SEPARATELY", AdminTheme.Muted, 9.5f, true);
         heading.Dock = DockStyle.Fill;
         heading.TextAlign = ContentAlignment.MiddleCenter;
         layout.Controls.Add(heading, 0, 0);
@@ -242,7 +246,7 @@ internal sealed partial class MainForm
         _databaseDetails.TextAlign = ContentAlignment.MiddleCenter;
         layout.Controls.Add(_databaseDetails, 0, 2);
 
-        var hint = AdminTheme.Label("Generate a new license or look up an existing customer.", AdminTheme.Muted, 10);
+        var hint = AdminTheme.Label("After creating the customer, open Device Licenses and import the PC request.", AdminTheme.Muted, 10);
         hint.Dock = DockStyle.Fill;
         hint.TextAlign = ContentAlignment.TopCenter;
         layout.Controls.Add(hint, 0, 3);

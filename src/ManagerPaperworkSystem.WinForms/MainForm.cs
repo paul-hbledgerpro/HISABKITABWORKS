@@ -66,6 +66,8 @@ internal sealed class MainForm : Form
 
         WinTheme.Apply(this);
         Text = "HISAB KITAB";
+        if (LicenseRuntime.IsReadOnly)
+            Text += " - READ-ONLY (SUBSCRIPTION EXPIRED)";
         WindowState = FormWindowState.Maximized;
         MinimumSize = new Size(1280, 760);
 
@@ -136,6 +138,8 @@ internal sealed class MainForm : Form
         file.DropDownItems.Add(MenuItem("Exit", (_, _) => Close()));
 
         var settings = new ToolStripMenuItem("Settings") { ForeColor = Color.White };
+        settings.DropDownItems.Add(MenuItem("License / Renewal...", (_, _) => OpenDeviceActivation()));
+        settings.DropDownItems.Add(new ToolStripSeparator());
         settings.DropDownItems.Add(MenuItem("Change Password...", (_, _) => OpenForm<ChangePasswordForm>()));
         settings.DropDownItems.Add(MenuItem("User Accounts...", (_, _) => OpenAdminForm<UserAccountsForm>()));
         settings.DropDownItems.Add(MenuItem("Database Connection...", (_, _) => OpenAdminForm<DatabaseSettingsForm>()));
@@ -316,6 +320,8 @@ internal sealed class MainForm : Form
                 _ => BuildDashboard()
             };
             ApplyLightModuleTheme(control);
+            if (LicenseRuntime.IsReadOnly)
+                ApplyReadOnlyMode(control);
             _content.Controls.Add(control);
         }
         catch (Exception ex)
@@ -326,6 +332,37 @@ internal sealed class MainForm : Form
         {
             _content.ResumeLayout();
         }
+    }
+
+    private void OpenDeviceActivation()
+    {
+        using var form = new DeviceActivationForm();
+        if (form.ShowDialog(this) != DialogResult.OK)
+            return;
+        MessageBox.Show(this, "The device license was installed. Restart HISAB KITAB to apply the renewed subscription.",
+            "License Installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private static void ApplyReadOnlyMode(Control root)
+    {
+        foreach (Control child in root.Controls)
+            ApplyReadOnlyMode(child);
+
+        if (root is not Button button)
+            return;
+        var text = button.Text.ToUpperInvariant();
+        if (text.Contains("REPORT") || text.Contains("EXPORT") || text.Contains("PRINT") ||
+            text.Contains("PREVIEW") || text.Contains("VIEW") || text.Contains("SEARCH") ||
+            text.Contains("FILTER") || text.Contains("REFRESH") || text.Contains("OPEN"))
+            return;
+
+        var mutationWords = new[]
+        {
+            "SAVE", "ADD", "NEW", "CREATE", "DELETE", "REMOVE", "UPDATE", "EDIT",
+            "CORRECT", "IMPORT", "RECORD", "RECONCILE", "PAY", "CLEAR", "ACTIVATE", "SET "
+        };
+        if (mutationWords.Any(text.Contains))
+            button.Enabled = false;
     }
 
     private static void ApplyLightModuleTheme(Control root)

@@ -17,6 +17,7 @@ internal static class AppBootstrap
 
     public static readonly string ConnectionSettingsPath = Path.Combine(AppDataDirectory, "connection_settings.json");
     public static readonly string LicenseFilePath = Path.Combine(AppDataDirectory, "license.json");
+    public static string AppDataPath => AppDataDirectory;
 
     public static ServiceProvider BuildServices()
     {
@@ -104,6 +105,7 @@ internal static class AppBootstrap
     public static void ClearSavedConnectionSettings()
     {
         TryDelete(ConnectionSettingsPath);
+        TryDelete(DeviceLicenseService.ProtectedConnectionPath);
         TryDelete(Path.Combine(AppDataDirectory, "pending_store_info.json"));
     }
 
@@ -135,24 +137,15 @@ internal static class AppBootstrap
     {
         try
         {
+            var protectedSettings = DeviceLicenseService.LoadProtectedConnection();
+            if (protectedSettings is not null)
+                return BuildConnectionString(protectedSettings);
+
             if (File.Exists(ConnectionSettingsPath))
             {
                 var settings = JsonSerializer.Deserialize<DatabaseConnectionSettings>(File.ReadAllText(ConnectionSettingsPath));
-                if (settings?.DatabaseType?.Equals("SqlServer", StringComparison.OrdinalIgnoreCase) == true)
-                {
-                    if (!string.IsNullOrWhiteSpace(settings.ConnectionString))
-                        return (settings.ConnectionString, true);
-
-                    if (!string.IsNullOrWhiteSpace(settings.Server) && !string.IsNullOrWhiteSpace(settings.Database))
-                    {
-                        var conn = $"Server={settings.Server};Database={settings.Database};";
-                        conn += !string.IsNullOrWhiteSpace(settings.Username)
-                            ? $"User Id={settings.Username};Password={settings.Password};"
-                            : "Integrated Security=True;";
-                        conn += "TrustServerCertificate=True;Connect Timeout=30;ConnectRetryCount=2;ConnectRetryInterval=2;";
-                        return (conn, true);
-                    }
-                }
+                if (settings is not null)
+                    return BuildConnectionString(settings);
             }
         }
         catch
@@ -161,6 +154,23 @@ internal static class AppBootstrap
         }
 
         return ("", false);
+    }
+
+    private static (string connectionString, bool useSqlServer) BuildConnectionString(DatabaseConnectionSettings settings)
+    {
+        if (!string.Equals(settings.DatabaseType, "SqlServer", StringComparison.OrdinalIgnoreCase))
+            return ("", false);
+        if (!string.IsNullOrWhiteSpace(settings.ConnectionString))
+            return (settings.ConnectionString, true);
+        if (string.IsNullOrWhiteSpace(settings.Server) || string.IsNullOrWhiteSpace(settings.Database))
+            return ("", false);
+
+        var conn = $"Server={settings.Server};Database={settings.Database};";
+        conn += !string.IsNullOrWhiteSpace(settings.Username)
+            ? $"User Id={settings.Username};Password={settings.Password};"
+            : "Integrated Security=True;";
+        conn += "TrustServerCertificate=True;Connect Timeout=30;ConnectRetryCount=2;ConnectRetryInterval=2;";
+        return (conn, true);
     }
 }
 

@@ -7,28 +7,23 @@ internal static class StartupFlow
 {
     public static bool EnsureLicenseReady()
     {
-        var hasConnection = File.Exists(AppBootstrap.ConnectionSettingsPath);
-        var hasLicense = File.Exists(AppBootstrap.LicenseFilePath);
+        var deviceLicense = DeviceLicenseService.ValidateInstalledLicense();
+        if (deviceLicense.Status == DeviceLicenseStatus.Valid)
+            return true;
 
-        if (!hasConnection && !hasLicense)
+        if (deviceLicense.Status == DeviceLicenseStatus.Expired)
         {
-            using var form = new LicenseActivationForm(keyOnly: false);
-            return form.ShowDialog() == DialogResult.OK;
+            LicenseRuntime.IsReadOnly = true;
+            MessageBox.Show(
+                deviceLicense.Message + "\n\nImport a renewed device license to restore editing.",
+                "Subscription Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return true;
         }
 
-        if (hasConnection && !hasLicense)
-        {
-            using var form = new LicenseActivationForm(keyOnly: true);
-            return form.ShowDialog() == DialogResult.OK;
-        }
-
-        if (!hasConnection)
-        {
-            using var form = new LicenseActivationForm(keyOnly: false);
-            return form.ShowDialog() == DialogResult.OK;
-        }
-
-        return true;
+        if (deviceLicense.Status == DeviceLicenseStatus.Invalid)
+            MessageBox.Show(deviceLicense.Message, "Device License Invalid", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        using var form = new DeviceActivationForm();
+        return form.ShowDialog() == DialogResult.OK;
     }
 
     public static bool HandleDatabaseStartupFailure(Exception ex)
@@ -43,7 +38,7 @@ internal static class StartupFlow
             return false;
 
         AppBootstrap.ClearSavedConnectionSettings();
-        using var form = new LicenseActivationForm(keyOnly: false);
+        using var form = new DeviceActivationForm();
         return form.ShowDialog() == DialogResult.OK;
     }
 
