@@ -18,6 +18,7 @@ internal sealed partial class MainForm : Form
     private readonly TextBox _email = AdminTheme.TextBox();
     private readonly TextBox _zip = AdminTheme.TextBox();
     private readonly TextBox _phone = AdminTheme.TextBox();
+    private readonly NumericUpDown _maxDevices = AdminTheme.NumberBox();
     private readonly Button _connect = AdminTheme.Button("CONNECT");
     private readonly Button _generate = AdminTheme.Button("GENERATE LICENSE KEY", primary: true);
     private readonly Button _lookup = AdminTheme.Button("LOOK UP");
@@ -77,6 +78,14 @@ internal sealed partial class MainForm : Form
             ConnectTimeout = 30
         }.ConnectionString;
 
+    private static void EnsureDeviceSeatColumn(SqlConnection connection)
+    {
+        using var command = new SqlCommand(@"
+IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
+    ALTER TABLE dbo.Licenses ADD MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1);", connection);
+        command.ExecuteNonQuery();
+    }
+
     private void WireEvents()
     {
         _connect.Click += (_, _) => ConnectToDatabase();
@@ -106,6 +115,7 @@ internal sealed partial class MainForm : Form
         {
             using var connection = new SqlConnection(ConnectionString(LicensingDatabase));
             connection.Open();
+            EnsureDeviceSeatColumn(connection);
             _isConnected = true;
             _generate.Enabled = true;
             _lookup.Enabled = true;
@@ -141,6 +151,7 @@ internal sealed partial class MainForm : Form
         var email = _email.Text.Trim();
         var zip = _zip.Text.Trim();
         var phone = _phone.Text.Trim();
+        var maxDevices = (int)_maxDevices.Value;
 
         if (string.IsNullOrWhiteSpace(storeName))
         {
@@ -252,20 +263,21 @@ internal sealed partial class MainForm : Form
             var expiresDate = DateTime.UtcNow.AddMonths(1);
             using (var insertLicense = new SqlCommand(@"
                 INSERT INTO Licenses
-                    (CustomerId, LicenseKey, MaxStores, MaxUsers, MonthlyFee, IsActive, ActivatedDate, ExpiresDate, AssignedDatabases)
+                    (CustomerId, LicenseKey, MaxStores, MaxUsers, MaxDevices, MonthlyFee, IsActive, ActivatedDate, ExpiresDate, AssignedDatabases)
                 VALUES
-                    (@customerId, @key, @maxStores, @maxUsers, 0.00, 1, GETUTCDATE(), @expires, @database)", connection))
+                    (@customerId, @key, @maxStores, @maxUsers, @maxDevices, 0.00, 1, GETUTCDATE(), @expires, @database)", connection))
             {
                 insertLicense.Parameters.AddWithValue("@customerId", customerId);
                 insertLicense.Parameters.AddWithValue("@key", licenseKey);
                 insertLicense.Parameters.AddWithValue("@maxStores", DefaultMaxStores);
                 insertLicense.Parameters.AddWithValue("@maxUsers", DefaultMaxUsers);
+                insertLicense.Parameters.AddWithValue("@maxDevices", maxDevices);
                 insertLicense.Parameters.AddWithValue("@expires", expiresDate);
                 insertLicense.Parameters.AddWithValue("@database", databaseName);
                 insertLicense.ExecuteNonQuery();
             }
 
-            ShowLicense(licenseKey, $"Database: {databaseName}  |  Customer ID: {customerId}", canExport: true);
+            ShowLicense(licenseKey, $"Database: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}", canExport: true);
 
             if (!databaseExists)
             {
@@ -386,7 +398,7 @@ internal sealed partial class MainForm : Form
         using var connection = new SqlConnection(ConnectionString(LicensingDatabase));
         connection.Open();
         using var command = new SqlCommand(@"
-            SELECT TOP 1 l.LicenseKey, c.BusinessName, c.Id, l.ExpiresDate, l.MaxStores, l.MaxUsers
+            SELECT TOP 1 l.LicenseKey, c.BusinessName, c.Id, l.ExpiresDate, l.MaxStores, l.MaxUsers, l.MaxDevices
             FROM Licenses l
             INNER JOIN Customers c ON l.CustomerId = c.Id
             WHERE l.AssignedDatabases = @database AND l.IsActive = 1
@@ -402,7 +414,9 @@ internal sealed partial class MainForm : Form
         var expiresDate = reader.GetDateTime(3);
         var maxStores = reader.IsDBNull(4) ? DefaultMaxStores : reader.GetInt32(4);
         var maxUsers = reader.IsDBNull(5) ? DefaultMaxUsers : reader.GetInt32(5);
+        var maxDevices = reader.IsDBNull(6) ? 1 : reader.GetInt32(6);
         reader.Close();
+        _maxDevices.Value = Math.Clamp(maxDevices, 1, 999);
 
         var choice = MessageBox.Show(
             this,
@@ -422,7 +436,7 @@ internal sealed partial class MainForm : Form
         if (choice != DialogResult.Yes)
             return false;
 
-        ShowLicense(existingKey, $"Database: {databaseName}  |  Customer ID: {customerId}", canExport: true);
+        ShowLicense(existingKey, $"Database: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}", canExport: true);
         ShowSuccess($"The existing subscription for '{businessName}' is ready. Open Device Licenses and import the PC request.");
         return true;
     }
@@ -451,7 +465,7 @@ internal sealed partial class MainForm : Form
             connection.Open();
             using var command = new SqlCommand(@"
                 SELECT TOP 1 c.BusinessName, c.OwnerName, c.Email, c.Id, c.Phone,
-                       l.LicenseKey, l.IsActive, l.ExpiresDate, l.AssignedDatabases, l.MaxStores, l.MaxUsers
+                       l.LicenseKey, l.IsActive, l.ExpiresDate, l.AssignedDatabases, l.MaxStores, l.MaxUsers, l.MaxDevices
                 FROM Customers c
                 INNER JOIN Licenses l ON l.CustomerId = c.Id
                 WHERE c.BusinessName LIKE @name
@@ -475,14 +489,16 @@ internal sealed partial class MainForm : Form
             var database = reader.IsDBNull(8) ? "" : reader.GetString(8);
             var maxStores = reader.IsDBNull(9) ? DefaultMaxStores : reader.GetInt32(9);
             var maxUsers = reader.IsDBNull(10) ? DefaultMaxUsers : reader.GetInt32(10);
+            var maxDevices = reader.IsDBNull(11) ? 1 : reader.GetInt32(11);
 
             _storeName.Text = businessName;
             _ownerName.Text = ownerName;
             _email.Text = email;
             _phone.Text = phone;
+            _maxDevices.Value = Math.Clamp(maxDevices, 1, 999);
             ShowLicense(
                 key,
-                $"Database: {database}  |  Customer ID: {customerId}  |  Active: {(active ? "Yes" : "No")}  |  Expires: {expires:MM/dd/yyyy}",
+                $"Database: {database}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Active: {(active ? "Yes" : "No")}  |  Expires: {expires:MM/dd/yyyy}",
                 canExport: active);
             if (active)
                 ShowSuccess($"Found the active subscription for '{businessName}'. Open Device Licenses to issue or renew a PC license.");

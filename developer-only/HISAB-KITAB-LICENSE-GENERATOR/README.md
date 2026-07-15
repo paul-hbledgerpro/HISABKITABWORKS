@@ -24,7 +24,8 @@ The separate admin installer is created under `installer_output`. Generated publ
 ## Device-license workflow
 
 1. Connect to the licensing database.
-2. Select **Import PC Request** and choose the customer's `.hbrequest` file.
-3. Confirm the paid PC seats and subscription expiration.
-4. Import the private signing key if this developer PC is not configured yet.
-5. Select **Issue / Renew License** and save the `.hblicense` file for the customer.
+2. Enter the customer information and the purchased **Maximum PC Seats**, then generate the subscription key.
+3. Select **Import PC Request** and choose the customer's `.hbrequest` file.
+4. Confirm the paid PC seats and subscription expiration.
+5. Import the private signing key if this developer PC is not configured yet.
+6. Select **Issue / Renew License** and save the `.hblicense` file for the customer.

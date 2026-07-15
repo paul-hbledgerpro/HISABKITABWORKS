@@ -6,7 +6,7 @@ Version 2 replaces reusable business-wide offline licenses with a signed license
 
 ## Customer activation
 
-1. Create the customer subscription in the Admin License Generator and provide the customer with its `HBL-...` subscription key.
+1. Create the customer subscription in the Admin License Generator, set the purchased **Maximum PC Seats**, and provide the customer with its `HBL-...` subscription key.
 2. The customer opens HISAB KITAB. If the PC is not licensed, the Device License Activation screen opens.
 3. The customer enters the exact business name and subscription key.
 4. The customer selects **Export PC Request** and sends the `.hbrequest` file to the developer.

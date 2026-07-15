@@ -41,7 +41,7 @@ internal sealed partial class MainForm
         var logo = new PictureBox
         {
             Dock = DockStyle.Left,
-            Width = 76,
+            Width = 104,
             Image = AdminTheme.LoadLogo(),
             SizeMode = PictureBoxSizeMode.Zoom,
             BackColor = Color.Transparent,
@@ -54,7 +54,7 @@ internal sealed partial class MainForm
             BackColor = Color.Transparent,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
-            Padding = new Padding(12, 8, 0, 0)
+            Padding = new Padding(18, 8, 0, 0)
         };
         var title = AdminTheme.Label("HISAB KITAB WORKS", Color.White, 19, true);
         title.Size = new Size(420, 40);
@@ -64,21 +64,9 @@ internal sealed partial class MainForm
         titles.Controls.Add(title);
         titles.Controls.Add(subtitle);
 
-        var adminBadge = AdminTheme.Card(AdminTheme.CopperDark);
-        adminBadge.Dock = DockStyle.Right;
-        adminBadge.Width = 240;
-        adminBadge.BackColor = AdminTheme.BlueDark;
-        adminBadge.Margin = new Padding(12, 12, 0, 12);
-        var badgeText = AdminTheme.Label("ADMIN-ONLY TOOL", AdminTheme.Copper, 9.5f, true);
-        badgeText.Dock = DockStyle.Fill;
-        badgeText.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
-        badgeText.TextAlign = ContentAlignment.MiddleCenter;
-        adminBadge.Controls.Add(badgeText);
-
-        // Docked controls are processed in reverse z-order: add the fill control first,
-        // then the right and left controls so the title receives the remaining width.
+        // Add the fill control before the left-docked logo so the title receives
+        // all remaining header width.
         header.Controls.Add(titles);
-        header.Controls.Add(adminBadge);
         header.Controls.Add(logo);
         return header;
     }
@@ -143,23 +131,25 @@ internal sealed partial class MainForm
         card.Dock = DockStyle.Fill;
         card.Padding = new Padding(18, 14, 18, 14);
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 1, RowCount = 5 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 1, RowCount = 6 };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 19));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 19));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 19));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 19));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 24));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 24));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 24));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 28));
         layout.Controls.Add(SectionTitle("CUSTOMER INFORMATION", "\uE716"), 0, 0);
         layout.Controls.Add(BuildField("STORE / BUSINESS NAME *", _storeName), 0, 1);
         layout.Controls.Add(BuildField("OWNER NAME *", _ownerName), 0, 2);
         layout.Controls.Add(BuildField("EMAIL *", _email), 0, 3);
+        layout.Controls.Add(BuildNumberField("MAXIMUM PC SEATS *", _maxDevices), 0, 4);
 
         var contact = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 2 };
         contact.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
         contact.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         contact.Controls.Add(BuildField("STORE ZIP CODE", _zip), 0, 0);
         contact.Controls.Add(BuildField("PHONE", _phone), 1, 0);
-        layout.Controls.Add(contact, 0, 4);
+        layout.Controls.Add(contact, 0, 5);
         card.Controls.Add(layout);
         return card;
     }
@@ -295,6 +285,19 @@ internal sealed partial class MainForm
     }
 
     private static Control BuildField(string caption, TextBox input)
+    {
+        var field = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 1, RowCount = 2, Margin = new Padding(0, 0, 12, 5) };
+        field.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+        field.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var label = AdminTheme.Label(caption, AdminTheme.Muted, 8.5f, true);
+        label.Dock = DockStyle.Fill;
+        input.Dock = DockStyle.Fill;
+        field.Controls.Add(label, 0, 0);
+        field.Controls.Add(input, 0, 1);
+        return field;
+    }
+
+    private static Control BuildNumberField(string caption, NumericUpDown input)
     {
         var field = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 1, RowCount = 2, Margin = new Padding(0, 0, 12, 5) };
         field.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));

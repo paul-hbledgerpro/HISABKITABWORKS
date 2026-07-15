@@ -54,6 +54,20 @@ internal static class AdminTheme
             Margin = Padding.Empty
         };
 
+    public static NumericUpDown NumberBox(decimal minimum = 1, decimal maximum = 999, decimal value = 1)
+        => new()
+        {
+            Minimum = minimum,
+            Maximum = maximum,
+            Value = value,
+            BackColor = Color.White,
+            ForeColor = Text,
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = Body(10.5f),
+            ThousandsSeparator = true,
+            Margin = Padding.Empty
+        };
+
     public static Label Label(string text, Color? color = null, float size = 10, bool bold = false)
         => new()
         {
