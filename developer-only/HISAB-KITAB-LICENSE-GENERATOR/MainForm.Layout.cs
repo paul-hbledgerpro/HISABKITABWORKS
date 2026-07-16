@@ -139,10 +139,15 @@ internal sealed partial class MainForm
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 19));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 24));
         layout.Controls.Add(SectionTitle("CUSTOMER INFORMATION", "\uE716"), 0, 0);
-        layout.Controls.Add(BuildField("STORE / BUSINESS NAME *", _storeName), 0, 1);
+        layout.Controls.Add(BuildField("CLIENT ACCOUNT NAME *", _storeName), 0, 1);
         layout.Controls.Add(BuildField("OWNER NAME *", _ownerName), 0, 2);
         layout.Controls.Add(BuildField("EMAIL *", _email), 0, 3);
-        layout.Controls.Add(BuildNumberField("MAXIMUM PC SEATS *", _maxDevices), 0, 4);
+        var limits = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 2 };
+        limits.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        limits.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        limits.Controls.Add(BuildNumberField("MAXIMUM PC SEATS *", _maxDevices), 0, 0);
+        limits.Controls.Add(BuildNumberField("MAXIMUM BUSINESSES *", _maxBusinesses), 1, 0);
+        layout.Controls.Add(limits, 0, 4);
 
         var contact = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 2 };
         contact.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));

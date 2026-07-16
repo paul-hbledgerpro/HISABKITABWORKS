@@ -819,19 +819,7 @@ internal sealed class LoginForm : Form
         _session.StoreName = store.StoreName;
 
         if (ProgramServices.TryGet<AuthService>(out var auth))
-        {
-            if (!string.IsNullOrWhiteSpace(store.ConnectionString))
-            {
-                var savedConnections = AppBootstrap.LoadStoreConnections();
-                savedConnections[store.StoreId.ToString(CultureInfo.InvariantCulture)] = store.ConnectionString;
-                AppBootstrap.SaveStoreConnections(savedConnections);
-                auth.SetStoreDbCreator(() => new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlServer(store.ConnectionString).Options));
-            }
-            else
-            {
-                auth.SetStoreDbCreator(null);
-            }
-        }
+            auth.SetStoreDbCreator(null);
 
         _ = Task.Run(() =>
         {
@@ -846,26 +834,12 @@ internal sealed class LoginForm : Form
     {
         try
         {
-            if (!string.IsNullOrWhiteSpace(store.ConnectionString))
+            using var db = _dbFactory.CreateDbContext();
+            var user = db.Users.FirstOrDefault(u => u.Id == store.User.Id);
+            if (user is not null)
             {
-                var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlServer(store.ConnectionString).Options;
-                using var db = new AppDbContext(options);
-                var user = db.Users.FirstOrDefault(u => u.Id == store.User.Id);
-                if (user is not null)
-                {
-                    user.LastLoginUtc = DateTime.UtcNow;
-                    db.SaveChanges();
-                }
-            }
-            else
-            {
-                using var db = _dbFactory.CreateDbContext();
-                var user = db.Users.FirstOrDefault(u => u.Id == store.User.Id);
-                if (user is not null)
-                {
-                    user.LastLoginUtc = DateTime.UtcNow;
-                    db.SaveChanges();
-                }
+                user.LastLoginUtc = DateTime.UtcNow;
+                db.SaveChanges();
             }
         }
         catch

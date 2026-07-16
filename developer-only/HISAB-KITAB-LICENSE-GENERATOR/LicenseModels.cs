@@ -49,6 +49,7 @@ internal sealed class DeviceLicensePayloadV2
     public string EncryptedConnection { get; set; } = "";
     public string ConnectionNonce { get; set; } = "";
     public string ConnectionTag { get; set; } = "";
+    public List<LicensedBusinessPayloadV1> Businesses { get; set; } = new();
 }
 
 internal sealed class DeviceConnectionPayload
@@ -59,6 +60,19 @@ internal sealed class DeviceConnectionPayload
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
     public string ConnectionString { get; set; } = "";
+}
+
+internal sealed class LicensedBusinessPayloadV1
+{
+    public int BusinessId { get; set; }
+    public string BusinessName { get; set; } = "";
+    public string Address { get; set; } = "";
+    public string DatabaseName { get; set; } = "";
+    public bool IsPrimary { get; set; }
+    public string EncryptedConnectionKey { get; set; } = "";
+    public string EncryptedConnection { get; set; } = "";
+    public string ConnectionNonce { get; set; } = "";
+    public string ConnectionTag { get; set; } = "";
 }
 
 internal static class DeviceRequestValidator

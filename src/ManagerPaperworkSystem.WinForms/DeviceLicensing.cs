@@ -67,7 +67,7 @@ internal static class DeviceLicenseService
     public static DeviceLicenseRequestV2 CreateRequest(string businessName, string subscriptionKey)
     {
         if (string.IsNullOrWhiteSpace(businessName))
-            throw new InvalidOperationException("Enter the store or business name before exporting the request.");
+            throw new InvalidOperationException("Enter the client account name before exporting the request.");
         if (!System.Text.RegularExpressions.Regex.IsMatch(subscriptionKey.Trim(), @"^HBL-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$"))
             throw new InvalidOperationException("Enter the subscription key in the format HBL-XXXX-XXXX-XXXX.");
 
@@ -111,6 +111,8 @@ internal static class DeviceLicenseService
             var validation = ValidateLicenseFile(InstalledLicensePath, allowExpired: true, updateClockState);
             LicenseRuntime.CurrentLicense = validation.Payload;
             LicenseRuntime.IsReadOnly = validation.Status == DeviceLicenseStatus.Expired;
+            if (validation.Payload is not null)
+                LicensedBusinessService.SaveFromLicense(validation.Payload);
             return validation;
         }
         catch (Exception ex)
@@ -130,6 +132,7 @@ internal static class DeviceLicenseService
         Directory.CreateDirectory(AppBootstrap.AppDataPath);
         File.Copy(sourcePath, InstalledLicensePath, true);
         SaveProtectedConnection(validation.Payload);
+        LicensedBusinessService.SaveFromLicense(validation.Payload);
         SaveLicenseSummary(validation.Payload);
         SaveClockState(validation.Payload, DateTime.UtcNow);
         LicenseRuntime.CurrentLicense = validation.Payload;
@@ -283,27 +286,46 @@ internal static class DeviceLicenseService
 
     private static void SaveProtectedConnection(DeviceLicensePayloadV2 payload)
     {
-        var identity = GetOrCreateIdentity();
-        using var key = OpenKey(identity);
-        using var rsa = new RSACng(key);
-        var aesKey = rsa.Decrypt(Convert.FromBase64String(payload.EncryptedConnectionKey), RSAEncryptionPadding.OaepSHA256);
-        var cipher = Convert.FromBase64String(payload.EncryptedConnection);
-        var nonce = Convert.FromBase64String(payload.ConnectionNonce);
-        var tag = Convert.FromBase64String(payload.ConnectionTag);
-        var clear = new byte[cipher.Length];
-        using (var aes = new AesGcm(aesKey, tag.Length))
-            aes.Decrypt(nonce, cipher, tag, clear);
-
-        // Validate before protecting the connection for this Windows computer.
-        var settings = JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions)
-            ?? throw new InvalidOperationException("The encrypted database connection is invalid.");
-        if (string.IsNullOrWhiteSpace(settings.Server) || string.IsNullOrWhiteSpace(settings.Database))
-            throw new InvalidOperationException("The device license does not contain a usable database connection.");
-
+        var settings = DecryptConnectionPayload(
+            payload.EncryptedConnectionKey,
+            payload.EncryptedConnection,
+            payload.ConnectionNonce,
+            payload.ConnectionTag);
+        var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
         var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
         File.WriteAllBytes(ProtectedConnectionPath, protectedBytes);
         CryptographicOperations.ZeroMemory(clear);
-        CryptographicOperations.ZeroMemory(aesKey);
+    }
+
+    internal static DatabaseConnectionSettings DecryptConnectionPayload(
+        string encryptedConnectionKey,
+        string encryptedConnection,
+        string connectionNonce,
+        string connectionTag)
+    {
+        var identity = GetOrCreateIdentity();
+        using var key = OpenKey(identity);
+        using var rsa = new RSACng(key);
+        var aesKey = rsa.Decrypt(Convert.FromBase64String(encryptedConnectionKey), RSAEncryptionPadding.OaepSHA256);
+        var cipher = Convert.FromBase64String(encryptedConnection);
+        var nonce = Convert.FromBase64String(connectionNonce);
+        var tag = Convert.FromBase64String(connectionTag);
+        var clear = new byte[cipher.Length];
+        try
+        {
+            using (var aes = new AesGcm(aesKey, tag.Length))
+                aes.Decrypt(nonce, cipher, tag, clear);
+            var settings = JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions)
+                ?? throw new InvalidOperationException("The encrypted database connection is invalid.");
+            if (string.IsNullOrWhiteSpace(settings.Server) || string.IsNullOrWhiteSpace(settings.Database))
+                throw new InvalidOperationException("The device license does not contain a usable database connection.");
+            return settings;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+            CryptographicOperations.ZeroMemory(aesKey);
+        }
     }
 
     private static void SaveLicenseSummary(DeviceLicensePayloadV2 payload)
@@ -318,6 +340,7 @@ internal static class DeviceLicenseService
             payload.MaxDevices,
             payload.MaxStores,
             payload.MaxUsers,
+            ApprovedBusinesses = payload.Businesses.Count > 0 ? payload.Businesses.Count : 1,
             ExpiresDate = payload.ExpiresUtc,
             ActivatedAt = DateTime.UtcNow.ToString("O"),
             ActivationMode = "DeviceBoundOffline"
@@ -408,6 +431,20 @@ internal sealed class DeviceLicensePayloadV2
     public int MaxUsers { get; set; }
     public string IssuedUtc { get; set; } = "";
     public string ExpiresUtc { get; set; } = "";
+    public string EncryptedConnectionKey { get; set; } = "";
+    public string EncryptedConnection { get; set; } = "";
+    public string ConnectionNonce { get; set; } = "";
+    public string ConnectionTag { get; set; } = "";
+    public List<LicensedBusinessPayloadV1> Businesses { get; set; } = new();
+}
+
+internal sealed class LicensedBusinessPayloadV1
+{
+    public int BusinessId { get; set; }
+    public string BusinessName { get; set; } = "";
+    public string Address { get; set; } = "";
+    public string DatabaseName { get; set; } = "";
+    public bool IsPrimary { get; set; }
     public string EncryptedConnectionKey { get; set; } = "";
     public string EncryptedConnection { get; set; } = "";
     public string ConnectionNonce { get; set; } = "";

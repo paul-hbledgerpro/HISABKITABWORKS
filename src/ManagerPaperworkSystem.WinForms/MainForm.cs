@@ -7,6 +7,7 @@ using ClosedXML.Excel;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
+using ManagerPaperworkSystem.Data.Services;
 using ManagerPaperworkSystem.UI.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
@@ -35,6 +36,7 @@ internal sealed class MainForm : Form
     private readonly Label _status = WinTheme.Label("");
     private readonly Dictionary<string, Button> _navButtons = new();
     private readonly int _loginStoreConnectionId;
+    private int _currentConnectionStoreId;
     private int _currentStoreId;
     private bool _loadingStores;
     private string _currentModule = "Dashboard";
@@ -52,7 +54,8 @@ internal sealed class MainForm : Form
         _posImporter = posImporter;
         _checkPrintService = checkPrintService;
         _loginStoreConnectionId = session.LastStoreId <= 0 ? 1 : session.LastStoreId;
-        _currentStoreId = _loginStoreConnectionId;
+        _currentConnectionStoreId = _loginStoreConnectionId;
+        _currentStoreId = 1;
         _storeConnections = new StoreConnectionService(dbFactory, connectionInfo.ConnectionString, connectionInfo.UseSqlServer)
         {
             CurrentStoreId = _loginStoreConnectionId
@@ -412,41 +415,25 @@ internal sealed class MainForm : Form
         _loadingStores = true;
         try
         {
-            using var db = CreateDb();
+            using var db = _dbFactory.CreateDbContext();
             var stores = await db.Stores.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync();
-            var customLoginStore = _storeConnections.HasCustomConnection(_loginStoreConnectionId);
-            Store? selectedLoginStore = null;
-            if (customLoginStore && stores.Count > 0)
-            {
-                selectedLoginStore = stores.FirstOrDefault(s => s.Id == _loginStoreConnectionId)
-                    ?? stores.FirstOrDefault(s => StoreNamesMatch(s.Name, _session.StoreName))
-                    ?? stores[0];
-                if (!string.IsNullOrWhiteSpace(_session.StoreName))
-                    selectedLoginStore.Name = _session.StoreName;
-            }
             _storeCombo.DataSource = stores;
             _storeCombo.DisplayMember = nameof(Store.Name);
             _storeCombo.ValueMember = nameof(Store.Id);
-            if (customLoginStore && selectedLoginStore is not null)
+            var selected = stores.FirstOrDefault(s => s.Id == _loginStoreConnectionId)
+                ?? stores.FirstOrDefault(s => StoreNamesMatch(s.Name, _session.StoreName))
+                ?? stores.FirstOrDefault();
+            if (selected is not null)
             {
-                _storeCombo.SelectedValue = selectedLoginStore.Id;
-                _currentStoreId = selectedLoginStore.Id;
-                _storeConnections.CurrentStoreId = _loginStoreConnectionId;
-                _session.StoreName = selectedLoginStore.Name;
+                _storeCombo.SelectedValue = selected.Id;
+                _currentConnectionStoreId = selected.Id;
+                _storeConnections.CurrentStoreId = selected.Id;
+                await EnsureCurrentStoreDatabaseReadyAsync(selected.Name);
+                _currentStoreId = await ResolveDataStoreIdAsync(selected.Name);
+                _session.LastStoreId = selected.Id;
+                _session.StoreName = selected.Name;
                 _status.Text = $"Store: {_session.StoreName}    |    User: {_session.DisplayName} ({_session.Role})";
-                await SaveSelectedStorePreferenceAsync(_loginStoreConnectionId, selectedLoginStore.Name, selectedLoginStore.Address);
-            }
-            else if (stores.Any(s => s.Id == _currentStoreId))
-                _storeCombo.SelectedValue = _currentStoreId;
-            else if (stores.Count > 0)
-            {
-                _storeCombo.SelectedIndex = 0;
-                _currentStoreId = stores[0].Id;
-                _storeConnections.CurrentStoreId = _currentStoreId;
-                _session.LastStoreId = _currentStoreId;
-                _session.StoreName = stores[0].Name;
-                _status.Text = $"Store: {_session.StoreName}    |    User: {_session.DisplayName} ({_session.Role})";
-                await SaveSelectedStorePreferenceAsync(_currentStoreId, stores[0].Name, stores[0].Address);
+                await SaveSelectedStorePreferenceAsync(selected.Id, selected.Name, selected.Address);
             }
         }
         finally
@@ -486,21 +473,43 @@ internal sealed class MainForm : Form
         if (_loadingStores)
             return;
 
-        if (_storeCombo.SelectedItem is not Store store || store.Id == _currentStoreId)
+        if (_storeCombo.SelectedItem is not Store store || store.Id == _currentConnectionStoreId)
             return;
 
-        _currentStoreId = store.Id;
-        var connectionStoreId = _storeConnections.HasCustomConnection(_loginStoreConnectionId)
-            ? _loginStoreConnectionId
-            : store.Id;
-        _storeConnections.CurrentStoreId = connectionStoreId;
-        _session.LastStoreId = connectionStoreId;
+        _currentConnectionStoreId = store.Id;
+        _storeConnections.CurrentStoreId = store.Id;
+        await EnsureCurrentStoreDatabaseReadyAsync(store.Name);
+        _currentStoreId = await ResolveDataStoreIdAsync(store.Name);
+        _session.LastStoreId = store.Id;
         _session.StoreName = store.Name;
         _status.Text = $"Store: {store.Name}    |    User: {_session.DisplayName} ({_session.Role})";
 
-        await SaveSelectedStorePreferenceAsync(connectionStoreId, store.Name, store.Address);
+        await SaveSelectedStorePreferenceAsync(store.Id, store.Name, store.Address);
 
         ShowModule(_currentModule);
+    }
+
+    private async Task EnsureCurrentStoreDatabaseReadyAsync(string businessName)
+    {
+        await using var db = CreateDb();
+        if (db.Database.IsSqlServer())
+        {
+            var connectionString = db.Database.GetConnectionString();
+            if (!string.IsNullOrWhiteSpace(connectionString))
+                await DatabaseSchemaService.EnsureSchemaAsync(connectionString, businessName);
+        }
+
+        await DbInitializer.InitializeAsync(db);
+    }
+
+    private async Task<int> ResolveDataStoreIdAsync(string businessName)
+    {
+        using var db = CreateDb();
+        var stores = await db.Stores.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Id).ToListAsync();
+        var match = stores.FirstOrDefault(x => StoreNamesMatch(x.Name, businessName)) ?? stores.FirstOrDefault();
+        if (match is null)
+            throw new InvalidOperationException($"The database for '{businessName}' does not contain an active store record.");
+        return match.Id;
     }
 
     private Control BuildModuleError(string module, Exception ex)
@@ -602,10 +611,13 @@ internal sealed class MainForm : Form
     {
         var now = DateTime.Today;
         using var db = CreateDb();
-        var shifts = db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
+        var shiftRows = db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
+        var shifts = EffectiveRows(shiftRows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
             .Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).ToList();
-        var cash = db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
-        var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
+        var cashRows = db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
+        var cash = EffectiveRows(cashRows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var checkRows = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
+        var checks = EffectiveRows(checkRows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
         var purchases = db.PurchaseInvoices.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
         var purchasesThisMonth = purchases.Where(x => x.InvoiceDate.Month == now.Month && x.InvoiceDate.Year == now.Year).ToList();
 
@@ -1130,6 +1142,7 @@ internal sealed class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 6) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
+        var suppressShiftSelectionLoad = false;
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Shift cash drop records for selected store"), 0, 3);
         var grossBox = (TextBox)((TableLayoutPanel)paymentSummary.GetControlFromPosition(0, 0)!).GetControlFromPosition(1, 0)!;
@@ -1189,19 +1202,28 @@ internal sealed class MainForm : Form
         }
         void clearAllShiftFields()
         {
-            date.Value = DateTime.Today;
-            employee.Clear();
-            shift.Clear();
-            cash.Clear();
-            card.Clear();
-            net.Clear();
-            tax.Clear();
-            drop.Clear();
-            payout.Clear();
-            reason.Clear();
-            posReport.Text = "Upload using buttons below";
-            posReport.ForeColor = WinTheme.Text;
-            grid.ClearSelection();
+            suppressShiftSelectionLoad = true;
+            try
+            {
+                grid.CurrentCell = null;
+                grid.ClearSelection();
+                date.Value = DateTime.Today;
+                employee.Clear();
+                shift.Clear();
+                cash.Clear();
+                card.Clear();
+                net.Clear();
+                tax.Clear();
+                drop.Clear();
+                payout.Clear();
+                reason.Clear();
+                posReport.Text = "Upload using buttons below";
+                posReport.ForeColor = WinTheme.Text;
+            }
+            finally
+            {
+                suppressShiftSelectionLoad = false;
+            }
             if (managerEntryMode)
                 drop.Focus();
             else
@@ -1369,6 +1391,8 @@ internal sealed class MainForm : Form
         }
         void loadSelectedIntoForm()
         {
+            if (suppressShiftSelectionLoad)
+                return;
             var id = SelectedId(grid);
             if (id is null) return;
             using var db = CreateDb();
@@ -1488,6 +1512,7 @@ internal sealed class MainForm : Form
         var stats = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false, BackColor = WinTheme.Bg, Padding = new Padding(2, 9, 2, 9) };
         root.Controls.Add(stats, 0, 2);
         var grid = WinTheme.Grid();
+        var suppressCashSelectionLoad = false;
         root.Controls.Add(grid, 0, 3);
         root.Controls.Add(BuildGridFooter("Cash on hand records for selected store"), 0, 4);
         Label currentBalance = null!;
@@ -1528,13 +1553,16 @@ internal sealed class MainForm : Form
                 .Where(x => x.StoreId == _currentStoreId)
                 .ToList();
             var effectiveRows = EffectiveRows(rows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var monthStart = new DateOnly(today.Year, today.Month, 1);
+            var nextMonth = monthStart.AddMonths(1);
             grid.DataSource = rows.OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
                 .Select(x => new { x.Id, x.Date, x.CashAdded, x.IsPayout, Payout = x.PayoutAmount, Vendor = x.Vendor != null ? x.Vendor.Name : "", Purpose = x.Purpose != null ? x.Purpose.Name : "", x.Description, Check = x.Reference })
                 .ToList();
             currentBalance.Text = effectiveRows.Sum(x => x.CashAdded - x.PayoutAmount).ToString("C2");
-            todayAdded.Text = effectiveRows.Where(x => !x.IsPayout && x.Date == DateOnly.FromDateTime(DateTime.Today)).Sum(x => x.CashAdded).ToString("C2");
-            pendingPayouts.Text = effectiveRows.Where(x => x.IsPayout).Sum(x => x.PayoutAmount).ToString("C2");
-            openingBalance.Text = effectiveRows.Where(x => x.Date < DateOnly.FromDateTime(DateTime.Today)).Sum(x => x.CashAdded - x.PayoutAmount).ToString("C2");
+            todayAdded.Text = effectiveRows.Where(x => !x.IsPayout && x.Date == today).Sum(x => x.CashAdded).ToString("C2");
+            pendingPayouts.Text = effectiveRows.Where(x => x.IsPayout && x.Date >= monthStart && x.Date < nextMonth).Sum(x => x.PayoutAmount).ToString("C2");
+            openingBalance.Text = effectiveRows.Where(x => x.Date < today).Sum(x => x.CashAdded - x.PayoutAmount).ToString("C2");
             closingBalance.Text = currentBalance.Text;
             HideId(grid);
         }
@@ -1542,16 +1570,24 @@ internal sealed class MainForm : Form
 
         void clearCashOnHandFields()
         {
-            date.Value = DateTime.Today;
-            cash.Clear();
-            isPayout.SelectedIndex = 0;
-            payout.Clear();
-            vendor.SelectedIndex = -1;
-            purpose.SelectedIndex = -1;
-            desc.Clear();
-            carryForward.Clear();
-            grid.ClearSelection();
-            grid.CurrentCell = null;
+            suppressCashSelectionLoad = true;
+            try
+            {
+                grid.CurrentCell = null;
+                grid.ClearSelection();
+                date.Value = DateTime.Today;
+                cash.Clear();
+                isPayout.SelectedIndex = 0;
+                payout.Clear();
+                vendor.SelectedIndex = -1;
+                purpose.SelectedIndex = -1;
+                desc.Clear();
+                carryForward.Clear();
+            }
+            finally
+            {
+                suppressCashSelectionLoad = false;
+            }
             cash.Focus();
         }
 
@@ -1593,6 +1629,8 @@ internal sealed class MainForm : Form
 
         void loadSelectedIntoForm()
         {
+            if (suppressCashSelectionLoad)
+                return;
             var id = SelectedId(grid);
             if (id is null) return;
             using var db = CreateDb();
@@ -1785,8 +1823,8 @@ internal sealed class MainForm : Form
         setCarry.Click += async (_, _) => await setCarryForwardAsync();
         actions.Controls.Add(setCarry);
         openingBalance = MockSummaryValue(stats, "Opening Balance", WinTheme.Copper, 210);
-        todayAdded = MockSummaryValue(stats, "Cash Added", WinTheme.Green, 210);
-        pendingPayouts = MockSummaryValue(stats, "Payouts", WinTheme.Red, 210);
+        todayAdded = MockSummaryValue(stats, "Cash Added Today", WinTheme.Green, 210);
+        pendingPayouts = MockSummaryValue(stats, "Payouts This Month", WinTheme.Red, 210);
         closingBalance = MockSummaryValue(stats, "Closing Balance", WinTheme.Green, 210);
         currentBalance = MockSummaryValue(stats, "Carry Forward", WinTheme.Copper, 210);
         _ = loadLookupsAsync().ContinueWith(_ => refreshAsync(), TaskScheduler.FromCurrentSynchronizationContext());

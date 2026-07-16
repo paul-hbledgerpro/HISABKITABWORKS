@@ -126,8 +126,8 @@ internal sealed class DeviceActivationForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         layout.Controls.Add(Title("STEP 1 - CREATE PC REQUEST"), 0, 0);
-        layout.Controls.Add(Description("Enter the business name, then send the exported .hbrequest file to your software provider."), 0, 1);
-        layout.Controls.Add(Caption("BUSINESS NAME"), 0, 2);
+        layout.Controls.Add(Description("Enter the client account name shown on your subscription, then send the exported .hbrequest file to your software provider."), 0, 1);
+        layout.Controls.Add(Caption("CLIENT ACCOUNT NAME"), 0, 2);
         _businessName.Dock = DockStyle.Fill;
         layout.Controls.Add(_businessName, 0, 3);
         layout.Controls.Add(Caption("SUBSCRIPTION KEY"), 0, 4);
@@ -183,7 +183,7 @@ internal sealed class DeviceActivationForm : Form
             var business = _businessName.Text.Trim();
             if (string.IsNullOrWhiteSpace(business))
             {
-                SetStatus("Enter the business name first.", true);
+                SetStatus("Enter the client account name first.", true);
                 _businessName.Focus();
                 return;
             }

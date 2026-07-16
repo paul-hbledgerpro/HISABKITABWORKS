@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
+using System.Text;
 using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
 using ManagerPaperworkSystem.Data.Services;
@@ -14,6 +16,7 @@ internal static class AppBootstrap
     private static readonly string AppDataDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Hisab Kitab");
+    private static readonly byte[] StoreConnectionEntropy = Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-STORE-CONNECTIONS-V1");
 
     public static readonly string ConnectionSettingsPath = Path.Combine(AppDataDirectory, "connection_settings.json");
     public static readonly string LicenseFilePath = Path.Combine(AppDataDirectory, "license.json");
@@ -81,14 +84,30 @@ internal static class AppBootstrap
 
     public static Dictionary<string, string> LoadStoreConnections()
     {
-        var path = StoreConnectionsPath;
-        if (!File.Exists(path))
-            return new Dictionary<string, string>();
-
         try
         {
-            return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))
+            if (File.Exists(StoreConnectionsProtectedPath))
+            {
+                var protectedBytes = File.ReadAllBytes(StoreConnectionsProtectedPath);
+                var clear = ProtectedData.Unprotect(protectedBytes, StoreConnectionEntropy, DataProtectionScope.LocalMachine);
+                try
+                {
+                    return JsonSerializer.Deserialize<Dictionary<string, string>>(clear)
+                        ?? new Dictionary<string, string>();
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(clear);
+                }
+            }
+
+            if (!File.Exists(StoreConnectionsPath))
+                return new Dictionary<string, string>();
+
+            var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(StoreConnectionsPath))
                 ?? new Dictionary<string, string>();
+            SaveStoreConnections(legacy);
+            return legacy;
         }
         catch
         {
@@ -99,13 +118,26 @@ internal static class AppBootstrap
     public static void SaveStoreConnections(Dictionary<string, string> connections)
     {
         Directory.CreateDirectory(AppDataDirectory);
-        File.WriteAllText(StoreConnectionsPath, JsonSerializer.Serialize(connections, new JsonSerializerOptions { WriteIndented = true }));
+        var clear = JsonSerializer.SerializeToUtf8Bytes(connections, new JsonSerializerOptions { WriteIndented = true });
+        try
+        {
+            var protectedBytes = ProtectedData.Protect(clear, StoreConnectionEntropy, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(StoreConnectionsProtectedPath, protectedBytes);
+            TryDelete(StoreConnectionsPath);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
     }
 
     public static void ClearSavedConnectionSettings()
     {
         TryDelete(ConnectionSettingsPath);
         TryDelete(DeviceLicenseService.ProtectedConnectionPath);
+        TryDelete(LicensedBusinessService.ProtectedBusinessesPath);
+        TryDelete(StoreConnectionsPath);
+        TryDelete(StoreConnectionsProtectedPath);
         TryDelete(Path.Combine(AppDataDirectory, "pending_store_info.json"));
     }
 
@@ -123,6 +155,7 @@ internal static class AppBootstrap
     }
 
     public static string StoreConnectionsPath => Path.Combine(AppDataDirectory, "store_connections.json");
+    public static string StoreConnectionsProtectedPath => Path.Combine(AppDataDirectory, "store_connections.protected");
 
     public static string RedactSensitiveText(string? text)
     {

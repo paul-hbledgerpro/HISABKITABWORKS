@@ -23,13 +23,16 @@ dotnet build .\HisabKitabWorks.LicenseGenerator.WinForms.csproj -c Release
 
 The separate admin installer is created under `installer_output`. Generated publish and installer output are ignored by Git.
 
-## Device-license workflow
+## One-file client workflow
 
 1. Connect to the licensing database.
-2. Enter the customer information and the purchased **Maximum PC Seats**, then generate the subscription key.
+2. Enter the client account information, **Maximum PC Seats**, and **Maximum Businesses**, then generate the subscription key.
 3. Select **Import PC Request** and choose the customer's `.hbrequest` file.
-4. Confirm the paid PC seats and subscription expiration.
-5. Complete **Set Up / Restore Key** if this developer PC is not configured yet.
-6. Select **Issue / Renew License** and save the `.hblicense` file for the customer.
+4. Select **Manage Businesses**. Keep the primary login business and add every additional approved business/database for this client.
+5. Confirm the paid PC seats, approved-business limit, and subscription expiration.
+6. Complete **Set Up / Restore Key** if this developer PC is not configured yet.
+7. Select **Issue / Renew License** and save one complete `.hblicense` file for that PC.
+
+The client imports only that one file. It contains the signed business directory and encrypted database connections. Clients cannot add a business or enter a database connection themselves. When the client purchases another business, update **Manage Businesses** and reissue the PC license.
 
 The signing-key setup is required only once per authorized developer Windows account. It is intentionally required: without the private signature, customers could manufacture their own license files.

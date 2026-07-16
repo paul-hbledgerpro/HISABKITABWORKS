@@ -8,17 +8,12 @@ namespace ManagerPaperworkSystem.WinForms;
 
 internal sealed class StoreManagerForm : Form
 {
-    private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly DataGridView _grid = WinTheme.Grid();
-    private readonly TextBox _name = WinTheme.TextBox();
-    private readonly TextBox _address = WinTheme.TextBox();
-    private readonly TextBox _connection = WinTheme.TextBox();
 
     public StoreManagerForm(IDbContextFactory<AppDbContext> dbFactory)
     {
-        _dbFactory = dbFactory;
         WinTheme.Apply(this);
-        Text = "Store Manager - HISAB KITAB";
+        Text = "Licensed Businesses - HISAB KITAB";
         Size = new Size(980, 640);
         Controls.Add(Build());
         Load += (_, _) => RefreshGrid();
@@ -27,107 +22,72 @@ internal sealed class StoreManagerForm : Form
     private Control Build()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, BackColor = WinTheme.Bg, Padding = new Padding(18) };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 6, RowCount = 2, BackColor = WinTheme.Panel, Padding = new Padding(12) };
-        for (var i = 0; i < 6; i++) fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16.66f));
-        fields.Controls.Add(WinTheme.Label("Store Name", true), 0, 0);
-        fields.Controls.Add(_name, 1, 0);
-        fields.SetColumnSpan(_name, 2);
-        fields.Controls.Add(WinTheme.Label("Address", true), 3, 0);
-        fields.Controls.Add(_address, 4, 0);
-        fields.SetColumnSpan(_address, 2);
-        fields.Controls.Add(WinTheme.Label("SQL Connection String", true), 0, 1);
-        fields.Controls.Add(_connection, 1, 1);
-        fields.SetColumnSpan(_connection, 5);
-        root.Controls.Add(fields, 0, 0);
+        var message = WinTheme.Label(
+            "These businesses are digitally signed into this PC license. To add or remove one, the developer updates the client account and reissues this PC license.");
+        message.Dock = DockStyle.Fill;
+        message.TextAlign = ContentAlignment.MiddleLeft;
+        message.ForeColor = WinTheme.Muted;
+        root.Controls.Add(message, 0, 0);
         root.Controls.Add(_grid, 0, 1);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         actions.Controls.Add(Button("Close", () => Close()));
-        actions.Controls.Add(Button("Delete Store", DeleteSelected));
-        actions.Controls.Add(Button("Save Store", SaveStore, true));
+        actions.Controls.Add(Button("Import Updated PC License", ImportUpdatedLicense, true, 240));
         root.Controls.Add(actions, 0, 2);
-        _grid.SelectionChanged += (_, _) => PopulateSelected();
         return root;
     }
 
-    private Button Button(string text, Action action, bool filled = false)
+    private Button Button(string text, Action action, bool filled = false, int width = 160)
     {
         var b = WinTheme.Button(text, filled);
-        b.Width = 160;
+        b.Width = width;
         b.Click += (_, _) => action();
         return b;
     }
 
     private void RefreshGrid()
     {
-        using var db = _dbFactory.CreateDbContext();
-        var conns = AppBootstrap.LoadStoreConnections();
-        _grid.DataSource = db.Stores.AsNoTracking().OrderBy(x => x.Id)
-            .Select(x => new { x.Id, x.Name, x.Address, x.IsActive, x.CreatedUtc, HasCustomConnection = conns.ContainsKey(x.Id.ToString()) })
+        _grid.DataSource = LicensedBusinessService.Load()
+            .OrderByDescending(x => x.IsPrimary)
+            .ThenBy(x => x.BusinessName)
+            .Select(x => new
+            {
+                x.BusinessId,
+                Name = x.BusinessName,
+                x.Address,
+                Database = x.DatabaseName,
+                Type = x.IsPrimary ? "Primary Login Business" : "Additional Business",
+                Licensed = true
+            })
             .ToList();
     }
 
-    private void PopulateSelected()
+    private void ImportUpdatedLicense()
     {
-        if (_grid.CurrentRow is null) return;
-        _name.Text = _grid.CurrentRow.Cells["Name"].Value?.ToString() ?? "";
-        _address.Text = _grid.CurrentRow.Cells["Address"].Value?.ToString() ?? "";
-        var id = SelectedId();
-        var conns = AppBootstrap.LoadStoreConnections();
-        _connection.Text = id.HasValue && conns.TryGetValue(id.Value.ToString(), out var conn) ? conn : "";
-    }
-
-    private async void SaveStore()
-    {
-        using var db = _dbFactory.CreateDbContext();
-        var id = SelectedId();
-        Store store;
-        if (id.HasValue)
+        using var dialog = new OpenFileDialog
         {
-            store = await db.Stores.FindAsync(id.Value) ?? new Store();
-            if (store.Id == 0) db.Stores.Add(store);
-        }
-        else
+            Title = "Import Updated HISAB KITAB PC License",
+            Filter = "HISAB KITAB Device License (*.hblicense)|*.hblicense"
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        try
         {
-            store = new Store();
-            db.Stores.Add(store);
+            var result = DeviceLicenseService.InstallLicense(dialog.FileName);
+            if (result.Status != DeviceLicenseStatus.Valid)
+                throw new InvalidOperationException(result.Message);
+            RefreshGrid();
+            MessageBox.Show(this,
+                "The updated PC license was installed successfully. Close and reopen HISAB KITAB to apply the approved business list and database connections.",
+                "License Updated", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-        store.Name = _name.Text.Trim();
-        store.Address = _address.Text.Trim();
-        store.IsActive = true;
-        await db.SaveChangesAsync();
-
-        var conns = AppBootstrap.LoadStoreConnections();
-        if (string.IsNullOrWhiteSpace(_connection.Text))
-            conns.Remove(store.Id.ToString());
-        else
-            conns[store.Id.ToString()] = _connection.Text.Trim();
-        AppBootstrap.SaveStoreConnections(conns);
-        RefreshGrid();
-    }
-
-    private async void DeleteSelected()
-    {
-        var id = SelectedId();
-        if (id is null) return;
-        if (MessageBox.Show(this, "Delete selected store?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-        using var db = _dbFactory.CreateDbContext();
-        var store = await db.Stores.FindAsync(id.Value);
-        if (store is null) return;
-        db.Stores.Remove(store);
-        await db.SaveChangesAsync();
-        var conns = AppBootstrap.LoadStoreConnections();
-        conns.Remove(id.Value.ToString());
-        AppBootstrap.SaveStoreConnections(conns);
-        RefreshGrid();
-    }
-
-    private int? SelectedId()
-    {
-        if (_grid.CurrentRow is null) return null;
-        return int.TryParse(_grid.CurrentRow.Cells["Id"].Value?.ToString(), out var id) ? id : null;
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "License Update Rejected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 }
 

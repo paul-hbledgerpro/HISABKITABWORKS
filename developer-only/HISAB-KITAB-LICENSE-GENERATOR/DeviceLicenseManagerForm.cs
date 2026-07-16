@@ -13,8 +13,11 @@ internal sealed class DeviceLicenseManagerForm : Form
     private readonly string _username;
     private readonly string _password;
     private readonly bool _importRequestOnOpen;
+    private readonly string? _expectedBusinessName;
+    private readonly string? _expectedSubscriptionKey;
     private readonly Button _importRequest = AdminTheme.Button("IMPORT PC REQUEST (.HBREQUEST)", true);
     private readonly Button _issueLicense = AdminTheme.Button("ISSUE / RENEW LICENSE", true);
+    private readonly Button _manageBusinesses = AdminTheme.Button("MANAGE BUSINESSES");
     private readonly Button _revokeDevice = AdminTheme.Button("REVOKE SELECTED PC");
     private readonly Button _refresh = AdminTheme.Button("REFRESH");
     private readonly Label _business = AdminTheme.Label("No request loaded", AdminTheme.Text, 13, true);
@@ -22,6 +25,7 @@ internal sealed class DeviceLicenseManagerForm : Form
     private readonly Label _deviceId = AdminTheme.Label("—", AdminTheme.Copper, 11, true);
     private readonly Label _status = AdminTheme.Label("Import a PC request to begin.", AdminTheme.Muted, 10);
     private readonly NumericUpDown _maxDevices = new() { Minimum = 1, Maximum = 999, Value = 1, Font = AdminTheme.Body(11) };
+    private readonly NumericUpDown _maxBusinesses = new() { Minimum = 1, Maximum = 999, Value = 1, Font = AdminTheme.Body(11) };
     private readonly DateTimePicker _expires = new()
     {
         Format = DateTimePickerFormat.Short,
@@ -37,13 +41,22 @@ internal sealed class DeviceLicenseManagerForm : Form
     private List<DeviceRecord> _deviceRows = new();
     private bool _legacyExpiryAdjusted;
 
-    public DeviceLicenseManagerForm(string licensingConnectionString, string server, string username, string password, bool importRequestOnOpen = false)
+    public DeviceLicenseManagerForm(
+        string licensingConnectionString,
+        string server,
+        string username,
+        string password,
+        bool importRequestOnOpen = false,
+        string? expectedBusinessName = null,
+        string? expectedSubscriptionKey = null)
     {
         _licensingConnectionString = licensingConnectionString;
         _server = server;
         _username = username;
         _password = password;
         _importRequestOnOpen = importRequestOnOpen;
+        _expectedBusinessName = string.IsNullOrWhiteSpace(expectedBusinessName) ? null : expectedBusinessName.Trim();
+        _expectedSubscriptionKey = string.IsNullOrWhiteSpace(expectedSubscriptionKey) ? null : expectedSubscriptionKey.Trim();
 
         Text = "HISAB KITAB WORKS - Device License Manager";
         BackColor = AdminTheme.Bg;
@@ -60,6 +73,7 @@ internal sealed class DeviceLicenseManagerForm : Form
 
         _importRequest.Click += (_, _) => ImportRequest();
         _issueLicense.Click += (_, _) => IssueLicense();
+        _manageBusinesses.Click += (_, _) => ManageBusinesses();
         _revokeDevice.Click += (_, _) => RevokeSelectedDevice();
         _refresh.Click += (_, _) => RefreshDevices();
         _devices.SelectionChanged += (_, _) => LoadSelectedDevice();
@@ -135,17 +149,20 @@ internal sealed class DeviceLicenseManagerForm : Form
         gridCard.Controls.Add(gridLayout);
         root.Controls.Add(gridCard, 0, 2);
 
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 3, Padding = new Padding(0, 10, 0, 0) };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 4, Padding = new Padding(0, 10, 0, 0) };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
         _status.Dock = DockStyle.Fill;
         _status.TextAlign = ContentAlignment.MiddleLeft;
         _revokeDevice.Dock = DockStyle.Fill;
+        _manageBusinesses.Dock = DockStyle.Fill;
         _issueLicense.Dock = DockStyle.Fill;
         footer.Controls.Add(_status, 0, 0);
         footer.Controls.Add(_revokeDevice, 1, 0);
-        footer.Controls.Add(_issueLicense, 2, 0);
+        footer.Controls.Add(_manageBusinesses, 2, 0);
+        footer.Controls.Add(_issueLicense, 3, 0);
         root.Controls.Add(footer, 0, 3);
         return root;
     }
@@ -184,26 +201,32 @@ internal sealed class DeviceLicenseManagerForm : Form
         card.Dock = DockStyle.Fill;
         card.Margin = new Padding(8, 0, 0, 0);
         card.Padding = new Padding(18, 12, 18, 12);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 2, RowCount = 3 };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 3, RowCount = 3 };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var heading = AdminTheme.Label("SUBSCRIPTION LIMITS", AdminTheme.Copper, 10, true);
         heading.Dock = DockStyle.Fill;
         layout.Controls.Add(heading, 0, 0);
-        layout.SetColumnSpan(heading, 2);
+        layout.SetColumnSpan(heading, 3);
         var seatsLabel = AdminTheme.Label("PAID PC SEATS", AdminTheme.Muted, 8.5f, true);
+        var businessesLabel = AdminTheme.Label("APPROVED BUSINESSES", AdminTheme.Muted, 8.5f, true);
         var expiresLabel = AdminTheme.Label("SUBSCRIPTION EXPIRES", AdminTheme.Muted, 8.5f, true);
         seatsLabel.Dock = DockStyle.Fill;
+        businessesLabel.Dock = DockStyle.Fill;
         expiresLabel.Dock = DockStyle.Fill;
         layout.Controls.Add(seatsLabel, 0, 1);
-        layout.Controls.Add(expiresLabel, 1, 1);
+        layout.Controls.Add(businessesLabel, 1, 1);
+        layout.Controls.Add(expiresLabel, 2, 1);
         _maxDevices.Dock = DockStyle.Top;
+        _maxBusinesses.Dock = DockStyle.Top;
         _expires.Dock = DockStyle.Top;
         layout.Controls.Add(_maxDevices, 0, 2);
-        layout.Controls.Add(_expires, 1, 2);
+        layout.Controls.Add(_maxBusinesses, 1, 2);
+        layout.Controls.Add(_expires, 2, 2);
         card.Controls.Add(layout);
         return card;
     }
@@ -267,6 +290,23 @@ BEGIN
     );
     CREATE UNIQUE INDEX UX_LicenseDevices_DeviceId ON dbo.LicenseDevices(DeviceId);
     CREATE INDEX IX_LicenseDevices_LicenseId_Status ON dbo.LicenseDevices(LicenseId, Status);
+END
+
+IF OBJECT_ID('dbo.CustomerBusinesses', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.CustomerBusinesses
+    (
+        Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        CustomerId INT NOT NULL,
+        BusinessName NVARCHAR(200) NOT NULL,
+        StoreAddress NVARCHAR(400) NULL,
+        DatabaseName NVARCHAR(128) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_CustomerBusinesses_IsPrimary DEFAULT(0),
+        IsActive BIT NOT NULL CONSTRAINT DF_CustomerBusinesses_IsActive DEFAULT(1),
+        CreatedUtc DATETIME2 NOT NULL CONSTRAINT DF_CustomerBusinesses_CreatedUtc DEFAULT(SYSUTCDATETIME())
+    );
+    CREATE UNIQUE INDEX UX_CustomerBusinesses_Customer_Database
+        ON dbo.CustomerBusinesses(CustomerId, DatabaseName);
 END", connection);
             command.ExecuteNonQuery();
             SetStatus("Device licensing database is ready.", false);
@@ -292,6 +332,15 @@ END", connection);
             var request = JsonSerializer.Deserialize<DeviceLicenseRequestV2>(File.ReadAllText(dialog.FileName), _json)
                 ?? throw new InvalidOperationException("The selected PC request is invalid.");
             DeviceRequestValidator.Validate(request);
+            if (_expectedBusinessName is not null &&
+                !string.Equals(request.BusinessName, _expectedBusinessName, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"This PC request is for '{request.BusinessName}', but the selected customer is '{_expectedBusinessName}'. " +
+                    "Export a new PC request using the selected customer's exact business name and subscription key.");
+            if (_expectedSubscriptionKey is not null &&
+                !string.Equals(request.SubscriptionKey, _expectedSubscriptionKey, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "The PC request subscription key does not match the customer selected on the main License Generator screen.");
             _request = request;
             _business.Text = request.BusinessName;
             _device.Text = request.DeviceName;
@@ -334,7 +383,9 @@ ORDER BY l.Id DESC", connection);
         if (matches.Count == 0)
             throw new InvalidOperationException($"No active customer subscription was found for '{businessName}'. Generate the customer license first.");
         _subscription = matches[0];
+        EnsurePrimaryBusiness(_subscription);
         _maxDevices.Value = Math.Clamp(_subscription.MaxDevices, 1, 999);
+        _maxBusinesses.Value = Math.Clamp(_subscription.MaxStores, 1, 999);
         var storedExpiry = _subscription.ExpiresDate.Date;
         _legacyExpiryAdjusted = storedExpiry > DateTime.Today.AddYears(5);
         var proposedExpiry = storedExpiry < DateTime.Today || _legacyExpiryAdjusted
@@ -342,6 +393,29 @@ ORDER BY l.Id DESC", connection);
             : storedExpiry;
         _expires.Value = proposedExpiry > _expires.MaxDate ? _expires.MaxDate : proposedExpiry;
         RefreshDevices();
+    }
+
+    private void EnsurePrimaryBusiness(SubscriptionRecord subscription)
+    {
+        using var connection = new SqlConnection(_licensingConnectionString);
+        connection.Open();
+        using var command = new SqlCommand(@"
+IF NOT EXISTS (SELECT 1 FROM dbo.CustomerBusinesses WHERE CustomerId=@customerId AND IsPrimary=1)
+BEGIN
+    IF EXISTS (SELECT 1 FROM dbo.CustomerBusinesses WHERE CustomerId=@customerId AND DatabaseName=@database)
+        UPDATE dbo.CustomerBusinesses
+        SET BusinessName=@business, IsPrimary=1, IsActive=1
+        WHERE CustomerId=@customerId AND DatabaseName=@database;
+    ELSE
+        INSERT dbo.CustomerBusinesses
+            (CustomerId, BusinessName, StoreAddress, DatabaseName, IsPrimary, IsActive, CreatedUtc)
+        VALUES
+            (@customerId, @business, '', @database, 1, 1, SYSUTCDATETIME());
+END", connection);
+        command.Parameters.AddWithValue("@customerId", subscription.CustomerId);
+        command.Parameters.AddWithValue("@business", subscription.BusinessName);
+        command.Parameters.AddWithValue("@database", subscription.DatabaseName);
+        command.ExecuteNonQuery();
     }
 
     private void RefreshDevices()
@@ -440,8 +514,8 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
             };
             if (dialog.ShowDialog(this) != DialogResult.OK)
                 return;
-            RegisterDeviceAndUpdateSubscription(_subscription, _request, (int)_maxDevices.Value, expiresUtc);
-            var payload = BuildPayload(_subscription, _request, (int)_maxDevices.Value, expiresUtc);
+            var payload = BuildPayload(_subscription, _request, (int)_maxDevices.Value, (int)_maxBusinesses.Value, expiresUtc);
+            RegisterDeviceAndUpdateSubscription(_subscription, _request, (int)_maxDevices.Value, (int)_maxBusinesses.Value, expiresUtc);
             File.WriteAllText(dialog.FileName, BuildSignedLicense(payload));
             SetStatus($"Device license issued successfully: {dialog.FileName}", false);
             RefreshDevices();
@@ -452,7 +526,25 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
         }
     }
 
-    private void RegisterDeviceAndUpdateSubscription(SubscriptionRecord subscription, DeviceLicenseRequestV2 request, int maxDevices, DateTime expiresUtc)
+    private void ManageBusinesses()
+    {
+        if (_subscription is null)
+        {
+            SetStatus("Import a PC request or select the client subscription first.", true);
+            return;
+        }
+
+        EnsurePrimaryBusiness(_subscription);
+        using var form = new CustomerBusinessesForm(
+            _licensingConnectionString,
+            _subscription.CustomerId,
+            _subscription.BusinessName,
+            (int)_maxBusinesses.Value);
+        form.ShowDialog(this);
+        SetStatus("Business directory updated. Issue or renew the PC license to include the current approved list.", false);
+    }
+
+    private void RegisterDeviceAndUpdateSubscription(SubscriptionRecord subscription, DeviceLicenseRequestV2 request, int maxDevices, int maxBusinesses, DateTime expiresUtc)
     {
         using var connection = new SqlConnection(_licensingConnectionString);
         connection.Open();
@@ -467,9 +559,10 @@ WHERE LicenseId = @licenseId AND ExpiresDate > SYSUTCDATETIME() AND DeviceId <> 
             throw new InvalidOperationException($"All {maxDevices} paid PC seats are already in use. Revoke an old PC or increase the paid seat limit.");
 
         using var updateLicense = new SqlCommand(@"
-UPDATE dbo.Licenses SET MaxDevices = @maxDevices, ExpiresDate = @expires
+UPDATE dbo.Licenses SET MaxDevices = @maxDevices, MaxStores = @maxBusinesses, ExpiresDate = @expires
 WHERE Id = @licenseId AND IsActive = 1", connection, transaction);
         updateLicense.Parameters.AddWithValue("@maxDevices", maxDevices);
+        updateLicense.Parameters.AddWithValue("@maxBusinesses", maxBusinesses);
         updateLicense.Parameters.AddWithValue("@expires", expiresUtc);
         updateLicense.Parameters.AddWithValue("@licenseId", subscription.LicenseId);
         if (updateLicense.ExecuteNonQuery() != 1)
@@ -505,27 +598,33 @@ END", connection, transaction);
         transaction.Commit();
     }
 
-    private DeviceLicensePayloadV2 BuildPayload(SubscriptionRecord subscription, DeviceLicenseRequestV2 request, int maxDevices, DateTime expiresUtc)
+    private DeviceLicensePayloadV2 BuildPayload(SubscriptionRecord subscription, DeviceLicenseRequestV2 request, int maxDevices, int maxBusinesses, DateTime expiresUtc)
     {
-        var connectionPayload = new DeviceConnectionPayload
+        var businesses = LoadApprovedBusinesses(subscription);
+        if (businesses.Count == 0)
+            throw new InvalidOperationException("Add at least one approved business before issuing the PC license.");
+        if (businesses.Count > maxBusinesses)
+            throw new InvalidOperationException($"This subscription allows {maxBusinesses} business(es), but {businesses.Count} are active.");
+
+        var licensedBusinesses = new List<LicensedBusinessPayloadV1>();
+        foreach (var business in businesses)
         {
-            Server = _server,
-            Database = subscription.DatabaseName,
-            Username = _username,
-            Password = _password
-        };
-        var clearConnection = JsonSerializer.SerializeToUtf8Bytes(connectionPayload, _json);
-        var aesKey = RandomNumberGenerator.GetBytes(32);
-        var nonce = RandomNumberGenerator.GetBytes(12);
-        var cipher = new byte[clearConnection.Length];
-        var tag = new byte[16];
-        using (var aes = new AesGcm(aesKey, tag.Length))
-            aes.Encrypt(nonce, clearConnection, cipher, tag);
-        using var deviceRsa = RSA.Create();
-        deviceRsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(request.DevicePublicKey), out _);
-        var encryptedAesKey = deviceRsa.Encrypt(aesKey, RSAEncryptionPadding.OaepSHA256);
-        CryptographicOperations.ZeroMemory(aesKey);
-        CryptographicOperations.ZeroMemory(clearConnection);
+            var encrypted = EncryptConnection(business.DatabaseName, request.DevicePublicKey);
+            licensedBusinesses.Add(new LicensedBusinessPayloadV1
+            {
+                BusinessId = business.Id,
+                BusinessName = business.BusinessName,
+                Address = business.StoreAddress,
+                DatabaseName = business.DatabaseName,
+                IsPrimary = business.IsPrimary,
+                EncryptedConnectionKey = encrypted.EncryptedKey,
+                EncryptedConnection = encrypted.Cipher,
+                ConnectionNonce = encrypted.Nonce,
+                ConnectionTag = encrypted.Tag
+            });
+        }
+
+        var primary = licensedBusinesses.FirstOrDefault(x => x.IsPrimary) ?? licensedBusinesses[0];
 
         return new DeviceLicensePayloadV2
         {
@@ -539,15 +638,70 @@ END", connection, transaction);
             DevicePublicKey = request.DevicePublicKey,
             Status = "Active",
             MaxDevices = maxDevices,
-            MaxStores = subscription.MaxStores,
+            MaxStores = maxBusinesses,
             MaxUsers = subscription.MaxUsers,
             IssuedUtc = DateTime.UtcNow.ToString("O"),
             ExpiresUtc = expiresUtc.ToString("O"),
-            EncryptedConnectionKey = Convert.ToBase64String(encryptedAesKey),
-            EncryptedConnection = Convert.ToBase64String(cipher),
-            ConnectionNonce = Convert.ToBase64String(nonce),
-            ConnectionTag = Convert.ToBase64String(tag)
+            EncryptedConnectionKey = primary.EncryptedConnectionKey,
+            EncryptedConnection = primary.EncryptedConnection,
+            ConnectionNonce = primary.ConnectionNonce,
+            ConnectionTag = primary.ConnectionTag,
+            Businesses = licensedBusinesses
         };
+    }
+
+    private List<CustomerBusinessRecord> LoadApprovedBusinesses(SubscriptionRecord subscription)
+    {
+        using var connection = new SqlConnection(_licensingConnectionString);
+        connection.Open();
+        using var command = new SqlCommand(@"
+SELECT Id, BusinessName, StoreAddress, DatabaseName, IsPrimary
+FROM dbo.CustomerBusinesses
+WHERE CustomerId=@customerId AND IsActive=1
+ORDER BY IsPrimary DESC, BusinessName", connection);
+        command.Parameters.AddWithValue("@customerId", subscription.CustomerId);
+        using var reader = command.ExecuteReader();
+        var businesses = new List<CustomerBusinessRecord>();
+        while (reader.Read())
+            businesses.Add(new CustomerBusinessRecord(reader.GetInt32(0), reader.GetString(1),
+                reader.IsDBNull(2) ? "" : reader.GetString(2), reader.GetString(3), reader.GetBoolean(4)));
+        return businesses;
+    }
+
+    private EncryptedConnectionParts EncryptConnection(string databaseName, string devicePublicKey)
+    {
+        var connectionPayload = new DeviceConnectionPayload
+        {
+            Server = _server,
+            Database = databaseName,
+            Username = _username,
+            Password = _password
+        };
+        var clearConnection = JsonSerializer.SerializeToUtf8Bytes(connectionPayload, _json);
+        var aesKey = RandomNumberGenerator.GetBytes(32);
+        var nonce = RandomNumberGenerator.GetBytes(12);
+        var cipher = new byte[clearConnection.Length];
+        var tag = new byte[16];
+        byte[] encryptedAesKey;
+        try
+        {
+            using (var aes = new AesGcm(aesKey, tag.Length))
+                aes.Encrypt(nonce, clearConnection, cipher, tag);
+            using var deviceRsa = RSA.Create();
+            deviceRsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(devicePublicKey), out _);
+            encryptedAesKey = deviceRsa.Encrypt(aesKey, RSAEncryptionPadding.OaepSHA256);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(aesKey);
+            CryptographicOperations.ZeroMemory(clearConnection);
+        }
+
+        return new EncryptedConnectionParts(
+            Convert.ToBase64String(encryptedAesKey),
+            Convert.ToBase64String(cipher),
+            Convert.ToBase64String(nonce),
+            Convert.ToBase64String(tag));
     }
 
     private string BuildSignedLicense(DeviceLicensePayloadV2 payload)
@@ -612,4 +766,9 @@ WHERE Id=@id", connection);
     private sealed record DeviceRecord(int Id, string DeviceId, string InstallationId, string DeviceName,
         string DevicePublicKey, string FingerprintHash, string Status, DateTime ActivatedDate,
         DateTime ExpiresDate, DateTime LastIssuedDate);
+
+    private sealed record CustomerBusinessRecord(int Id, string BusinessName, string StoreAddress,
+        string DatabaseName, bool IsPrimary);
+
+    private sealed record EncryptedConnectionParts(string EncryptedKey, string Cipher, string Nonce, string Tag);
 }

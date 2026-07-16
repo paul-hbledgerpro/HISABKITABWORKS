@@ -7,7 +7,7 @@ namespace HisabKitabWorks.LicenseGenerator.WinForms;
 internal sealed partial class MainForm : Form
 {
     private const string LicensingDatabase = "HBLedgerPro_Licensing";
-    private const int DefaultMaxStores = 99;
+    private const int DefaultMaxStores = 1;
     private const int DefaultMaxUsers = 999;
 
     private readonly TextBox _server = AdminTheme.TextBox();
@@ -19,6 +19,7 @@ internal sealed partial class MainForm : Form
     private readonly TextBox _zip = AdminTheme.TextBox();
     private readonly TextBox _phone = AdminTheme.TextBox();
     private readonly NumericUpDown _maxDevices = AdminTheme.NumberBox();
+    private readonly NumericUpDown _maxBusinesses = AdminTheme.NumberBox();
     private readonly Button _connect = AdminTheme.Button("CONNECT");
     private readonly Button _generate = AdminTheme.Button("GENERATE LICENSE KEY", primary: true);
     private readonly Button _lookup = AdminTheme.Button("LOOK UP");
@@ -155,10 +156,11 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         var zip = _zip.Text.Trim();
         var phone = _phone.Text.Trim();
         var maxDevices = (int)_maxDevices.Value;
+        var maxBusinesses = (int)_maxBusinesses.Value;
 
         if (string.IsNullOrWhiteSpace(storeName))
         {
-            ShowError("Enter the store / business name.");
+            ShowError("Enter the client account name.");
             _storeName.Focus();
             return;
         }
@@ -272,7 +274,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
             {
                 insertLicense.Parameters.AddWithValue("@customerId", customerId);
                 insertLicense.Parameters.AddWithValue("@key", licenseKey);
-                insertLicense.Parameters.AddWithValue("@maxStores", DefaultMaxStores);
+                insertLicense.Parameters.AddWithValue("@maxStores", maxBusinesses);
                 insertLicense.Parameters.AddWithValue("@maxUsers", DefaultMaxUsers);
                 insertLicense.Parameters.AddWithValue("@maxDevices", maxDevices);
                 insertLicense.Parameters.AddWithValue("@expires", expiresDate);
@@ -280,7 +282,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
                 insertLicense.ExecuteNonQuery();
             }
 
-            ShowLicense(licenseKey, $"Database: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}", canExport: true);
+            ShowLicense(licenseKey, $"Primary DB: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Businesses: {maxBusinesses}", canExport: true);
 
             if (!databaseExists)
             {
@@ -420,6 +422,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         var maxDevices = reader.IsDBNull(6) ? 1 : reader.GetInt32(6);
         reader.Close();
         _maxDevices.Value = Math.Clamp(maxDevices, 1, 999);
+        _maxBusinesses.Value = Math.Clamp(maxStores, 1, 999);
 
         var choice = MessageBox.Show(
             this,
@@ -439,7 +442,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         if (choice != DialogResult.Yes)
             return false;
 
-        ShowLicense(existingKey, $"Database: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}", canExport: true);
+        ShowLicense(existingKey, $"Primary DB: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Businesses: {maxStores}", canExport: true);
         ShowSuccess($"The existing subscription for '{businessName}' is ready. Open Device Licenses and import the PC request.");
         return true;
     }
@@ -455,7 +458,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         var searchName = _storeName.Text.Trim();
         if (string.IsNullOrWhiteSpace(searchName))
         {
-            ShowError("Enter a store / business name to look up.");
+            ShowError("Enter a client account name to look up.");
             _storeName.Focus();
             return;
         }
@@ -499,9 +502,10 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
             _email.Text = email;
             _phone.Text = phone;
             _maxDevices.Value = Math.Clamp(maxDevices, 1, 999);
+            _maxBusinesses.Value = Math.Clamp(maxStores, 1, 999);
             ShowLicense(
                 key,
-                $"Database: {database}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Active: {(active ? "Yes" : "No")}  |  Expires: {expires:MM/dd/yyyy}",
+                $"Primary DB: {database}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Businesses: {maxStores}  |  Active: {(active ? "Yes" : "No")}  |  Expires: {expires:MM/dd/yyyy}",
                 canExport: active);
             if (active)
                 ShowSuccess($"Found the active subscription for '{businessName}'. Open Device Licenses to issue or renew a PC license.");
@@ -590,12 +594,19 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
             ShowError("Connect to the licensing database first.");
             return;
         }
+        var expectedBusiness = string.IsNullOrWhiteSpace(_storeName.Text) ? null : _storeName.Text.Trim();
+        var displayedKey = _keyValue.Text ?? "";
+        var expectedKey = Regex.IsMatch(displayedKey, @"^HBL-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
+            ? displayedKey.Trim()
+            : null;
         using var form = new DeviceLicenseManagerForm(
             ConnectionString(LicensingDatabase),
             _server.Text.Trim(),
             _username.Text.Trim(),
             _password.Text,
-            importRequest);
+            importRequest,
+            expectedBusiness,
+            expectedKey);
         form.ShowDialog(this);
     }
 

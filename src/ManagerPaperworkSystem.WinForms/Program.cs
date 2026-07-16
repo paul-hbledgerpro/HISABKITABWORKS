@@ -39,6 +39,7 @@ internal static class Program
                 try
                 {
                     AppBootstrap.InitializeDatabaseAsync(services).GetAwaiter().GetResult();
+                    LicensedBusinessService.SynchronizeAsync(services).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
