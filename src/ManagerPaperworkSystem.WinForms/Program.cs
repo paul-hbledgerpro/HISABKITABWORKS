@@ -12,9 +12,15 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        if (args.Length >= 4 && args[0].Equals("--export-device-request", StringComparison.OrdinalIgnoreCase))
+        if (args.Length >= 5 && args[0].Equals("--export-device-request", StringComparison.OrdinalIgnoreCase))
         {
-            DeviceLicenseService.ExportRequest(args[3], args[1], args[2]);
+            DeviceLicenseService.ExportRequest(args[4], args[1], args[2], args[3]);
+            return;
+        }
+
+        if (args.Length >= 5 && args[0].Equals("--export-device-request-text", StringComparison.OrdinalIgnoreCase))
+        {
+            File.WriteAllText(args[4], DeviceLicenseService.CreateRequestText(args[1], args[2], args[3]));
             return;
         }
 

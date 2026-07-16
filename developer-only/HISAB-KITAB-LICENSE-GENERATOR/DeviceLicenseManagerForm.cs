@@ -15,15 +15,16 @@ internal sealed class DeviceLicenseManagerForm : Form
     private readonly bool _importRequestOnOpen;
     private readonly string? _expectedBusinessName;
     private readonly string? _expectedSubscriptionKey;
-    private readonly Button _importRequest = AdminTheme.Button("IMPORT PC REQUEST (.HBREQUEST)", true);
-    private readonly Button _issueLicense = AdminTheme.Button("ISSUE / RENEW LICENSE", true);
+    private readonly Button _importRequest = AdminTheme.Button("PASTE CUSTOMER ACTIVATION DETAILS", true);
+    private readonly Button _issueLicense = AdminTheme.Button("GENERATE / RENEW LICENSE KEY", true);
     private readonly Button _manageBusinesses = AdminTheme.Button("MANAGE BUSINESSES");
     private readonly Button _revokeDevice = AdminTheme.Button("REVOKE SELECTED PC");
     private readonly Button _refresh = AdminTheme.Button("REFRESH");
-    private readonly Label _business = AdminTheme.Label("No request loaded", AdminTheme.Text, 13, true);
-    private readonly Label _device = AdminTheme.Label("—", AdminTheme.Muted, 10);
-    private readonly Label _deviceId = AdminTheme.Label("—", AdminTheme.Copper, 11, true);
-    private readonly Label _status = AdminTheme.Label("Import a PC request to begin.", AdminTheme.Muted, 10);
+    private readonly Label _business = AdminTheme.Label("Business Name: —", AdminTheme.Text, 10.5f, true);
+    private readonly Label _storeGuid = AdminTheme.Label("Store GUID: —", AdminTheme.Muted, 10);
+    private readonly Label _storeZip = AdminTheme.Label("ZIP Code: —", AdminTheme.Muted, 10);
+    private readonly Label _deviceId = AdminTheme.Label("App Serial Number: —", AdminTheme.Copper, 10.5f, true);
+    private readonly Label _status = AdminTheme.Label("Paste the customer's activation details to begin.", AdminTheme.Muted, 10);
     private readonly NumericUpDown _maxDevices = new() { Minimum = 1, Maximum = 999, Value = 1, Font = AdminTheme.Body(11) };
     private readonly NumericUpDown _maxBusinesses = new() { Minimum = 1, Maximum = 999, Value = 1, Font = AdminTheme.Body(11) };
     private readonly DateTimePicker _expires = new()
@@ -173,24 +174,27 @@ internal sealed class DeviceLicenseManagerForm : Form
         card.Dock = DockStyle.Fill;
         card.Margin = new Padding(0, 0, 8, 0);
         card.Padding = new Padding(18, 12, 18, 12);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, RowCount = 5 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, RowCount = 6 };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var requestHeading = AdminTheme.Label("CURRENT PC REQUEST", AdminTheme.Copper, 10, true);
+        var requestHeading = AdminTheme.Label("CUSTOMER ACTIVATION DETAILS", AdminTheme.Copper, 10, true);
         requestHeading.Dock = DockStyle.Fill;
         layout.Controls.Add(requestHeading, 0, 0);
         _business.Dock = DockStyle.Fill;
-        _device.Dock = DockStyle.Fill;
+        _storeGuid.Dock = DockStyle.Fill;
+        _storeZip.Dock = DockStyle.Fill;
         _deviceId.Dock = DockStyle.Fill;
         layout.Controls.Add(_business, 0, 1);
-        layout.Controls.Add(_device, 0, 2);
-        layout.Controls.Add(_deviceId, 0, 3);
+        layout.Controls.Add(_storeGuid, 0, 2);
+        layout.Controls.Add(_storeZip, 0, 3);
+        layout.Controls.Add(_deviceId, 0, 4);
         _importRequest.Dock = DockStyle.Fill;
         _importRequest.Margin = new Padding(0, 6, 0, 5);
-        layout.Controls.Add(_importRequest, 0, 4);
+        layout.Controls.Add(_importRequest, 0, 5);
         card.Controls.Add(layout);
         return card;
     }
@@ -320,35 +324,33 @@ END", connection);
 
     private void ImportRequest()
     {
-        using var dialog = new OpenFileDialog
-        {
-            Title = "Import HISAB KITAB PC Request",
-            Filter = "HISAB KITAB PC Request (*.hbrequest)|*.hbrequest|JSON files (*.json)|*.json"
-        };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        var pastedRequest = ActivationCodeDialog.PromptForRequest(this);
+        if (pastedRequest is null)
             return;
         try
         {
-            var request = JsonSerializer.Deserialize<DeviceLicenseRequestV2>(File.ReadAllText(dialog.FileName), _json)
-                ?? throw new InvalidOperationException("The selected PC request is invalid.");
+            var request = ActivationCodeCodec.DecodeRequest(pastedRequest);
             DeviceRequestValidator.Validate(request);
             if (_expectedBusinessName is not null &&
                 !string.Equals(request.BusinessName, _expectedBusinessName, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
                     $"This PC request is for '{request.BusinessName}', but the selected customer is '{_expectedBusinessName}'. " +
-                    "Export a new PC request using the selected customer's exact business name and subscription key.");
-            if (_expectedSubscriptionKey is not null &&
+                    "Copy a new activation request using the selected customer's exact store name.");
+            if (_expectedSubscriptionKey is not null && !string.IsNullOrWhiteSpace(request.SubscriptionKey) &&
                 !string.Equals(request.SubscriptionKey, _expectedSubscriptionKey, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
                     "The PC request subscription key does not match the customer selected on the main License Generator screen.");
             _request = request;
-            _business.Text = request.BusinessName;
-            _device.Text = request.DeviceName;
-            _deviceId.Text = request.DeviceId;
-            LoadSubscription(request.BusinessName, request.SubscriptionKey);
+            _business.Text = $"Business Name: {request.BusinessName}";
+            _storeGuid.Text = $"Store GUID: {request.StoreGuid}";
+            _storeZip.Text = $"ZIP Code: {request.StoreZip}  •  PC: {request.DeviceName}";
+            _deviceId.Text = $"App Serial Number: {request.DeviceId}";
+            LoadSubscription(request.BusinessName, request.StoreGuid, request.SubscriptionKey);
+            if (_subscription is null || !string.Equals(_subscription.DatabaseName, request.StoreGuid, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The Store GUID does not match the database assigned to this customer subscription.");
             SetStatus(_legacyExpiryAdjusted
-                ? "PC request verified. The old 100-year expiry was replaced with a one-month renewal date. Confirm it, then issue the license."
-                : "PC request verified. Confirm seats and expiration, then issue the license.", false);
+                ? "Activation request verified. The old 100-year expiry was replaced with a one-month renewal date. Confirm it, then generate the License Key."
+                : "Activation request verified. Confirm seats and expiration, then generate the License Key.", false);
         }
         catch (Exception ex)
         {
@@ -358,7 +360,7 @@ END", connection);
         }
     }
 
-    private void LoadSubscription(string businessName, string subscriptionKey)
+    private void LoadSubscription(string businessName, string storeGuid, string subscriptionKey)
     {
         using var connection = new SqlConnection(_licensingConnectionString);
         connection.Open();
@@ -367,9 +369,12 @@ SELECT c.Id CustomerId, l.Id LicenseId, c.BusinessName, l.LicenseKey,
        l.AssignedDatabases, l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId = c.Id
-WHERE c.BusinessName = @business AND l.LicenseKey = @licenseKey AND l.IsActive = 1
+WHERE c.BusinessName = @business
+  AND (l.AssignedDatabases = @storeGuid OR (@licenseKey <> '' AND l.LicenseKey = @licenseKey))
+  AND l.IsActive = 1
 ORDER BY l.Id DESC", connection);
         command.Parameters.AddWithValue("@business", businessName);
+        command.Parameters.AddWithValue("@storeGuid", storeGuid);
         command.Parameters.AddWithValue("@licenseKey", subscriptionKey);
         using var reader = command.ExecuteReader();
         var matches = new List<SubscriptionRecord>();
@@ -465,33 +470,37 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
             Version = 2,
             BusinessName = _subscription.BusinessName,
             SubscriptionKey = _subscription.LicenseKey,
+            StoreGuid = _subscription.DatabaseName,
+            StoreZip = "",
+            AppVersion = "",
             DeviceId = selected.DeviceId,
             InstallationId = selected.InstallationId,
             DeviceName = selected.DeviceName,
             DevicePublicKey = selected.DevicePublicKey,
             FingerprintHash = selected.FingerprintHash
         };
-        _business.Text = _subscription.BusinessName;
-        _device.Text = selected.DeviceName;
-        _deviceId.Text = selected.DeviceId;
+        _business.Text = $"Business Name: {_subscription.BusinessName}";
+        _storeGuid.Text = $"Store GUID: {_subscription.DatabaseName}";
+        _storeZip.Text = $"ZIP Code: saved activation  •  PC: {selected.DeviceName}";
+        _deviceId.Text = $"App Serial Number: {selected.DeviceId}";
     }
 
     private void IssueLicense()
     {
         if (_subscription is null || _request is null)
         {
-            SetStatus("Import a PC request or select an existing registered computer first.", true);
+            SetStatus("Paste an activation request or select an existing registered computer first.", true);
             return;
         }
         if (!SigningKeyStore.IsConfigured)
         {
-            SetStatus("One-time signing setup is required. Close this window, select Set Up / Restore Key on the main screen, then reopen this PC request.", true);
+            SetStatus("One-time signing setup is required. Close this window, select Set Up / Restore Key, then paste the activation request again.", true);
             MessageBox.Show(this,
                 "One-time signing setup is required on this developer PC.\r\n\r\n" +
                 "1. Close Device License Manager.\r\n" +
                 "2. Select SET UP / RESTORE KEY on the main generator.\r\n" +
                 "3. Restore the encrypted signing-key backup.\r\n" +
-                "4. Reopen the PC request and issue the license.",
+                "4. Paste the activation request again and generate the License Key.",
                 "Signing Setup Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -504,20 +513,16 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
         try
         {
             var expiresUtc = DateTime.SpecifyKind(_expires.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Local).ToUniversalTime();
-            using var dialog = new SaveFileDialog
-            {
-                Title = "Save Device License",
-                Filter = "HISAB KITAB Device License (*.hblicense)|*.hblicense",
-                FileName = $"{SafeFileName(_subscription.BusinessName)}_{SafeFileName(_request.DeviceName)}.hblicense",
-                AddExtension = true,
-                DefaultExt = ".hblicense"
-            };
-            if (dialog.ShowDialog(this) != DialogResult.OK)
-                return;
             var payload = BuildPayload(_subscription, _request, (int)_maxDevices.Value, (int)_maxBusinesses.Value, expiresUtc);
             RegisterDeviceAndUpdateSubscription(_subscription, _request, (int)_maxDevices.Value, (int)_maxBusinesses.Value, expiresUtc);
-            File.WriteAllText(dialog.FileName, BuildSignedLicense(payload));
-            SetStatus($"Device license issued successfully: {dialog.FileName}", false);
+            var licenseJson = BuildSignedLicense(payload);
+            var formattedLicense = ActivationCodeCodec.FormatLicense(payload, licenseJson);
+            ActivationCodeDialog.ShowLicense(
+                this,
+                formattedLicense,
+                licenseJson,
+                $"{SafeFileName(_subscription.BusinessName)}_{SafeFileName(_request.DeviceName)}.hblicense");
+            SetStatus("License Key generated and copied. Paste it into the customer's License Registration window.", false);
             RefreshDevices();
         }
         catch (Exception ex)
@@ -530,7 +535,7 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
     {
         if (_subscription is null)
         {
-            SetStatus("Import a PC request or select the client subscription first.", true);
+            SetStatus("Paste an activation request or select the client subscription first.", true);
             return;
         }
 
@@ -632,6 +637,9 @@ END", connection, transaction);
             CustomerId = subscription.CustomerId,
             LicenseId = subscription.LicenseId,
             BusinessName = subscription.BusinessName,
+            StoreGuid = subscription.DatabaseName,
+            StoreZip = request.StoreZip,
+            AppVersion = request.AppVersion,
             DeviceId = request.DeviceId,
             InstallationId = request.InstallationId,
             DeviceName = request.DeviceName,

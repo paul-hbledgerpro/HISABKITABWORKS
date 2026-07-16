@@ -9,6 +9,9 @@ internal sealed class DeviceLicenseRequestV2
     public string RequestId { get; set; } = "";
     public string BusinessName { get; set; } = "";
     public string SubscriptionKey { get; set; } = "";
+    public string StoreGuid { get; set; } = "";
+    public string StoreZip { get; set; } = "";
+    public string AppVersion { get; set; } = "";
     public string DeviceId { get; set; } = "";
     public string InstallationId { get; set; } = "";
     public string DeviceName { get; set; } = "";
@@ -18,7 +21,7 @@ internal sealed class DeviceLicenseRequestV2
     public string Proof { get; set; } = "";
 
     public string SigningText()
-        => string.Join("\n", Version, RequestId, BusinessName, SubscriptionKey, DeviceId, InstallationId, DeviceName,
+        => string.Join("\n", Version, RequestId, BusinessName, SubscriptionKey, StoreGuid, StoreZip, AppVersion, DeviceId, InstallationId, DeviceName,
             DevicePublicKey, FingerprintHash, CreatedUtc);
 }
 
@@ -35,6 +38,9 @@ internal sealed class DeviceLicensePayloadV2
     public int CustomerId { get; set; }
     public int LicenseId { get; set; }
     public string BusinessName { get; set; } = "";
+    public string StoreGuid { get; set; } = "";
+    public string StoreZip { get; set; } = "";
+    public string AppVersion { get; set; } = "";
     public string DeviceId { get; set; } = "";
     public string InstallationId { get; set; } = "";
     public string DeviceName { get; set; } = "";
@@ -80,10 +86,9 @@ internal static class DeviceRequestValidator
     public static void Validate(DeviceLicenseRequestV2 request)
     {
         if (request.Version != 2 || string.IsNullOrWhiteSpace(request.BusinessName) ||
+            string.IsNullOrWhiteSpace(request.StoreGuid) || string.IsNullOrWhiteSpace(request.StoreZip) ||
             string.IsNullOrWhiteSpace(request.DeviceId) || string.IsNullOrWhiteSpace(request.DevicePublicKey))
             throw new InvalidOperationException("The PC request is incomplete or uses an unsupported version.");
-        if (!System.Text.RegularExpressions.Regex.IsMatch(request.SubscriptionKey, @"^HBL-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$"))
-            throw new InvalidOperationException("The PC request does not contain a valid subscription key.");
 
         var publicKey = Convert.FromBase64String(request.DevicePublicKey);
         var hex = Convert.ToHexString(SHA256.HashData(publicKey));

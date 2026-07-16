@@ -27,12 +27,12 @@ The separate admin installer is created under `installer_output`. Generated publ
 
 1. Connect to the licensing database.
 2. Enter the client account information, **Maximum PC Seats**, and **Maximum Businesses**, then generate the subscription key.
-3. Select **Import PC Request** and choose the customer's `.hbrequest` file.
+3. Select **Paste Activation Request** and paste the complete request copied from the customer's registration window. Store GUID is the exact store database name.
 4. Select **Manage Businesses**. Keep the primary login business and add every additional approved business/database for this client.
 5. Confirm the paid PC seats, approved-business limit, and subscription expiration.
 6. Complete **Set Up / Restore Key** if this developer PC is not configured yet.
-7. Select **Issue / Renew License** and save one complete `.hblicense` file for that PC.
+7. Select **Issue / Renew License**. The generated License Key is copied automatically; paste it into the customer's registration window. Saving a `.hblicense` file remains available as a backup.
 
-The client imports only that one file. It contains the signed business directory and encrypted database connections. Clients cannot add a business or enter a database connection themselves. When the client purchases another business, update **Manage Businesses** and reissue the PC license.
+The customer normally uses only copy and paste. The License Key contains the signed business directory and encrypted database connections. Clients cannot add a business or enter a database connection themselves. When the client purchases another business, update **Manage Businesses** and generate a replacement License Key.
 
 The signing-key setup is required only once per authorized developer Windows account. It is intentionally required: without the private signature, customers could manufacture their own license files.

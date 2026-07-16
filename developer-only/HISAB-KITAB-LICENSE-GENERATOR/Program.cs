@@ -20,6 +20,19 @@ internal static class Program
                 return 2;
             }
         }
+        if (args.Length >= 2 && args[0].Equals("--validate-request-code", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var request = ActivationCodeCodec.DecodeRequest(File.ReadAllText(args[1]));
+                DeviceRequestValidator.Validate(request);
+                return 0;
+            }
+            catch
+            {
+                return 2;
+            }
+        }
         if (args.Length >= 1 && args[0].Equals("--self-test-signing", StringComparison.OrdinalIgnoreCase))
         {
             try

@@ -23,7 +23,7 @@ internal sealed partial class MainForm : Form
     private readonly Button _connect = AdminTheme.Button("CONNECT");
     private readonly Button _generate = AdminTheme.Button("GENERATE LICENSE KEY", primary: true);
     private readonly Button _lookup = AdminTheme.Button("LOOK UP");
-    private readonly Button _deviceLicenses = AdminTheme.Button("IMPORT PC REQUEST", primary: true);
+    private readonly Button _deviceLicenses = AdminTheme.Button("PASTE ACTIVATION REQUEST", primary: true);
     private readonly Button _copyKey = AdminTheme.Button("COPY KEY");
     private readonly Button _exportLicense = AdminTheme.Button("OPEN DEVICE LICENSES");
     private readonly Button _importSigningKey = AdminTheme.Button("SET UP / RESTORE KEY");
@@ -304,7 +304,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
             var action = isExistingCustomer
                 ? "A new key was issued for the existing customer and the old keys were deactivated."
                 : "The customer license was registered and the database was created.";
-            ShowSuccess($"{action}\r\nOpen Device Licenses and import the customer's .hbrequest file.");
+            ShowSuccess($"{action}\r\nPaste the customer's activation request to generate the PC License Key.");
         }
         catch (Exception ex)
         {
@@ -443,7 +443,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
             return false;
 
         ShowLicense(existingKey, $"Primary DB: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Businesses: {maxStores}", canExport: true);
-        ShowSuccess($"The existing subscription for '{businessName}' is ready. Open Device Licenses and import the PC request.");
+        ShowSuccess($"The existing subscription for '{businessName}' is ready. Paste the customer's activation request to continue.");
         return true;
     }
 
@@ -546,7 +546,7 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
                 SigningKeyStore.Import(dialog.FileName);
             }
             RefreshSigningKeyStatus();
-            ShowSuccess("Signing is ready on this PC. You can now import a PC request and issue its device license.");
+            ShowSuccess("Signing is ready on this PC. You can now paste an activation request and generate its License Key.");
         }
         catch (Exception ex)
         {

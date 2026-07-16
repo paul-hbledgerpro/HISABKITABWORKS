@@ -256,7 +256,7 @@ internal sealed partial class MainForm
         _databaseDetails.TextAlign = ContentAlignment.MiddleCenter;
         layout.Controls.Add(_databaseDetails, 0, 2);
 
-        var hint = AdminTheme.Label("Import the customer's .hbrequest file to issue a license for that specific PC.", AdminTheme.Muted, 10);
+        var hint = AdminTheme.Label("Paste the customer's copied request to generate a License Key for that Store GUID and PC.", AdminTheme.Muted, 10);
         hint.Dock = DockStyle.Fill;
         hint.TextAlign = ContentAlignment.MiddleCenter;
         layout.Controls.Add(hint, 0, 3);
