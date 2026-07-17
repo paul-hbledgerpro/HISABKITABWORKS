@@ -29,7 +29,7 @@ internal static class AccountInvoicePdf
                 page.DefaultTextStyle(x => x.FontFamily("Arial").FontSize(9).FontColor(Ink));
                 page.Content().Row(row =>
                 {
-                    row.ConstantItem(175).Background(Navy).Element(c => Sidebar(c, data, logo, dividerSvg));
+                    row.ConstantItem(175).Background(Colors.White).Element(c => Sidebar(c, data, logo, dividerSvg));
                     row.ConstantItem(3).Background(Orange);
                     row.RelativeItem().Background(Colors.White).Padding(30).Element(c => InvoiceBody(c, data));
                 });
@@ -46,10 +46,14 @@ internal static class AccountInvoicePdf
             layers.PrimaryLayer().Padding(22).Column(column =>
             {
                 if (logo is not null)
-                    column.Item().Height(95).AlignCenter().Image(logo).FitArea();
-                column.Item().PaddingTop(10).AlignCenter().Text("HISAB KITAB WORKS").Bold().FontSize(15).FontColor(Colors.White);
-                column.Item().AlignCenter().Text("SOFTWARE SUBSCRIPTIONS").FontSize(8).FontColor(Orange).LetterSpacing(.8f);
-                column.Item().PaddingVertical(22).LineHorizontal(1).LineColor("#7FA3CC");
+                    column.Item().Height(78).AlignCenter().Image(logo).FitArea();
+                column.Item().PaddingTop(8).AlignCenter().Text("HISAB KITAB WORKS")
+                    .FontFamily("Franklin Gothic Demi Cond").Bold().FontSize(12.5f).FontColor(Colors.White);
+                column.Item().PaddingTop(4).AlignCenter().Text("SOFTWARE")
+                    .FontSize(8).FontColor(Orange).LetterSpacing(.6f);
+                column.Item().AlignCenter().Text("SUBSCRIPTIONS")
+                    .FontSize(7.5f).FontColor(Orange).LetterSpacing(.35f);
+                column.Item().PaddingVertical(18).LineHorizontal(1).LineColor("#7FA3CC");
 
                 SideHeading(column, "CLIENT ACCOUNT");
                 SideValue(column, data.Account.BusinessName);
@@ -74,10 +78,10 @@ internal static class AccountInvoicePdf
                 SideValue(column, "Zelle");
                 SideValue(column, "ACH / Bank Transfer");
 
-                column.Item().ExtendVertical().AlignBottom().Column(bottom =>
+                column.Item().PaddingTop(18).LineHorizontal(1).LineColor("#7FA3CC");
+                column.Item().PaddingTop(10).Column(bottom =>
                 {
-                    bottom.Item().LineHorizontal(1).LineColor("#7FA3CC");
-                    bottom.Item().PaddingTop(12).Text("Prepared by").FontSize(8).FontColor("#BDD1E8");
+                    bottom.Item().Text("Prepared by").FontSize(8).FontColor("#BDD1E8");
                     bottom.Item().Text("HISAB KITAB WORKS").Bold().FontColor(Colors.White);
                 });
             });
