@@ -30,6 +30,7 @@ Revoking a PC prevents future renewal. Because this is a fully offline licensing
 - The Device ID is derived from the device public key.
 - A PC request is signed by the device private key and cannot be edited without detection.
 - A device license is signed by the generator's protected private signing key.
+- The client can trust both the current and immediately previous public key during a controlled key rotation, so existing issued licenses remain valid.
 - Database connection details are hybrid-encrypted for the destination PC and then stored with Windows DPAPI protection.
 - Copying a request, license, device-identity JSON, or protected connection file to another PC does not transfer the protected private key.
 - Startup validates the signature, device, private key, dates, status, and protected clock state.
@@ -44,3 +45,4 @@ Revoking a PC prevents future renewal. Because this is a fully offline licensing
 - Create only the number of paid PC seats purchased by the customer.
 - Use monthly or shorter expiration periods for stronger offline enforcement.
 - Back up the private signing key securely. Losing it prevents renewal of existing device licenses with the same trust key.
+- After a key rotation, install the updated client before issuing a license signed by the new key, then restore the same encrypted current-key backup on every authorized developer PC.

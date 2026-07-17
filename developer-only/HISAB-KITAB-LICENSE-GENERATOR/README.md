@@ -7,7 +7,8 @@ This folder is a standalone developer project with its own `HISAB KITAB WORKS Li
 ## Security boundary
 
 - The RSA private signing key is not stored in this repository or compiled into the executable.
-- The official V2 private signing key is created once and is never committed to GitHub or compiled into either application.
+- The current V2 private signing key is never committed to GitHub or compiled into either application.
+- During a controlled signing-key rotation, the client may retain the previous public key for backward compatibility while new licenses are signed by the current key.
 - On another developer PC, choose **Set Up / Restore Key** and select the encrypted `.hbsigningbackup` created on the first developer PC.
 - The validated key is encrypted with Windows DPAPI for the current Windows user and stored under `%LOCALAPPDATA%\HISAB KITAB WORKS\License Generator`.
 - Use **Back Up Key** to create a password-encrypted backup for another authorized developer PC. Keep both the backup file and its password away from customers.
@@ -35,4 +36,4 @@ The separate admin installer is created under `installer_output`. Generated publ
 
 The customer normally uses only copy and paste. The License Key contains the signed business directory and encrypted database connections. Clients cannot add a business or enter a database connection themselves. When the client purchases another business, update **Manage Businesses** and generate a replacement License Key.
 
-The signing-key setup is required only once per authorized developer Windows account. It is intentionally required: without the private signature, customers could manufacture their own license files.
+The signing-key setup is required only once per authorized developer Windows account. All actively issuing developer PCs should restore the same current encrypted backup. It is intentionally required: without the private signature, customers could manufacture their own license files.

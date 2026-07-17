@@ -32,8 +32,14 @@ internal static class LicenseRuntime
 
 internal static class DeviceLicenseService
 {
-    // The matching private key remains only in the administrator License Generator.
-    internal const string LicenseSigningPublicKeyBase64 = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA41Pt4R+4COqv01HNi5KRVe+Ws0yQjhcaj19XgXO7kZiXjSYOqjaqPPrGDnW93Q/tk5boAic+YyxhaVtEJ4AF9BONKUGmamKKc3Y4M9vO/kZAr3n7t2/h3EVNVoJUWL4Xpe0FL8+Ehr3tbejVayBCZ5xsrrzdzXFRE2CTlP6dFQP9TFsQGzceZu7EIStttZ/VEZcmQQ++BSPgqv41qlfIulU9ufeDDYpi6s4KJQkZIUzcrxVhGdhfBvPE7yELQYn7pXlpvSZfeWuIbFoc1DxpGYmJlQktam6kDUgp/QnKe//V+N5eW0vJM40RnwhxAyiNylbB8ie++QlWgZlac2XL2lAHDrvUOJahsB7G06qTgu8yx17bH27o68V2YZiuLVNpY44ofB1VFn0aadK+rHxvMiQeZ4gC8fauP/5f28R+Iw1H/YM1oIwXOekkaZS+J0HtYje3Sddu+H0V8/tBA0yKHjNxPRiWrxTYdlNv0vFJ1WpLx1u8UTbQBoj7b2Nqg8aRAgMBAAE=";
+    // Matching private keys remain only on authorized developer PCs.
+    internal const string CurrentLicenseSigningPublicKeyBase64 = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAyJC7f5wQ5REEWdHzKuqXQVU4NjY8t17V3IHj9Ahd597HRhY6HZBxnzso1mIp0fzB8ZWu/Xgnvi2scepKCFnscVKoLaLSEQpanWtDHdA4sMCfveNJ9W/Tj54lgbt89mGaGNcteqr7L0elBSSzPyJxRLKUMbWD29D5fqkpa/tMFevwVfDAzBY2w9qbQL1cj2Y1in86q91oZOUYhaEFns4c6pYJ7Tm/G8pP8nQYXaP7El/m9hPFM3XIXGAh7O01+7ottIpacGfSOGkwa7Nufv+IbQnc1RKtqKg3/U3XLPllyfQNZyJ8n3RoVjwaXtTDPs1AACGFLnCuB2HSocNarphK5xKk5E5oeF/YvOI0EGYXzPl5Hs/ExvjJuJm1bhxFRBcIWFEAba7hH+JrPv6RIpEFHr/xWbqZagbRjSr5zRi8GkcG5KDJdOER6NP8ErNaIhOEiyPuPeW9VXzn4ch5s+BOxtyzGvYiXiht5yytpcXvEvK8t9L0issM5fuXRCD2/v/pAgMBAAE=";
+    internal const string LegacyLicenseSigningPublicKeyBase64 = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA41Pt4R+4COqv01HNi5KRVe+Ws0yQjhcaj19XgXO7kZiXjSYOqjaqPPrGDnW93Q/tk5boAic+YyxhaVtEJ4AF9BONKUGmamKKc3Y4M9vO/kZAr3n7t2/h3EVNVoJUWL4Xpe0FL8+Ehr3tbejVayBCZ5xsrrzdzXFRE2CTlP6dFQP9TFsQGzceZu7EIStttZ/VEZcmQQ++BSPgqv41qlfIulU9ufeDDYpi6s4KJQkZIUzcrxVhGdhfBvPE7yELQYn7pXlpvSZfeWuIbFoc1DxpGYmJlQktam6kDUgp/QnKe//V+N5eW0vJM40RnwhxAyiNylbB8ie++QlWgZlac2XL2lAHDrvUOJahsB7G06qTgu8yx17bH27o68V2YZiuLVNpY44ofB1VFn0aadK+rHxvMiQeZ4gC8fauP/5f28R+Iw1H/YM1oIwXOekkaZS+J0HtYje3Sddu+H0V8/tBA0yKHjNxPRiWrxTYdlNv0vFJ1WpLx1u8UTbQBoj7b2Nqg8aRAgMBAAE=";
+    private static readonly string[] TrustedLicenseSigningPublicKeys =
+    [
+        CurrentLicenseSigningPublicKeyBase64,
+        LegacyLicenseSigningPublicKeyBase64
+    ];
 
     private const string IdentityFileName = "device-identity.json";
     private const string InstalledLicenseFileName = "device-license.hblicense";
@@ -289,12 +295,18 @@ internal static class DeviceLicenseService
 
         var payloadBytes = Convert.FromBase64String(envelope.Payload);
         var signatureBytes = Convert.FromBase64String(envelope.Signature);
-        using (var signer = RSA.Create())
+        var signatureValid = false;
+        foreach (var trustedPublicKey in TrustedLicenseSigningPublicKeys)
         {
-            signer.ImportSubjectPublicKeyInfo(Convert.FromBase64String(LicenseSigningPublicKeyBase64), out _);
+            using var signer = RSA.Create();
+            signer.ImportSubjectPublicKeyInfo(Convert.FromBase64String(trustedPublicKey), out _);
             if (!signer.VerifyData(payloadBytes, signatureBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
-                throw new InvalidOperationException("The license signature is invalid. The file was not issued by the authorized License Generator.");
+                continue;
+            signatureValid = true;
+            break;
         }
+        if (!signatureValid)
+            throw new InvalidOperationException("The license signature is invalid. The file was not issued by an authorized License Generator.");
 
         var payload = JsonSerializer.Deserialize<DeviceLicensePayloadV2>(payloadBytes, JsonOptions)
             ?? throw new InvalidOperationException("The license payload is missing.");
