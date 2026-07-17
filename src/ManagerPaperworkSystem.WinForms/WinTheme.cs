@@ -219,6 +219,12 @@ internal static class WinTheme
     {
         if (string.IsNullOrWhiteSpace(text))
             return text;
+        // Custom grid headings such as "SSN" or "PAY RATE" are already
+        // presentation-ready. Splitting every uppercase character produces
+        // "S S N" and causes otherwise adequate columns to be clipped.
+        var letters = text.Where(char.IsLetter).ToArray();
+        if (letters.Length > 0 && letters.All(char.IsUpper))
+            return text;
         var result = "";
         for (var i = 0; i < text.Length; i++)
         {

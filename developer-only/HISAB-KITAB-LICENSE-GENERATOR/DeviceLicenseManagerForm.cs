@@ -15,15 +15,17 @@ internal sealed class DeviceLicenseManagerForm : Form
     private readonly bool _importRequestOnOpen;
     private readonly string? _expectedBusinessName;
     private readonly string? _expectedSubscriptionKey;
-    private readonly Button _importRequest = AdminTheme.Button("PASTE CUSTOMER ACTIVATION DETAILS", true);
+    private readonly Button _importRequest = AdminTheme.Button("PASTE PROTECTED PC REQUEST", true);
     private readonly Button _issueLicense = AdminTheme.Button("GENERATE / RENEW LICENSE KEY", true);
     private readonly Button _manageBusinesses = AdminTheme.Button("MANAGE BUSINESSES");
     private readonly Button _revokeDevice = AdminTheme.Button("REVOKE SELECTED PC");
     private readonly Button _refresh = AdminTheme.Button("REFRESH");
-    private readonly Label _business = AdminTheme.Label("Business Name: —", AdminTheme.Text, 10.5f, true);
-    private readonly Label _storeGuid = AdminTheme.Label("Store GUID: —", AdminTheme.Muted, 10);
-    private readonly Label _storeZip = AdminTheme.Label("ZIP Code: —", AdminTheme.Muted, 10);
-    private readonly Label _deviceId = AdminTheme.Label("App Serial Number: —", AdminTheme.Copper, 10.5f, true);
+    private readonly TextBox _business = AdminTheme.TextBox();
+    private readonly TextBox _storeGuid = AdminTheme.TextBox();
+    private readonly TextBox _storeZip = AdminTheme.TextBox();
+    private readonly TextBox _storeState = AdminTheme.TextBox();
+    private readonly TextBox _businessType = AdminTheme.TextBox();
+    private readonly TextBox _deviceId = AdminTheme.TextBox();
     private readonly Label _status = AdminTheme.Label("Paste the customer's activation details to begin.", AdminTheme.Muted, 10);
     private readonly NumericUpDown _maxDevices = new() { Minimum = 1, Maximum = 999, Value = 1, Font = AdminTheme.Body(11) };
     private readonly NumericUpDown _maxBusinesses = new() { Minimum = 1, Maximum = 999, Value = 1, Font = AdminTheme.Body(11) };
@@ -41,6 +43,7 @@ internal sealed class DeviceLicenseManagerForm : Form
     private SubscriptionRecord? _subscription;
     private List<DeviceRecord> _deviceRows = new();
     private bool _legacyExpiryAdjusted;
+    private bool _loadingDevices;
 
     public DeviceLicenseManagerForm(
         string licensingConnectionString,
@@ -59,15 +62,15 @@ internal sealed class DeviceLicenseManagerForm : Form
         _expectedBusinessName = string.IsNullOrWhiteSpace(expectedBusinessName) ? null : expectedBusinessName.Trim();
         _expectedSubscriptionKey = string.IsNullOrWhiteSpace(expectedSubscriptionKey) ? null : expectedSubscriptionKey.Trim();
 
-        Text = "HISAB KITAB WORKS - Device License Manager";
+        Text = "HISAB KITAB WORKS - Developer PC Activation";
         BackColor = AdminTheme.Bg;
         ForeColor = AdminTheme.Text;
         Font = AdminTheme.Body();
         Icon = AdminTheme.LoadIcon();
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Font;
-        Size = new Size(1220, 820);
-        MinimumSize = new Size(1060, 700);
+        Size = new Size(1280, 900);
+        MinimumSize = new Size(1120, 760);
         WindowState = FormWindowState.Normal;
         Controls.Add(BuildLayout());
         ConfigureGrid();
@@ -77,7 +80,11 @@ internal sealed class DeviceLicenseManagerForm : Form
         _manageBusinesses.Click += (_, _) => ManageBusinesses();
         _revokeDevice.Click += (_, _) => RevokeSelectedDevice();
         _refresh.Click += (_, _) => RefreshDevices();
-        _devices.SelectionChanged += (_, _) => LoadSelectedDevice();
+        _devices.SelectionChanged += (_, _) =>
+        {
+            if (!_loadingDevices)
+                LoadSelectedDevice();
+        };
         Shown += (_, _) =>
         {
             InitializeSchema();
@@ -97,7 +104,7 @@ internal sealed class DeviceLicenseManagerForm : Form
             Padding = new Padding(18)
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 212));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 354));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
 
@@ -105,7 +112,7 @@ internal sealed class DeviceLicenseManagerForm : Form
         header.Paint += (_, e) => AdminTheme.PaintGradient(e, header.ClientRectangle);
         header.Controls.Add(new Label
         {
-            Text = "DEVICE LICENSE MANAGER",
+            Text = "DEVELOPER PC ACTIVATION",
             Dock = DockStyle.Top,
             Height = 40,
             ForeColor = Color.White,
@@ -114,7 +121,7 @@ internal sealed class DeviceLicenseManagerForm : Form
         });
         header.Controls.Add(new Label
         {
-            Text = "One signed license per paid computer seat",
+            Text = "Verify the protected customer request • renew the same PC • replace a PC • or use another paid seat",
             Dock = DockStyle.Bottom,
             Height = 24,
             ForeColor = AdminTheme.Copper,
@@ -124,8 +131,8 @@ internal sealed class DeviceLicenseManagerForm : Form
         root.Controls.Add(header, 0, 0);
 
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Bg, ColumnCount = 2, Padding = new Padding(0, 12, 0, 10) };
-        top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
-        top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38));
         top.Controls.Add(BuildRequestCard(), 0, 0);
         top.Controls.Add(BuildSubscriptionCard(), 1, 0);
         root.Controls.Add(top, 0, 1);
@@ -174,29 +181,51 @@ internal sealed class DeviceLicenseManagerForm : Form
         card.Dock = DockStyle.Fill;
         card.Margin = new Padding(0, 0, 8, 0);
         card.Padding = new Padding(18, 12, 18, 12);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, RowCount = 6 };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 2, RowCount = 10 };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var requestHeading = AdminTheme.Label("CUSTOMER ACTIVATION DETAILS", AdminTheme.Copper, 10, true);
+        var requestHeading = AdminTheme.Label("CUSTOMER ACTIVATION DETAILS", AdminTheme.Copper, 10.5f, true);
         requestHeading.Dock = DockStyle.Fill;
         layout.Controls.Add(requestHeading, 0, 0);
-        _business.Dock = DockStyle.Fill;
-        _storeGuid.Dock = DockStyle.Fill;
-        _storeZip.Dock = DockStyle.Fill;
-        _deviceId.Dock = DockStyle.Fill;
-        layout.Controls.Add(_business, 0, 1);
-        layout.Controls.Add(_storeGuid, 0, 2);
-        layout.Controls.Add(_storeZip, 0, 3);
-        layout.Controls.Add(_deviceId, 0, 4);
+        layout.SetColumnSpan(requestHeading, 2);
+        AddRequestField(layout, "STORE GUID / DATABASE NAME", _storeGuid, 1, 0, 2);
+        AddRequestField(layout, "STORE NAME", _business, 3, 0, 2);
+        AddRequestField(layout, "STATE", _storeState, 5, 0);
+        AddRequestField(layout, "BUSINESS TYPE", _businessType, 5, 1);
+        AddRequestField(layout, "STORE ZIP", _storeZip, 7, 0);
+        AddRequestField(layout, "PC ID (THIS COMPUTER)", _deviceId, 7, 1);
         _importRequest.Dock = DockStyle.Fill;
         _importRequest.Margin = new Padding(0, 6, 0, 5);
-        layout.Controls.Add(_importRequest, 0, 5);
+        layout.Controls.Add(_importRequest, 0, 9);
+        layout.SetColumnSpan(_importRequest, 2);
         card.Controls.Add(layout);
         return card;
+    }
+
+    private static void AddRequestField(TableLayoutPanel layout, string caption, TextBox field, int row, int column, int span = 1)
+    {
+        var label = AdminTheme.Label(caption, AdminTheme.Muted, 8.5f, true);
+        label.Dock = DockStyle.Fill;
+        field.Dock = DockStyle.Fill;
+        label.Margin = column == 0 ? new Padding(0, 0, span == 1 ? 8 : 0, 0) : new Padding(8, 0, 0, 0);
+        field.Margin = column == 0 ? new Padding(0, 0, span == 1 ? 8 : 0, 0) : new Padding(8, 0, 0, 0);
+        layout.Controls.Add(label, column, row);
+        layout.Controls.Add(field, column, row + 1);
+        if (span > 1)
+        {
+            layout.SetColumnSpan(label, span);
+            layout.SetColumnSpan(field, span);
+        }
     }
 
     private Control BuildSubscriptionCard()
@@ -205,32 +234,42 @@ internal sealed class DeviceLicenseManagerForm : Form
         card.Dock = DockStyle.Fill;
         card.Margin = new Padding(8, 0, 0, 0);
         card.Padding = new Padding(18, 12, 18, 12);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 3, RowCount = 3 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 3, RowCount = 5 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var heading = AdminTheme.Label("SUBSCRIPTION LIMITS", AdminTheme.Copper, 10, true);
+        var heading = AdminTheme.Label("LICENSE & SUBSCRIPTION", AdminTheme.Copper, 10.5f, true);
         heading.Dock = DockStyle.Fill;
         layout.Controls.Add(heading, 0, 0);
         layout.SetColumnSpan(heading, 3);
+        var instructions = AdminTheme.Label("1  Paste protected request\r\n2  Confirm the paid limits\r\n3  Generate the PC activation key", AdminTheme.BlueDark, 9.5f, true);
+        instructions.Dock = DockStyle.Fill;
+        layout.Controls.Add(instructions, 0, 1);
+        layout.SetColumnSpan(instructions, 3);
         var seatsLabel = AdminTheme.Label("PAID PC SEATS", AdminTheme.Muted, 8.5f, true);
         var businessesLabel = AdminTheme.Label("APPROVED BUSINESSES", AdminTheme.Muted, 8.5f, true);
         var expiresLabel = AdminTheme.Label("SUBSCRIPTION EXPIRES", AdminTheme.Muted, 8.5f, true);
         seatsLabel.Dock = DockStyle.Fill;
         businessesLabel.Dock = DockStyle.Fill;
         expiresLabel.Dock = DockStyle.Fill;
-        layout.Controls.Add(seatsLabel, 0, 1);
-        layout.Controls.Add(businessesLabel, 1, 1);
-        layout.Controls.Add(expiresLabel, 2, 1);
+        layout.Controls.Add(seatsLabel, 0, 2);
+        layout.Controls.Add(businessesLabel, 1, 2);
+        layout.Controls.Add(expiresLabel, 2, 2);
         _maxDevices.Dock = DockStyle.Top;
         _maxBusinesses.Dock = DockStyle.Top;
         _expires.Dock = DockStyle.Top;
-        layout.Controls.Add(_maxDevices, 0, 2);
-        layout.Controls.Add(_maxBusinesses, 1, 2);
-        layout.Controls.Add(_expires, 2, 2);
+        layout.Controls.Add(_maxDevices, 0, 3);
+        layout.Controls.Add(_maxBusinesses, 1, 3);
+        layout.Controls.Add(_expires, 2, 3);
+        var note = AdminTheme.Label("A matching PC ID renews the same seat. A new PC ID will ask whether to replace a PC or use another paid seat.", AdminTheme.Muted, 9);
+        note.Dock = DockStyle.Fill;
+        layout.Controls.Add(note, 0, 4);
+        layout.SetColumnSpan(note, 3);
         card.Controls.Add(layout);
         return card;
     }
@@ -257,7 +296,7 @@ internal sealed class DeviceLicenseManagerForm : Form
         _devices.DefaultCellStyle.SelectionBackColor = AdminTheme.Panel2;
         _devices.DefaultCellStyle.SelectionForeColor = AdminTheme.BlueDark;
         _devices.Columns.Add("DeviceName", "Computer");
-        _devices.Columns.Add("DeviceId", "Device ID");
+        _devices.Columns.Add("DeviceId", "PC ID");
         _devices.Columns.Add("Status", "Status");
         _devices.Columns.Add("Activated", "Activated");
         _devices.Columns.Add("Expires", "Expires");
@@ -311,7 +350,38 @@ BEGIN
     );
     CREATE UNIQUE INDEX UX_CustomerBusinesses_Customer_Database
         ON dbo.CustomerBusinesses(CustomerId, DatabaseName);
-END", connection);
+END
+
+IF OBJECT_ID('dbo.DeviceLicenseIssueHistory', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.DeviceLicenseIssueHistory
+    (
+        Id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        ActivationId NVARCHAR(64) NOT NULL,
+        CustomerId INT NOT NULL,
+        LicenseId INT NOT NULL,
+        DeviceId NVARCHAR(64) NOT NULL,
+        StoreGuid NVARCHAR(128) NOT NULL,
+        BusinessName NVARCHAR(200) NOT NULL,
+        StoreZip NVARCHAR(20) NOT NULL,
+        ActivationKey NVARCHAR(MAX) NOT NULL,
+        IssuedUtc DATETIME2 NOT NULL CONSTRAINT DF_DeviceLicenseIssueHistory_IssuedUtc DEFAULT(SYSUTCDATETIME()),
+        ExpiresDate DATETIME2 NOT NULL,
+        IssuedByComputer NVARCHAR(200) NOT NULL,
+        IssueAction NVARCHAR(30) NOT NULL CONSTRAINT DF_DeviceLicenseIssueHistory_IssueAction DEFAULT('Issued'),
+        ReplacedDeviceId NVARCHAR(64) NULL
+    );
+    CREATE UNIQUE INDEX UX_DeviceLicenseIssueHistory_ActivationId
+        ON dbo.DeviceLicenseIssueHistory(ActivationId);
+    CREATE INDEX IX_DeviceLicenseIssueHistory_License_Device
+        ON dbo.DeviceLicenseIssueHistory(LicenseId, DeviceId, IssuedUtc DESC);
+END
+
+IF COL_LENGTH('dbo.DeviceLicenseIssueHistory', 'IssueAction') IS NULL
+    ALTER TABLE dbo.DeviceLicenseIssueHistory ADD IssueAction NVARCHAR(30) NOT NULL
+        CONSTRAINT DF_DeviceLicenseIssueHistory_IssueAction_Legacy DEFAULT('Issued');
+IF COL_LENGTH('dbo.DeviceLicenseIssueHistory', 'ReplacedDeviceId') IS NULL
+    ALTER TABLE dbo.DeviceLicenseIssueHistory ADD ReplacedDeviceId NVARCHAR(64) NULL;", connection);
             command.ExecuteNonQuery();
             SetStatus("Device licensing database is ready.", false);
         }
@@ -340,17 +410,28 @@ END", connection);
                 !string.Equals(request.SubscriptionKey, _expectedSubscriptionKey, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
                     "The PC request subscription key does not match the customer selected on the main License Generator screen.");
+            ValidatePastedField(_storeGuid.Text, request.StoreGuid, "Store GUID");
+            ValidatePastedField(_business.Text, request.BusinessName, "Store Name");
+            ValidatePastedField(_storeZip.Text, request.StoreZip, "Store ZIP");
+            ValidatePastedField(_storeState.Text, request.StoreState, "State");
+            ValidatePastedField(_businessType.Text, request.BusinessType, "Business Type");
+            ValidatePastedField(_deviceId.Text, request.DeviceId, "PC ID");
             _request = request;
-            _business.Text = $"Business Name: {request.BusinessName}";
-            _storeGuid.Text = $"Store GUID: {request.StoreGuid}";
-            _storeZip.Text = $"ZIP Code: {request.StoreZip}  •  PC: {request.DeviceName}";
-            _deviceId.Text = $"App Serial Number: {request.DeviceId}";
+            _business.Text = request.BusinessName;
+            _storeGuid.Text = request.StoreGuid;
+            _storeZip.Text = request.StoreZip;
+            _storeState.Text = request.StoreState;
+            _businessType.Text = request.BusinessType;
+            _deviceId.Text = request.DeviceId;
             LoadSubscription(request.BusinessName, request.StoreGuid, request.SubscriptionKey);
             if (_subscription is null || !string.Equals(_subscription.DatabaseName, request.StoreGuid, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("The Store GUID does not match the database assigned to this customer subscription.");
+            var existingPc = _deviceRows.Any(x => string.Equals(x.DeviceId, request.DeviceId, StringComparison.Ordinal));
             SetStatus(_legacyExpiryAdjusted
                 ? "Activation request verified. The old 100-year expiry was replaced with a one-month renewal date. Confirm it, then generate the License Key."
-                : "Activation request verified. Confirm seats and expiration, then generate the License Key.", false);
+                : existingPc
+                    ? "Protected request verified. This PC ID is already registered, so generating a key will renew the same paid seat."
+                    : "Protected request verified. This is a new PC ID; generating a key will ask whether to replace a PC or use another paid seat.", false);
         }
         catch (Exception ex)
         {
@@ -360,13 +441,20 @@ END", connection);
         }
     }
 
+    private static void ValidatePastedField(string enteredValue, string protectedValue, string fieldName)
+    {
+        if (!string.IsNullOrWhiteSpace(enteredValue) &&
+            !string.Equals(enteredValue.Trim(), protectedValue.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"The manually entered {fieldName} does not match the protected PC request.");
+    }
+
     private void LoadSubscription(string businessName, string storeGuid, string subscriptionKey)
     {
         using var connection = new SqlConnection(_licensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(@"
 SELECT c.Id CustomerId, l.Id LicenseId, c.BusinessName, l.LicenseKey,
-       l.AssignedDatabases, l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate
+       l.AssignedDatabases, l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId = c.Id
 WHERE c.BusinessName = @business
@@ -383,7 +471,7 @@ ORDER BY l.Id DESC", connection);
             matches.Add(new SubscriptionRecord(
                 reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2), reader.GetString(3),
                 reader.IsDBNull(4) ? "" : reader.GetString(4), reader.GetInt32(5), reader.GetInt32(6),
-                reader.GetInt32(7), reader.GetDateTime(8)));
+                reader.GetInt32(7), reader.GetDateTime(8), reader.IsDBNull(9) ? "Accounting" : reader.GetString(9)));
         }
         if (matches.Count == 0)
             throw new InvalidOperationException($"No active customer subscription was found for '{businessName}'. Generate the customer license first.");
@@ -445,14 +533,24 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
                     reader.GetDateTime(7), reader.GetDateTime(8), reader.GetDateTime(9)));
             }
 
-            _devices.Rows.Clear();
-            foreach (var device in _deviceRows)
+            _loadingDevices = true;
+            try
             {
-                var index = _devices.Rows.Add(device.DeviceName, device.DeviceId, device.Status,
-                    device.ActivatedDate.ToString("MM/dd/yyyy"), device.ExpiresDate.ToString("MM/dd/yyyy"));
-                _devices.Rows[index].Tag = device;
+                _devices.Rows.Clear();
+                foreach (var device in _deviceRows)
+                {
+                    var index = _devices.Rows.Add(device.DeviceName, device.DeviceId, device.Status,
+                        device.ActivatedDate.ToString("MM/dd/yyyy"), device.ExpiresDate.ToString("MM/dd/yyyy"));
+                    _devices.Rows[index].Tag = device;
+                }
             }
-            var seatsInUse = _deviceRows.Count(x => x.ExpiresDate.ToUniversalTime() > DateTime.UtcNow);
+            finally
+            {
+                _loadingDevices = false;
+            }
+            var seatsInUse = _deviceRows.Count(x =>
+                string.Equals(x.Status, "Active", StringComparison.OrdinalIgnoreCase) &&
+                x.ExpiresDate.ToUniversalTime() > DateTime.UtcNow);
             SetStatus($"{seatsInUse} of {_maxDevices.Value:0} paid PC seats are assigned for the current subscription period.", false);
         }
         catch (Exception ex)
@@ -472,6 +570,8 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
             SubscriptionKey = _subscription.LicenseKey,
             StoreGuid = _subscription.DatabaseName,
             StoreZip = "",
+            StoreState = "",
+            BusinessType = "",
             AppVersion = "",
             DeviceId = selected.DeviceId,
             InstallationId = selected.InstallationId,
@@ -479,10 +579,12 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
             DevicePublicKey = selected.DevicePublicKey,
             FingerprintHash = selected.FingerprintHash
         };
-        _business.Text = $"Business Name: {_subscription.BusinessName}";
-        _storeGuid.Text = $"Store GUID: {_subscription.DatabaseName}";
-        _storeZip.Text = $"ZIP Code: saved activation  •  PC: {selected.DeviceName}";
-        _deviceId.Text = $"App Serial Number: {selected.DeviceId}";
+        _business.Text = _subscription.BusinessName;
+        _storeGuid.Text = _subscription.DatabaseName;
+        _storeZip.Text = "";
+        _storeState.Text = "";
+        _businessType.Text = "";
+        _deviceId.Text = selected.DeviceId;
     }
 
     private void IssueLicense()
@@ -497,7 +599,7 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
             SetStatus("One-time signing setup is required. Close this window, select Set Up / Restore Key, then paste the activation request again.", true);
             MessageBox.Show(this,
                 "One-time signing setup is required on this developer PC.\r\n\r\n" +
-                "1. Close Device License Manager.\r\n" +
+                "1. Close Developer PC Activation.\r\n" +
                 "2. Select SET UP / RESTORE KEY on the main generator.\r\n" +
                 "3. Restore the encrypted signing-key backup.\r\n" +
                 "4. Paste the activation request again and generate the License Key.",
@@ -512,11 +614,25 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
 
         try
         {
+            ValidatePastedField(_storeGuid.Text, _request.StoreGuid, "Store GUID");
+            ValidatePastedField(_business.Text, _request.BusinessName, "Store Name");
+            ValidatePastedField(_storeZip.Text, _request.StoreZip, "Store ZIP");
+            ValidatePastedField(_storeState.Text, _request.StoreState, "State");
+            ValidatePastedField(_businessType.Text, _request.BusinessType, "Business Type");
+            ValidatePastedField(_deviceId.Text, _request.DeviceId, "PC ID");
+            var seatChoice = ChoosePcSeatAction(_request, (int)_maxDevices.Value);
+            if (seatChoice is null)
+            {
+                SetStatus("PC activation was cancelled. No license key was generated and no database record was changed.", false);
+                return;
+            }
             var expiresUtc = DateTime.SpecifyKind(_expires.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Local).ToUniversalTime();
             var payload = BuildPayload(_subscription, _request, (int)_maxDevices.Value, (int)_maxBusinesses.Value, expiresUtc);
-            RegisterDeviceAndUpdateSubscription(_subscription, _request, (int)_maxDevices.Value, (int)_maxBusinesses.Value, expiresUtc);
             var licenseJson = BuildSignedLicense(payload);
             var formattedLicense = ActivationCodeCodec.FormatLicense(payload, licenseJson);
+            RegisterDeviceAndUpdateSubscription(
+                _subscription, _request, (int)_maxDevices.Value, (int)_maxBusinesses.Value, expiresUtc,
+                payload.ActivationId, formattedLicense, seatChoice);
             ActivationCodeDialog.ShowLicense(
                 this,
                 formattedLicense,
@@ -529,6 +645,22 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
         {
             SetStatus(ex.Message, true);
         }
+    }
+
+    private PcSeatChoice? ChoosePcSeatAction(DeviceLicenseRequestV2 request, int maximumSeats)
+    {
+        if (_deviceRows.Any(x => string.Equals(x.DeviceId, request.DeviceId, StringComparison.Ordinal)))
+            return new PcSeatChoice(PcSeatAction.RenewSamePc);
+
+        var assigned = _deviceRows
+            .Where(x => string.Equals(x.Status, "Active", StringComparison.OrdinalIgnoreCase) &&
+                        x.ExpiresDate.ToUniversalTime() > DateTime.UtcNow)
+            .Select(x => new RegisteredPcOption(x.DeviceId, x.DeviceName, x.Status, x.ExpiresDate))
+            .ToList();
+        if (assigned.Count == 0)
+            return new PcSeatChoice(PcSeatAction.FirstPc);
+
+        return PcSeatDecisionForm.Choose(this, request.DeviceId, request.DeviceName, assigned, maximumSeats);
     }
 
     private void ManageBusinesses()
@@ -549,14 +681,48 @@ FROM dbo.LicenseDevices WHERE LicenseId = @licenseId ORDER BY Status, DeviceName
         SetStatus("Business directory updated. Issue or renew the PC license to include the current approved list.", false);
     }
 
-    private void RegisterDeviceAndUpdateSubscription(SubscriptionRecord subscription, DeviceLicenseRequestV2 request, int maxDevices, int maxBusinesses, DateTime expiresUtc)
+    private void RegisterDeviceAndUpdateSubscription(
+        SubscriptionRecord subscription,
+        DeviceLicenseRequestV2 request,
+        int maxDevices,
+        int maxBusinesses,
+        DateTime expiresUtc,
+        string activationId,
+        string activationKey,
+        PcSeatChoice seatChoice)
     {
         using var connection = new SqlConnection(_licensingConnectionString);
         connection.Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        using (var owner = new SqlCommand(
+                   "SELECT LicenseId FROM dbo.LicenseDevices WITH (UPDLOCK, HOLDLOCK) WHERE DeviceId=@deviceId",
+                   connection, transaction))
+        {
+            owner.Parameters.AddWithValue("@deviceId", request.DeviceId);
+            var existingLicenseId = owner.ExecuteScalar();
+            if (existingLicenseId is not null && existingLicenseId != DBNull.Value &&
+                Convert.ToInt32(existingLicenseId) != subscription.LicenseId)
+                throw new InvalidOperationException(
+                    "This protected PC ID is already registered to a different client subscription. Review that account before continuing.");
+        }
+
+        if (seatChoice.Action == PcSeatAction.ReplacePc)
+        {
+            using var replace = new SqlCommand(@"
+UPDATE dbo.LicenseDevices
+SET Status='Replaced', RevokedDate=SYSUTCDATETIME(), Notes='Replaced by PC ID ' + @newDeviceId
+WHERE LicenseId=@licenseId AND DeviceId=@replacedDeviceId", connection, transaction);
+            replace.Parameters.AddWithValue("@newDeviceId", request.DeviceId);
+            replace.Parameters.AddWithValue("@licenseId", subscription.LicenseId);
+            replace.Parameters.AddWithValue("@replacedDeviceId", seatChoice.ReplacedPcId ?? "");
+            if (replace.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("The selected old PC could not be replaced. Refresh the registered PC list and try again.");
+        }
+
         using var count = new SqlCommand(@"
 SELECT COUNT(*) FROM dbo.LicenseDevices WITH (UPDLOCK, HOLDLOCK)
-WHERE LicenseId = @licenseId AND ExpiresDate > SYSUTCDATETIME() AND DeviceId <> @deviceId", connection, transaction);
+WHERE LicenseId = @licenseId AND Status='Active'
+  AND ExpiresDate > SYSUTCDATETIME() AND DeviceId <> @deviceId", connection, transaction);
         count.Parameters.AddWithValue("@licenseId", subscription.LicenseId);
         count.Parameters.AddWithValue("@deviceId", request.DeviceId);
         var otherActive = Convert.ToInt32(count.ExecuteScalar());
@@ -600,6 +766,27 @@ END", connection, transaction);
         upsert.Parameters.AddWithValue("@fingerprint", request.FingerprintHash);
         upsert.Parameters.AddWithValue("@expires", expiresUtc);
         upsert.ExecuteNonQuery();
+
+        using var history = new SqlCommand(@"
+INSERT dbo.DeviceLicenseIssueHistory
+    (ActivationId, CustomerId, LicenseId, DeviceId, StoreGuid, BusinessName, StoreZip,
+     ActivationKey, ExpiresDate, IssuedByComputer, IssueAction, ReplacedDeviceId)
+VALUES
+    (@activationId, @customerId, @licenseId, @deviceId, @storeGuid, @businessName, @storeZip,
+     @activationKey, @expires, @issuedByComputer, @issueAction, @replacedDeviceId)", connection, transaction);
+        history.Parameters.AddWithValue("@activationId", activationId);
+        history.Parameters.AddWithValue("@customerId", subscription.CustomerId);
+        history.Parameters.AddWithValue("@licenseId", subscription.LicenseId);
+        history.Parameters.AddWithValue("@deviceId", request.DeviceId);
+        history.Parameters.AddWithValue("@storeGuid", request.StoreGuid);
+        history.Parameters.AddWithValue("@businessName", request.BusinessName);
+        history.Parameters.AddWithValue("@storeZip", request.StoreZip);
+        history.Parameters.AddWithValue("@activationKey", activationKey);
+        history.Parameters.AddWithValue("@expires", expiresUtc);
+        history.Parameters.AddWithValue("@issuedByComputer", Environment.MachineName);
+        history.Parameters.AddWithValue("@issueAction", seatChoice.Action.ToString());
+        history.Parameters.AddWithValue("@replacedDeviceId", (object?)seatChoice.ReplacedPcId ?? DBNull.Value);
+        history.ExecuteNonQuery();
         transaction.Commit();
     }
 
@@ -633,12 +820,15 @@ END", connection, transaction);
 
         return new DeviceLicensePayloadV2
         {
+            ActivationId = Guid.NewGuid().ToString("N"),
             LicenseKey = subscription.LicenseKey,
             CustomerId = subscription.CustomerId,
             LicenseId = subscription.LicenseId,
             BusinessName = subscription.BusinessName,
             StoreGuid = subscription.DatabaseName,
             StoreZip = request.StoreZip,
+            StoreState = request.StoreState,
+            BusinessType = request.BusinessType,
             AppVersion = request.AppVersion,
             DeviceId = request.DeviceId,
             InstallationId = request.InstallationId,
@@ -648,6 +838,7 @@ END", connection, transaction);
             MaxDevices = maxDevices,
             MaxStores = maxBusinesses,
             MaxUsers = subscription.MaxUsers,
+            EnabledServices = subscription.EnabledServices,
             IssuedUtc = DateTime.UtcNow.ToString("O"),
             ExpiresUtc = expiresUtc.ToString("O"),
             EncryptedConnectionKey = primary.EncryptedConnectionKey,
@@ -746,7 +937,7 @@ UPDATE dbo.LicenseDevices SET Status='Revoked', RevokedDate=SYSUTCDATETIME()
 WHERE Id=@id", connection);
             command.Parameters.AddWithValue("@id", selected.Id);
             command.ExecuteNonQuery();
-            SetStatus($"{selected.DeviceName} was revoked and cannot be renewed. Its seat remains reserved until the current license expires on {selected.ExpiresDate:MM/dd/yyyy}.", false);
+            SetStatus($"{selected.DeviceName} was revoked. Its paid seat is now available for a replacement PC; its already-installed offline key can remain valid until {selected.ExpiresDate:MM/dd/yyyy}.", false);
             RefreshDevices();
         }
         catch (Exception ex)
@@ -769,7 +960,7 @@ WHERE Id=@id", connection);
     }
 
     private sealed record SubscriptionRecord(int CustomerId, int LicenseId, string BusinessName, string LicenseKey,
-        string DatabaseName, int MaxStores, int MaxUsers, int MaxDevices, DateTime ExpiresDate);
+        string DatabaseName, int MaxStores, int MaxUsers, int MaxDevices, DateTime ExpiresDate, string EnabledServices);
 
     private sealed record DeviceRecord(int Id, string DeviceId, string InstallationId, string DeviceName,
         string DevicePublicKey, string FingerprintHash, string Status, DateTime ActivatedDate,

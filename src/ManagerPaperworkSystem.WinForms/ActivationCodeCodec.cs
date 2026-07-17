@@ -14,8 +14,10 @@ internal static class ActivationCodeCodec
         => $"HISAB KITAB ACTIVATION REQUEST\r\n" +
            $"Store GUID: {request.StoreGuid}\r\n" +
            $"Store Name: {request.BusinessName}\r\n" +
+           $"State: {request.StoreState}\r\n" +
+           $"Business Type: {request.BusinessType}\r\n" +
            $"ZIP Code: {request.StoreZip}\r\n" +
-           $"App Serial Number: {request.DeviceId}\r\n" +
+           $"PC ID: {request.DeviceId}\r\n" +
            $"App Version: {request.AppVersion}\r\n\r\n" +
            $"Request Code:\r\n{Encode(RequestPrefix, request)}";
 
@@ -24,11 +26,49 @@ internal static class ActivationCodeCodec
 
     public static string FormatLicense(DeviceLicensePayloadV2 payload, string licenseJson)
         => $"HISAB KITAB LICENSE ACTIVATION\r\n" +
+           $"License Key: {DisplayLicenseKey(payload)}\r\n" +
            $"Store GUID: {payload.StoreGuid}\r\n" +
            $"Store Name: {payload.BusinessName}\r\n" +
+           $"State: {payload.StoreState}\r\n" +
+           $"Business Type: {payload.BusinessType}\r\n" +
            $"ZIP Code: {payload.StoreZip}\r\n" +
-           $"App Serial Number: {payload.DeviceId}\r\n\r\n" +
-           $"License Key:\r\n{EncodeRaw(LicensePrefix, licenseJson)}";
+           $"PC ID: {payload.DeviceId}\r\n\r\n" +
+           $"Protected License Code:\r\n{EncodeRaw(LicensePrefix, licenseJson)}";
+
+    public static string DisplayLicenseKey(DeviceLicensePayloadV2 payload)
+    {
+        var source = new string((payload.ActivationId ?? "").Where(Uri.IsHexDigit).ToArray()).ToUpperInvariant();
+        if (source.Length < 16)
+            source = Guid.NewGuid().ToString("N").ToUpperInvariant();
+        return $"HKL-{source[..4]}-{source[4..8]}-{source[8..12]}-{source[12..16]}";
+    }
+
+    public static string? TryExtractDisplayLicenseKey(string activationText)
+    {
+        foreach (var line in (activationText ?? "").Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+        {
+            const string label = "License Key:";
+            if (!line.TrimStart().StartsWith(label, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var candidate = line[(line.IndexOf(label, StringComparison.OrdinalIgnoreCase) + label.Length)..].Trim();
+            if (candidate.StartsWith("HKL-", StringComparison.OrdinalIgnoreCase))
+                return candidate.ToUpperInvariant();
+        }
+
+        try
+        {
+            var licenseJson = DecodeLicenseJson(activationText ?? "");
+            var envelope = JsonSerializer.Deserialize<DeviceLicenseEnvelopeV2>(licenseJson, JsonOptions);
+            var payload = envelope is null
+                ? null
+                : JsonSerializer.Deserialize<DeviceLicensePayloadV2>(Convert.FromBase64String(envelope.Payload), JsonOptions);
+            return payload is null ? null : DisplayLicenseKey(payload);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     public static string DecodeLicenseJson(string text)
         => DecodeRaw(LicensePrefix, text, "license key");

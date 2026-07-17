@@ -155,11 +155,11 @@ public static class SelectedOptionReportPdf
         });
     }
 
-    public static void GenerateProfitLoss(string storeName, string storeAddress, DateOnly from, DateOnly to, decimal grossSales, decimal salesTax, decimal purchases, decimal cashPayouts, decimal checkPayouts, string outputPath)
+    public static void GenerateProfitLoss(string storeName, string storeAddress, DateOnly from, DateOnly to, decimal grossSales, decimal salesTax, decimal purchases, decimal cashPayouts, decimal checkPayouts, decimal payroll, string outputPath)
     {
         var netSales = grossSales;
         var cogs = purchases;
-        var expenses = cashPayouts + checkPayouts;
+        var expenses = cashPayouts + checkPayouts + payroll;
         var grossProfit = netSales - cogs;
         var netProfit = grossProfit - expenses;
 
@@ -173,7 +173,7 @@ public static class SelectedOptionReportPdf
                 {
                     Metric(row, "Net Sales", Money(netSales), "Selected period", Green);
                     Metric(row, "COGS", Money(cogs), "Purchases", Red);
-                    Metric(row, "Expenses", Money(expenses), "Cash + check payouts", Red);
+                    Metric(row, "Expenses", Money(expenses), "Payouts + payroll", Red);
                     Metric(row, "Net Profit", Money(netProfit), "Owner view", netProfit < 0 ? Red : Green);
                 });
                 col.Item().Element(c => Table(c,
@@ -184,6 +184,7 @@ public static class SelectedOptionReportPdf
                         new[] { "Cost of Goods Sold", Money(0), Money(cogs), Money(0), Money(-cogs), Percent(netSales == 0 ? 0 : cogs / netSales) },
                         new[] { "Cash Payouts", Money(0), Money(0), Money(cashPayouts), Money(-cashPayouts), Percent(netSales == 0 ? 0 : cashPayouts / netSales) },
                         new[] { "Check Payouts", Money(0), Money(0), Money(checkPayouts), Money(-checkPayouts), Percent(netSales == 0 ? 0 : checkPayouts / netSales) },
+                        new[] { "Payroll", Money(0), Money(0), Money(payroll), Money(-payroll), Percent(netSales == 0 ? 0 : payroll / netSales) },
                         new[] { "Total", Money(netSales), Money(cogs), Money(expenses), Money(netProfit), Percent(netSales == 0 ? 0 : netProfit / netSales) }
                     },
                     new[] { 1.7f, 1f, 1f, 1f, 1f, .8f }));
@@ -192,9 +193,47 @@ public static class SelectedOptionReportPdf
         });
     }
 
+    public static void GeneratePayroll(string storeName, string storeAddress, DateOnly from, DateOnly to, IReadOnlyList<PayrollRun> runs, string outputPath)
+    {
+        var finalized = (runs ?? Array.Empty<PayrollRun>()).Where(x => x.Status == PayrollRunStatus.Finalized).OrderBy(x => x.PayDate).ToList();
+        var rows = finalized.SelectMany(run => run.Entries.Select(entry => new
+        {
+            Run = run.Id,
+            run.PayDate,
+            Period = $"{run.PeriodStart:MM/dd/yy} - {run.PeriodEnd:MM/dd/yy}",
+            entry.EmployeeName,
+            entry.GrossPay,
+            Taxes = entry.FederalWithholding + entry.SocialSecurityWithholding + entry.MedicareWithholding + entry.StateWithholding,
+            Deductions = entry.CashAdvanceDeduction + entry.OtherDeduction,
+            entry.NetPay,
+            entry.CheckNumber
+        })).ToList();
+
+        Create(outputPath, PageSizes.Letter.Landscape(), page =>
+        {
+            BuildHeader(page, storeName, storeAddress, "Payroll Report", "Finalized payroll wages, employee taxes, deductions, net pay, and check references.", from, to);
+            page.Content().PaddingHorizontal(14).PaddingVertical(8).Column(col =>
+            {
+                col.Spacing(8);
+                col.Item().Row(row =>
+                {
+                    Metric(row, "Finalized Runs", finalized.Count.ToString(CultureInfo.InvariantCulture), "Selected pay dates", Blue);
+                    Metric(row, "Gross Payroll", Money(rows.Sum(x => x.GrossPay)), "P&L payroll expense", Copper);
+                    Metric(row, "Employee Taxes", Money(rows.Sum(x => x.Taxes)), "Withheld", Red);
+                    Metric(row, "Net Payroll", Money(rows.Sum(x => x.NetPay)), "Checks issued", Green);
+                });
+                col.Item().Element(c => Table(c,
+                    new[] { "Pay Date", "Period", "Employee", "Gross", "Taxes", "Other Deductions", "Net Pay", "Check #" },
+                    rows.Select(x => new[] { Date(x.PayDate), x.Period, x.EmployeeName, Money(x.GrossPay), Money(x.Taxes), Money(x.Deductions), Money(x.NetPay), x.CheckNumber }).ToList(),
+                    new[] { .85f, 1.25f, 1.65f, .9f, .9f, 1.1f, .9f, .75f }));
+            });
+            BuildFooter(page);
+        });
+    }
+
     public static void GenerateAllReportsBundle(string storeName, string storeAddress, DateOnly from, DateOnly to,
         IReadOnlyList<ShiftLogEntry> shifts, IReadOnlyList<CashOnHandEntry> cash, IReadOnlyList<CheckPayout> checks,
-        IReadOnlyList<PurchaseInvoice> purchases, string outputPath)
+        IReadOnlyList<PurchaseInvoice> purchases, decimal payroll, string outputPath)
     {
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
@@ -211,7 +250,7 @@ public static class SelectedOptionReportPdf
                 col.Item().Row(row =>
                 {
                     Metric(row, "Check Payouts", "Ready", Money(checks.Sum(x => x.CheckAmount)), Green);
-                    Metric(row, "Profit & Loss", "Ready", Money(shifts.Sum(x => x.NetSales) - purchases.Sum(x => x.Total) - cash.Sum(x => x.PayoutAmount) - checks.Sum(x => x.CheckAmount)), Green);
+                    Metric(row, "Profit & Loss", "Ready", Money(shifts.Sum(x => x.NetSales) - purchases.Sum(x => x.Total) - cash.Sum(x => x.PayoutAmount) - checks.Sum(x => x.CheckAmount) - payroll), Green);
                     Metric(row, "Purchases", "Ready", Money(purchases.Sum(x => x.Total)), Green);
                 });
                 col.Item().Element(c => Table(c,
@@ -223,7 +262,8 @@ public static class SelectedOptionReportPdf
                         new[] { "3", "Cash On Hand", "Cash drawer ledger and payouts", "Yes" },
                         new[] { "4", "Check Payouts", "Vendor check register", "Yes" },
                         new[] { "5", "Profit & Loss", "Owner operating statement", "Yes" },
-                        new[] { "6", "Purchases", "Purchase invoice totals", "Yes" }
+                        new[] { "6", "Purchases", "Purchase invoice totals", "Yes" },
+                        new[] { "7", "Payroll", "Finalized gross payroll expense", payroll == 0 ? "No activity" : "Yes" }
                     },
                     new[] { .45f, 1.8f, 3f, .8f }));
             });

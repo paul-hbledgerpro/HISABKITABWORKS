@@ -1,520 +1,282 @@
-using System.Security.Cryptography;
-using System.Text.RegularExpressions;
-using Microsoft.Data.SqlClient;
-
 namespace HisabKitabWorks.LicenseGenerator.WinForms;
 
 internal sealed partial class MainForm : Form
 {
-    private const string LicensingDatabase = "HBLedgerPro_Licensing";
-    private const int DefaultMaxStores = 1;
-    private const int DefaultMaxUsers = 999;
-
     private readonly TextBox _server = AdminTheme.TextBox();
     private readonly TextBox _username = AdminTheme.TextBox();
     private readonly TextBox _password = AdminTheme.TextBox(password: true);
+    private readonly Button _connect = AdminTheme.Button("CONNECT", true);
+    private readonly Button _setupSigning = AdminTheme.Button("SET UP / RESTORE KEY");
+    private readonly Button _backupSigning = AdminTheme.Button("BACK UP KEY");
+    private readonly Label _connectionStatus = AdminTheme.Label("●  Not connected", AdminTheme.Muted, 9);
+    private readonly Label _signingStatus = AdminTheme.Label("●  Checking signing key", AdminTheme.Muted, 9);
+
+    private readonly TextBox _storeGuid = AdminTheme.TextBox();
+    private readonly TextBox _pcId = AdminTheme.TextBox();
     private readonly TextBox _storeName = AdminTheme.TextBox();
-    private readonly TextBox _ownerName = AdminTheme.TextBox();
-    private readonly TextBox _email = AdminTheme.TextBox();
-    private readonly TextBox _zip = AdminTheme.TextBox();
-    private readonly TextBox _phone = AdminTheme.TextBox();
+    private readonly TextBox _storeZip = AdminTheme.TextBox();
+    private readonly ComboBox _databaseName = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDown,
+        FlatStyle = FlatStyle.Flat,
+        BackColor = Color.White,
+        ForeColor = AdminTheme.Text,
+        Font = AdminTheme.Body(10.5f),
+        AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+        AutoCompleteSource = AutoCompleteSource.ListItems
+    };
+    private readonly Button _pasteStoreGuid = AdminTheme.Button("PASTE");
+    private readonly Button _pastePcId = AdminTheme.Button("PASTE");
+    private readonly Button _pasteStoreName = AdminTheme.Button("PASTE");
+    private readonly Button _pasteStoreZip = AdminTheme.Button("PASTE");
     private readonly NumericUpDown _maxDevices = AdminTheme.NumberBox();
     private readonly NumericUpDown _maxBusinesses = AdminTheme.NumberBox();
-    private readonly Button _connect = AdminTheme.Button("CONNECT");
-    private readonly Button _generate = AdminTheme.Button("GENERATE LICENSE KEY", primary: true);
-    private readonly Button _lookup = AdminTheme.Button("LOOK UP");
-    private readonly Button _deviceLicenses = AdminTheme.Button("PASTE ACTIVATION REQUEST", primary: true);
-    private readonly Button _copyKey = AdminTheme.Button("COPY KEY");
-    private readonly Button _exportLicense = AdminTheme.Button("OPEN DEVICE LICENSES");
-    private readonly Button _importSigningKey = AdminTheme.Button("SET UP / RESTORE KEY");
-    private readonly Button _backupSigningKey = AdminTheme.Button("BACK UP KEY");
-    private readonly Label _dbStatus = AdminTheme.Label("●  Not connected", AdminTheme.Muted, 9.5f);
-    private readonly Label _signingStatus = AdminTheme.Label("", AdminTheme.Muted, 9.5f);
-    private readonly Label _keyValue = AdminTheme.Label("—", AdminTheme.Copper, 22, true);
-    private readonly Label _databaseDetails = AdminTheme.Label("No license selected", AdminTheme.Muted, 9.5f);
-    private readonly Label _statusIcon = AdminTheme.Label("\uE946", AdminTheme.Muted, 26);
-    private readonly Label _statusText = AdminTheme.Label("Connect to the licensing database to begin.", AdminTheme.Muted, 10.5f);
+    private readonly DateTimePicker _expires = new()
+    {
+        Format = DateTimePickerFormat.Short,
+        Font = AdminTheme.Body(10.5f),
+        MinDate = DateTime.Today,
+        MaxDate = DateTime.Today.AddYears(5),
+        Value = DateTime.Today.AddMonths(1)
+    };
+    private readonly Button _generate = AdminTheme.Button("GENERATE LICENSE KEY", true);
+    private readonly Button _clear = AdminTheme.Button("CLEAR FORM");
 
-    private Panel _resultCard = null!;
-    private Panel _statusCard = null!;
+    private readonly TextBox _licenseOutput = new()
+    {
+        Multiline = true,
+        ReadOnly = true,
+        ScrollBars = ScrollBars.Vertical,
+        BackColor = Color.White,
+        ForeColor = AdminTheme.Text,
+        BorderStyle = BorderStyle.FixedSingle,
+        Font = new Font("Consolas", 9.5f)
+    };
+    private readonly Label _resultSummary = AdminTheme.Label("No license key generated", AdminTheme.Muted, 9.5f, true);
+    private readonly Button _copyLicense = AdminTheme.Button("COPY LICENSE KEY", true);
+    private readonly Button _saveLicense = AdminTheme.Button("SAVE LICENSE FILE");
+    private readonly Button _manageBusinesses = AdminTheme.Button("MANAGE BUSINESSES");
+    private readonly DataGridView _registeredPcs = new();
+    private readonly Label _status = AdminTheme.Label("Connect to the licensing database, then paste the four customer values.", AdminTheme.Muted, 10);
+
+    private LicenseActivationService? _service;
+    private DeviceLicenseRequestV2? _protectedRequest;
+    private string? _lastLicenseJson;
+    private ClientSubscription? _currentSubscription;
     private bool _isConnected;
 
     public MainForm()
     {
-        Text = "HISAB KITAB WORKS - Admin License Generator";
+        Text = "HISAB KITAB WORKS - Developer License Generator";
+        Icon = AdminTheme.LoadIcon();
         BackColor = AdminTheme.Bg;
         ForeColor = AdminTheme.Text;
         Font = AdminTheme.Body();
-        Icon = AdminTheme.LoadIcon();
         StartPosition = FormStartPosition.CenterScreen;
-        AutoScaleMode = AutoScaleMode.Font;
-        Size = new Size(1320, 860);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        Size = new Size(1380, 900);
         MinimumSize = new Size(1180, 760);
         WindowState = FormWindowState.Normal;
         FormBorderStyle = FormBorderStyle.Sizable;
-        MinimizeBox = true;
-        MaximizeBox = true;
 
         _server.Text = "hbstoreledger-server.database.windows.net";
-        _zip.MaxLength = 10;
+        _storeGuid.CharacterCasing = CharacterCasing.Upper;
+        _pcId.CharacterCasing = CharacterCasing.Upper;
+        _storeZip.MaxLength = 5;
         _generate.Enabled = false;
-        _lookup.Enabled = false;
-        _deviceLicenses.Enabled = false;
-        _copyKey.Enabled = false;
-        _exportLicense.Enabled = false;
-        _backupSigningKey.Enabled = false;
-
+        _copyLicense.Enabled = false;
+        _saveLicense.Enabled = false;
+        _manageBusinesses.Enabled = false;
+        ConfigureGrid();
         Controls.Add(BuildLayout());
         WireEvents();
-        RefreshSigningKeyStatus();
-    }
-
-    private string ConnectionString(string database)
-        => new SqlConnectionStringBuilder
-        {
-            DataSource = _server.Text.Trim(),
-            InitialCatalog = database,
-            UserID = _username.Text.Trim(),
-            Password = _password.Text,
-            TrustServerCertificate = true,
-            Encrypt = true,
-            ConnectTimeout = 30
-        }.ConnectionString;
-
-    private static void EnsureDeviceSeatColumn(SqlConnection connection)
-    {
-        using var command = new SqlCommand(@"
-IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
-    ALTER TABLE dbo.Licenses ADD MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1);", connection);
-        command.ExecuteNonQuery();
+        RefreshSigningStatus();
     }
 
     private void WireEvents()
     {
-        _connect.Click += (_, _) => ConnectToDatabase();
+        _connect.Click += (_, _) => Connect();
+        _setupSigning.Click += (_, _) => RestoreSigningKey();
+        _backupSigning.Click += (_, _) => BackupSigningKey();
+        _pasteStoreGuid.Click += (_, _) => PasteSimpleField(_storeGuid, "Store GUID");
+        _pasteStoreName.Click += (_, _) => PasteSimpleField(_storeName, "Store Name");
+        _pasteStoreZip.Click += (_, _) => PasteSimpleField(_storeZip, "Store ZIP");
+        _pastePcId.Click += (_, _) => PasteProtectedPcId();
         _generate.Click += (_, _) => GenerateLicense();
-        _lookup.Click += (_, _) => LookupLicense();
-        _deviceLicenses.Click += (_, _) => OpenDeviceLicenseManager(importRequest: true);
-        _copyKey.Click += (_, _) => CopyLicenseKey();
-        _exportLicense.Click += (_, _) => OpenDeviceLicenseManager();
-        _importSigningKey.Click += (_, _) => ImportSigningKey();
-        _backupSigningKey.Click += (_, _) => BackupSigningKey();
-
+        _clear.Click += (_, _) => ClearWorkflow();
+        _copyLicense.Click += (_, _) => CopyLicense();
+        _saveLicense.Click += (_, _) => SaveLicense();
+        _manageBusinesses.Click += (_, _) => ManageBusinesses();
         foreach (var field in new[] { _server, _username, _password })
             field.TextChanged += (_, _) => MarkConnectionStale();
     }
 
-    private void ConnectToDatabase()
+    private void Connect()
     {
         if (string.IsNullOrWhiteSpace(_server.Text) ||
             string.IsNullOrWhiteSpace(_username.Text) ||
             string.IsNullOrWhiteSpace(_password.Text))
         {
-            SetDatabaseStatus("Fill in Server, Username, and Password.", AdminTheme.Red);
+            SetStatus("Enter SQL Server, username and password.", true);
             return;
         }
 
-        SetBusy(true, "Connecting to the licensing database...");
+        SetBusy(true, "Connecting and preparing the licensing database...");
         try
         {
-            using var connection = new SqlConnection(ConnectionString(LicensingDatabase));
-            connection.Open();
-            EnsureDeviceSeatColumn(connection);
+            var service = new LicenseActivationService(_server.Text, _username.Text, _password.Text);
+            service.TestAndPrepareDatabase();
+            _service = service;
             _isConnected = true;
-            _generate.Enabled = true;
-            _lookup.Enabled = true;
-            _deviceLicenses.Enabled = true;
-            SetDatabaseStatus("Connected to licensing database", AdminTheme.Green);
-            ShowSuccess("Connection successful. Enter the customer information to generate or look up a license.");
+            LoadDatabaseChoices();
+            _connectionStatus.Text = "●  Connected to licensing database";
+            _connectionStatus.ForeColor = AdminTheme.Green;
+            SetStatus("Connected. Paste Store GUID, PC ID, Store Name and Store ZIP, then generate the key.", false);
         }
         catch (Exception ex)
         {
+            _service = null;
             _isConnected = false;
-            _generate.Enabled = false;
-            _lookup.Enabled = false;
-            _deviceLicenses.Enabled = false;
-            SetDatabaseStatus($"Connection failed: {ex.Message}", AdminTheme.Red);
-            ShowError($"Could not connect to the licensing database.\r\n{ex.Message}");
+            _connectionStatus.Text = "●  Connection failed";
+            _connectionStatus.ForeColor = AdminTheme.Red;
+            SetStatus($"Could not connect: {ex.Message}", true);
         }
         finally
         {
             SetBusy(false);
         }
+    }
+
+    private void PasteSimpleField(TextBox field, string fieldName)
+    {
+        try
+        {
+            var value = Clipboard.GetText().Trim();
+            if (string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException($"Clipboard does not contain {fieldName}.");
+            field.Text = value;
+            SetStatus($"{fieldName} pasted.", false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, true);
+        }
+    }
+
+    private void PasteProtectedPcId()
+    {
+        try
+        {
+            var value = Clipboard.GetText().Trim();
+            if (string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException("Clipboard does not contain a PC ID.");
+
+            if (!value.Contains("HKREQ2-", StringComparison.OrdinalIgnoreCase) && !value.TrimStart().StartsWith('{'))
+            {
+                _protectedRequest = null;
+                _pcId.Text = value;
+                SetStatus("Short PC ID pasted. It can renew a PC already stored in the database; a first-time PC requires the customer's PC ID COPY button.", false);
+                return;
+            }
+
+            var request = ActivationCodeCodec.DecodeRequest(value);
+            DeviceRequestValidator.Validate(request);
+            MergeProtectedField(_storeGuid, request.StoreGuid, "Store GUID");
+            MergeProtectedField(_storeName, request.BusinessName, "Store Name");
+            MergeProtectedField(_storeZip, request.StoreZip, "Store ZIP");
+            _pcId.Text = request.DeviceId;
+            _protectedRequest = request;
+            SuggestExistingDatabase(request.BusinessName);
+            SetStatus($"Protected PC ID verified for {request.DeviceName}. The customer values are ready to generate.", false);
+        }
+        catch (Exception ex)
+        {
+            _protectedRequest = null;
+            SetStatus($"PC ID could not be verified: {ex.Message}", true);
+        }
+    }
+
+    private static void MergeProtectedField(TextBox field, string protectedValue, string fieldName)
+    {
+        if (!string.IsNullOrWhiteSpace(field.Text) &&
+            !string.Equals(field.Text.Trim(), protectedValue.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"The already-pasted {fieldName} does not match the protected PC information.");
+        field.Text = protectedValue;
     }
 
     private void GenerateLicense()
     {
-        if (!_isConnected)
+        if (!_isConnected || _service is null)
         {
-            ShowError("Connect to the licensing database first.");
+            SetStatus("Connect to the licensing database first.", true);
+            return;
+        }
+        if (!SigningKeyStore.IsConfigured)
+        {
+            SetStatus("Set up or restore the private signing key before generating a license.", true);
             return;
         }
 
-        var storeName = _storeName.Text.Trim();
-        var ownerName = _ownerName.Text.Trim();
-        var email = _email.Text.Trim();
-        var zip = _zip.Text.Trim();
-        var phone = _phone.Text.Trim();
-        var maxDevices = (int)_maxDevices.Value;
-        var maxBusinesses = (int)_maxBusinesses.Value;
-
-        if (string.IsNullOrWhiteSpace(storeName))
-        {
-            ShowError("Enter the client account name.");
-            _storeName.Focus();
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(ownerName))
-        {
-            ShowError("Enter the owner name.");
-            _ownerName.Focus();
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(email))
-        {
-            ShowError("Enter the email address.");
-            _email.Focus();
-            return;
-        }
-
-        SetBusy(true, "Checking customer databases and active licenses...");
+        SetBusy(true, "Matching the Store GUID and protected PC ID...");
         try
         {
-            var databaseSelection = FindCustomerDatabase(storeName);
-            if (databaseSelection.Cancelled)
-            {
-                ShowInfo("License generation was cancelled.");
-                return;
-            }
-
-            var databaseName = databaseSelection.DatabaseName;
-            var databaseExists = databaseSelection.Exists;
-
-            if (databaseExists && TryReuseExistingLicense(databaseName))
+            var expiresUtc = DateTime.SpecifyKind(
+                _expires.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Local).ToUniversalTime();
+            var preparation = PrepareActivationWithDeveloperDecisions(expiresUtc);
+            if (preparation is null)
                 return;
 
-            var confirmation = MessageBox.Show(
-                this,
-                $"Database to use:\r\n\r\n{databaseName}\r\n\r\nIs this correct?",
-                "Confirm Customer Database",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-            if (confirmation != DialogResult.Yes)
+            if (!preparation.CreatedStore)
             {
-                ShowInfo("Cancelled. Verify that the store name matches the intended database.");
-                return;
+                _maxDevices.Value = Math.Clamp(preparation.Subscription.MaxDevices, 1, 999);
+                _maxBusinesses.Value = Math.Clamp(
+                    Math.Max((int)_maxBusinesses.Value, preparation.Subscription.MaxStores), 1, 999);
             }
-
-            var licenseKey = GenerateKey();
-            ClearResult();
-
-            using var connection = new SqlConnection(ConnectionString(LicensingDatabase));
-            connection.Open();
-
-            while (true)
+            LoadPcGrid(preparation.Devices);
+            _currentSubscription = preparation.Subscription;
+            _manageBusinesses.Enabled = true;
+            var releaseOtherStores = false;
+            var alreadyRegisteredHere = preparation.Devices.Any(x =>
+                string.Equals(x.DeviceId, preparation.Request.DeviceId, StringComparison.Ordinal));
+            if (!alreadyRegisteredHere && preparation.OtherStoreAssignments.Count > 0)
             {
-                using var keyCheck = new SqlCommand("SELECT COUNT(*) FROM Licenses WHERE LicenseKey = @key", connection);
-                keyCheck.Parameters.AddWithValue("@key", licenseKey);
-                if (Convert.ToInt32(keyCheck.ExecuteScalar()) == 0)
-                    break;
-                licenseKey = GenerateKey();
-            }
-
-            var customerId = 0;
-            var isExistingCustomer = false;
-            using (var customerCheck = new SqlCommand("SELECT TOP 1 Id FROM Customers WHERE BusinessName = @name", connection))
-            {
-                customerCheck.Parameters.AddWithValue("@name", storeName);
-                var existingId = customerCheck.ExecuteScalar();
-                if (existingId is not null && existingId != DBNull.Value)
+                var assignmentChoice = CrossStorePcDecisionForm.Choose(
+                    this,
+                    preparation.Request.DeviceId,
+                    preparation.Subscription.DatabaseName,
+                    preparation.Subscription.BusinessName,
+                    preparation.OtherStoreAssignments);
+                if (assignmentChoice is null)
                 {
-                    customerId = Convert.ToInt32(existingId);
-                    isExistingCustomer = true;
-                }
-            }
-
-            if (isExistingCustomer)
-            {
-                using var update = new SqlCommand(@"
-                    UPDATE Customers
-                    SET OwnerName = @owner, Email = @email, Phone = @phone,
-                        Notes = CASE WHEN @notes = '' THEN Notes ELSE @notes END
-                    WHERE Id = @id", connection);
-                update.Parameters.AddWithValue("@owner", ownerName);
-                update.Parameters.AddWithValue("@email", email);
-                update.Parameters.AddWithValue("@phone", phone);
-                update.Parameters.AddWithValue("@notes", string.IsNullOrWhiteSpace(zip) ? "" : $"Zip: {zip}");
-                update.Parameters.AddWithValue("@id", customerId);
-                update.ExecuteNonQuery();
-
-                using var deactivate = new SqlCommand("UPDATE Licenses SET IsActive = 0 WHERE CustomerId = @customerId", connection);
-                deactivate.Parameters.AddWithValue("@customerId", customerId);
-                deactivate.ExecuteNonQuery();
-            }
-            else
-            {
-                using var insertCustomer = new SqlCommand(@"
-                    INSERT INTO Customers (BusinessName, OwnerName, Email, Phone, Notes)
-                    OUTPUT INSERTED.Id
-                    VALUES (@business, @owner, @email, @phone, @notes)", connection);
-                insertCustomer.Parameters.AddWithValue("@business", storeName);
-                insertCustomer.Parameters.AddWithValue("@owner", ownerName);
-                insertCustomer.Parameters.AddWithValue("@email", email);
-                insertCustomer.Parameters.AddWithValue("@phone", phone);
-                insertCustomer.Parameters.AddWithValue("@notes", string.IsNullOrWhiteSpace(zip) ? "" : $"Zip: {zip}");
-                customerId = Convert.ToInt32(insertCustomer.ExecuteScalar());
-            }
-
-            var expiresDate = DateTime.UtcNow.AddMonths(1);
-            using (var insertLicense = new SqlCommand(@"
-                INSERT INTO Licenses
-                    (CustomerId, LicenseKey, MaxStores, MaxUsers, MaxDevices, MonthlyFee, IsActive, ActivatedDate, ExpiresDate, AssignedDatabases)
-                VALUES
-                    (@customerId, @key, @maxStores, @maxUsers, @maxDevices, 0.00, 1, GETUTCDATE(), @expires, @database)", connection))
-            {
-                insertLicense.Parameters.AddWithValue("@customerId", customerId);
-                insertLicense.Parameters.AddWithValue("@key", licenseKey);
-                insertLicense.Parameters.AddWithValue("@maxStores", maxBusinesses);
-                insertLicense.Parameters.AddWithValue("@maxUsers", DefaultMaxUsers);
-                insertLicense.Parameters.AddWithValue("@maxDevices", maxDevices);
-                insertLicense.Parameters.AddWithValue("@expires", expiresDate);
-                insertLicense.Parameters.AddWithValue("@database", databaseName);
-                insertLicense.ExecuteNonQuery();
-            }
-
-            ShowLicense(licenseKey, $"Primary DB: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Businesses: {maxBusinesses}", canExport: true);
-
-            if (!databaseExists)
-            {
-                try
-                {
-                    using var masterConnection = new SqlConnection(ConnectionString("master"));
-                    masterConnection.Open();
-                    var quotedName = databaseName.Replace("]", "]]", StringComparison.Ordinal);
-                    using var createDatabase = new SqlCommand($"CREATE DATABASE [{quotedName}]", masterConnection) { CommandTimeout = 120 };
-                    createDatabase.ExecuteNonQuery();
-                }
-                catch (Exception databaseError)
-                {
-                    ShowError($"The license was created, but the customer database could not be created.\r\n{databaseError.Message}\r\n\r\nCreate the database manually in SQL Server Management Studio.");
+                    SetStatus("PC registration decision cancelled. No license key was generated.", false);
                     return;
                 }
+                releaseOtherStores = assignmentChoice.Value;
             }
-
-            var action = isExistingCustomer
-                ? "A new key was issued for the existing customer and the old keys were deactivated."
-                : "The customer license was registered and the database was created.";
-            ShowSuccess($"{action}\r\nPaste the customer's activation request to generate the PC License Key.");
-        }
-        catch (Exception ex)
-        {
-            ShowError($"License generation failed.\r\n{ex.Message}");
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
-    private DatabaseSelection FindCustomerDatabase(string storeName)
-    {
-        var safeName = Regex.Replace(storeName, @"[^a-zA-Z0-9 ]", "").Trim();
-        if (string.IsNullOrWhiteSpace(safeName))
-            throw new InvalidOperationException("The store name must contain letters or numbers.");
-
-        var underscoreName = safeName.Replace(" ", "_");
-        var compactName = safeName.Replace(" ", "");
-        var newDatabaseName = $"HisabKitab_{underscoreName}";
-
-        try
-        {
-            var candidates = new List<string>();
-            using var connection = new SqlConnection(ConnectionString("master"));
-            connection.Open();
-            using (var command = new SqlCommand(@"
-                SELECT name FROM sys.databases
-                WHERE name LIKE 'HisabKitab[_]%'
-                   OR name LIKE 'HisabWorks[_]%'
-                   OR name LIKE 'HBStoreLedger[_]%'
-                ORDER BY name", connection))
-            using (var reader = command.ExecuteReader())
+            var seatChoice = ChooseSeatAction(preparation);
+            if (seatChoice is null)
             {
-                while (reader.Read())
-                    candidates.Add(reader.GetString(0));
-            }
-
-            var prefixes = new[] { "HisabKitab_", "HisabWorks_", "HBStoreLedger_" };
-            var exact = candidates.FirstOrDefault(candidate => prefixes.Any(prefix =>
-                candidate.Equals($"{prefix}{safeName}", StringComparison.OrdinalIgnoreCase) ||
-                candidate.Equals($"{prefix}{underscoreName}", StringComparison.OrdinalIgnoreCase)));
-            if (exact is not null)
-                return new DatabaseSelection(exact, true, false);
-
-            var compact = candidates.FirstOrDefault(candidate =>
-            {
-                var databasePart = candidate;
-                foreach (var prefix in prefixes)
-                {
-                    if (candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    {
-                        databasePart = candidate[prefix.Length..];
-                        break;
-                    }
-                }
-                return databasePart.Replace(" ", "").Replace("_", "")
-                    .Equals(compactName, StringComparison.OrdinalIgnoreCase);
-            });
-            if (compact is not null)
-                return new DatabaseSelection(compact, true, false);
-
-            var words = safeName.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                .Where(word => word.Length > 2)
-                .ToArray();
-            var allWordMatches = candidates.Where(candidate =>
-                words.Length > 0 && words.All(word => candidate.Contains(word, StringComparison.OrdinalIgnoreCase))).ToList();
-            var partialMatches = candidates.Where(candidate =>
-                words.Any(word => candidate.Contains(word, StringComparison.OrdinalIgnoreCase))).ToList();
-            var matches = allWordMatches.Count > 0 ? allWordMatches : partialMatches;
-
-            for (var index = 0; index < matches.Count; index++)
-            {
-                var choice = MessageBox.Show(
-                    this,
-                    $"Is this the correct customer database?\r\n\r\n{matches[index]}",
-                    $"Select Database ({index + 1} of {matches.Count})",
-                    MessageBoxButtons.YesNoCancel,
-                    MessageBoxIcon.Question);
-                if (choice == DialogResult.Yes)
-                    return new DatabaseSelection(matches[index], true, false);
-                if (choice == DialogResult.Cancel)
-                    return new DatabaseSelection("", false, true);
-            }
-        }
-        catch (SqlException ex)
-        {
-            ShowInfo($"Could not inspect existing databases. A new database name will be used.\r\n{ex.Message}");
-        }
-
-        return new DatabaseSelection(newDatabaseName, false, false);
-    }
-
-    private bool TryReuseExistingLicense(string databaseName)
-    {
-        using var connection = new SqlConnection(ConnectionString(LicensingDatabase));
-        connection.Open();
-        using var command = new SqlCommand(@"
-            SELECT TOP 1 l.LicenseKey, c.BusinessName, c.Id, l.ExpiresDate, l.MaxStores, l.MaxUsers, l.MaxDevices
-            FROM Licenses l
-            INNER JOIN Customers c ON l.CustomerId = c.Id
-            WHERE l.AssignedDatabases = @database AND l.IsActive = 1
-            ORDER BY l.Id DESC", connection);
-        command.Parameters.AddWithValue("@database", databaseName);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
-            return false;
-
-        var existingKey = reader.GetString(0);
-        var businessName = reader.GetString(1);
-        var customerId = reader.GetInt32(2);
-        var expiresDate = reader.GetDateTime(3);
-        var maxStores = reader.IsDBNull(4) ? DefaultMaxStores : reader.GetInt32(4);
-        var maxUsers = reader.IsDBNull(5) ? DefaultMaxUsers : reader.GetInt32(5);
-        var maxDevices = reader.IsDBNull(6) ? 1 : reader.GetInt32(6);
-        reader.Close();
-        _maxDevices.Value = Math.Clamp(maxDevices, 1, 999);
-        _maxBusinesses.Value = Math.Clamp(maxStores, 1, 999);
-
-        var choice = MessageBox.Show(
-            this,
-            $"An active license already exists for this database.\r\n\r\n" +
-            $"Business: {businessName}\r\nDatabase: {databaseName}\r\nActive Key: {existingKey}\r\n\r\n" +
-            "YES = keep this subscription and open device licensing.\r\n" +
-            "NO = issue a new key and deactivate the old one.",
-            "Active License Found",
-            MessageBoxButtons.YesNoCancel,
-            MessageBoxIcon.Question);
-
-        if (choice == DialogResult.Cancel)
-        {
-            ShowInfo("License generation was cancelled.");
-            return true;
-        }
-        if (choice != DialogResult.Yes)
-            return false;
-
-        ShowLicense(existingKey, $"Primary DB: {databaseName}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Businesses: {maxStores}", canExport: true);
-        ShowSuccess($"The existing subscription for '{businessName}' is ready. Paste the customer's activation request to continue.");
-        return true;
-    }
-
-    private void LookupLicense()
-    {
-        if (!_isConnected)
-        {
-            ShowError("Connect to the licensing database first.");
-            return;
-        }
-
-        var searchName = _storeName.Text.Trim();
-        if (string.IsNullOrWhiteSpace(searchName))
-        {
-            ShowError("Enter a client account name to look up.");
-            _storeName.Focus();
-            return;
-        }
-
-        SetBusy(true, "Searching customer licenses...");
-        ClearResult();
-        try
-        {
-            using var connection = new SqlConnection(ConnectionString(LicensingDatabase));
-            connection.Open();
-            using var command = new SqlCommand(@"
-                SELECT TOP 1 c.BusinessName, c.OwnerName, c.Email, c.Id, c.Phone,
-                       l.LicenseKey, l.IsActive, l.ExpiresDate, l.AssignedDatabases, l.MaxStores, l.MaxUsers, l.MaxDevices
-                FROM Customers c
-                INNER JOIN Licenses l ON l.CustomerId = c.Id
-                WHERE c.BusinessName LIKE @name
-                ORDER BY l.IsActive DESC, l.Id DESC", connection);
-            command.Parameters.AddWithValue("@name", $"%{searchName}%");
-            using var reader = command.ExecuteReader();
-            if (!reader.Read())
-            {
-                ShowError($"No license was found for '{searchName}'. Complete the customer details and generate a new license.");
+                SetStatus("License generation cancelled. Nothing was changed for this PC.", false);
                 return;
             }
+            seatChoice = seatChoice with { ReleaseOtherStoreAssignments = releaseOtherStores };
 
-            var businessName = reader.GetString(0);
-            var ownerName = reader.IsDBNull(1) ? "" : reader.GetString(1);
-            var email = reader.IsDBNull(2) ? "" : reader.GetString(2);
-            var customerId = reader.GetInt32(3);
-            var phone = reader.IsDBNull(4) ? "" : reader.GetString(4);
-            var key = reader.GetString(5);
-            var active = reader.GetBoolean(6);
-            var expires = reader.GetDateTime(7);
-            var database = reader.IsDBNull(8) ? "" : reader.GetString(8);
-            var maxStores = reader.IsDBNull(9) ? DefaultMaxStores : reader.GetInt32(9);
-            var maxUsers = reader.IsDBNull(10) ? DefaultMaxUsers : reader.GetInt32(10);
-            var maxDevices = reader.IsDBNull(11) ? 1 : reader.GetInt32(11);
-
-            _storeName.Text = businessName;
-            _ownerName.Text = ownerName;
-            _email.Text = email;
-            _phone.Text = phone;
-            _maxDevices.Value = Math.Clamp(maxDevices, 1, 999);
-            _maxBusinesses.Value = Math.Clamp(maxStores, 1, 999);
-            ShowLicense(
-                key,
-                $"Primary DB: {database}  |  Customer ID: {customerId}  |  PC Seats: {maxDevices}  |  Businesses: {maxStores}  |  Active: {(active ? "Yes" : "No")}  |  Expires: {expires:MM/dd/yyyy}",
-                canExport: active);
-            if (active)
-                ShowSuccess($"Found the active subscription for '{businessName}'. Open Device Licenses to issue or renew a PC license.");
-            else
-                ShowInfo($"The latest license for '{businessName}' is inactive. Generate a fresh license key.");
+            var businessLimit = Math.Max((int)_maxBusinesses.Value, preparation.Subscription.MaxStores);
+            var issued = _service.Issue(preparation, seatChoice, businessLimit, expiresUtc);
+            _licenseOutput.Text = issued.FormattedLicense;
+            _lastLicenseJson = issued.LicenseJson;
+            _copyLicense.Enabled = true;
+            _saveLicense.Enabled = true;
+            _maxDevices.Value = Math.Clamp(issued.MaxDevices, 1, 999);
+            _maxBusinesses.Value = Math.Clamp(issued.MaxBusinesses, 1, 999);
+            _resultSummary.Text = $"{issued.DisplayLicenseKey}  •  {issued.ResultMessage}  •  Services: {issued.Payload.EnabledServices}  •  PC seats: {issued.MaxDevices}";
+            _resultSummary.ForeColor = AdminTheme.Green;
+            LoadPcGrid(issued.Devices);
+            SetStatus("License key generated. Copy and paste it into the customer's License Activation window, or save the license file.", false);
         }
         catch (Exception ex)
         {
-            ShowError($"License lookup failed.\r\n{ex.Message}");
+            SetStatus($"License generation failed: {ex.Message}", true);
         }
         finally
         {
@@ -522,7 +284,206 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         }
     }
 
-    private void ImportSigningKey()
+    private ActivationPreparation PrepareActivation(DateTime expiresUtc, bool allowBusinessTransfer)
+    {
+        if (_service is null)
+            throw new InvalidOperationException("Connect to the licensing database first.");
+        return _service.Prepare(
+            _storeGuid.Text,
+            _storeName.Text,
+            _storeZip.Text,
+            _databaseName.Text,
+            _pcId.Text,
+            _protectedRequest,
+            (int)_maxDevices.Value,
+            (int)_maxBusinesses.Value,
+            expiresUtc,
+            allowBusinessTransfer);
+    }
+
+    private ActivationPreparation? PrepareActivationWithDeveloperDecisions(DateTime expiresUtc)
+    {
+        var allowBusinessTransfer = false;
+        while (true)
+        {
+            try
+            {
+                return PrepareActivation(expiresUtc, allowBusinessTransfer);
+            }
+            catch (BusinessLimitRequiredException limit)
+            {
+                var choice = MessageBox.Show(this,
+                    $"Adding this store requires {limit.RequiredBusinessCount} licensed business slots.\r\n\r\n" +
+                    $"Increase BUSINESS to {limit.RequiredBusinessCount} and continue?",
+                    "Increase Business Limit",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+                if (choice != DialogResult.Yes)
+                {
+                    SetStatus("Business-limit increase cancelled. No licensing ownership was changed.", false);
+                    return null;
+                }
+                _maxBusinesses.Value = Math.Clamp(limit.RequiredBusinessCount, 1, 999);
+            }
+            catch (BusinessOwnershipConflictException conflict)
+            {
+                var choice = MessageBox.Show(this,
+                    $"{conflict.Message}\r\n\r\n" +
+                    "Do you want to MOVE this existing store into the current client's subscription?\r\n\r\n" +
+                    "YES: Link the existing SQL database here and deactivate its old duplicate licensing assignment.\r\n" +
+                    "NO: Cancel without changing ownership.",
+                    "Existing Store Already Licensed",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (choice != DialogResult.Yes)
+                {
+                    SetStatus("Existing-store transfer cancelled. No licensing ownership was changed.", false);
+                    return null;
+                }
+                allowBusinessTransfer = true;
+            }
+        }
+    }
+
+    private PcSeatChoice? ChooseSeatAction(ActivationPreparation preparation)
+    {
+        var request = preparation.Request;
+        if (preparation.Devices.Any(x => string.Equals(x.DeviceId, request.DeviceId, StringComparison.Ordinal)))
+            return new PcSeatChoice(PcSeatAction.RenewSamePc);
+
+        var active = preparation.Devices
+            .Where(x => string.Equals(x.Status, "Active", StringComparison.OrdinalIgnoreCase) &&
+                        x.ExpiresDate.ToUniversalTime() > DateTime.UtcNow)
+            .Select(x => new RegisteredPcOption(x.DeviceId, x.DeviceName, x.Status, x.ExpiresDate))
+            .ToList();
+        if (active.Count == 0)
+            return new PcSeatChoice(PcSeatAction.FirstPc);
+
+        return PcSeatDecisionForm.Choose(
+            this, request.DeviceId, request.DeviceName, active, preparation.Subscription.MaxDevices);
+    }
+
+    private void CopyLicense()
+    {
+        if (string.IsNullOrWhiteSpace(_licenseOutput.Text))
+            return;
+        try
+        {
+            Clipboard.SetText(_licenseOutput.Text);
+            SetStatus("License key copied. Paste it into the customer activation window.", false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not copy the license key: {ex.Message}", true);
+        }
+    }
+
+    private void SaveLicense()
+    {
+        if (string.IsNullOrWhiteSpace(_lastLicenseJson))
+            return;
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save HISAB KITAB PC License",
+            Filter = "HISAB KITAB PC License (*.hblicense)|*.hblicense",
+            FileName = $"{SafeFileName(_storeName.Text)}_{SafeFileName(_pcId.Text)}.hblicense",
+            AddExtension = true,
+            DefaultExt = ".hblicense"
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        try
+        {
+            File.WriteAllText(dialog.FileName, _lastLicenseJson);
+            SetStatus($"License file saved: {dialog.FileName}", false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not save the license file: {ex.Message}", true);
+        }
+    }
+
+    private void ClearWorkflow()
+    {
+        _storeGuid.Clear();
+        _pcId.Clear();
+        _storeName.Clear();
+        _storeZip.Clear();
+        _databaseName.Text = "";
+        _protectedRequest = null;
+        _lastLicenseJson = null;
+        _currentSubscription = null;
+        _licenseOutput.Clear();
+        _registeredPcs.Rows.Clear();
+        _maxDevices.Value = 1;
+        _maxBusinesses.Value = 1;
+        _expires.Value = DateTime.Today.AddMonths(1);
+        _copyLicense.Enabled = false;
+        _saveLicense.Enabled = false;
+        _manageBusinesses.Enabled = false;
+        _resultSummary.Text = "No license key generated";
+        _resultSummary.ForeColor = AdminTheme.Muted;
+        SetStatus("Form cleared. Paste the next customer request and select its SQL database.", false);
+    }
+
+    private void LoadDatabaseChoices()
+    {
+        if (_service is null)
+            return;
+        var selected = _databaseName.Text;
+        var databases = _service.ListBusinessDatabases();
+        _databaseName.BeginUpdate();
+        try
+        {
+            _databaseName.Items.Clear();
+            _databaseName.Items.AddRange(databases.Cast<object>().ToArray());
+        }
+        finally
+        {
+            _databaseName.EndUpdate();
+        }
+        _databaseName.Text = selected;
+    }
+
+    private void SuggestExistingDatabase(string businessName)
+    {
+        if (!string.IsNullOrWhiteSpace(_databaseName.Text) || _databaseName.Items.Count == 0)
+            return;
+
+        static string Normalize(string value)
+            => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
+
+        var businessKey = Normalize(businessName);
+        if (businessKey.Length == 0)
+            return;
+        var matches = _databaseName.Items.Cast<string>()
+            .Where(database => Normalize(database).Contains(businessKey, StringComparison.Ordinal))
+            .OrderByDescending(database => database.StartsWith("HBStoreLedger_", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(database => database.Length)
+            .ToArray();
+        if (matches.Length > 0)
+            _databaseName.Text = matches[0];
+    }
+
+    private void ManageBusinesses()
+    {
+        if (_service is null || _currentSubscription is null)
+        {
+            SetStatus("Generate or match the primary Store GUID first.", true);
+            return;
+        }
+        using var form = new CustomerBusinessesForm(
+            _service.LicensingConnectionString,
+            _currentSubscription.CustomerId,
+            _currentSubscription.BusinessName,
+            (int)_maxBusinesses.Value);
+        form.ShowDialog(this);
+        SetStatus("Approved businesses updated. Generate the PC license again to include the latest business list.", false);
+    }
+
+    private void RestoreSigningKey()
     {
         using var dialog = new OpenFileDialog
         {
@@ -531,7 +492,6 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
-
         try
         {
             if (Path.GetExtension(dialog.FileName).Equals(".hbsigningbackup", StringComparison.OrdinalIgnoreCase))
@@ -545,12 +505,12 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
             {
                 SigningKeyStore.Import(dialog.FileName);
             }
-            RefreshSigningKeyStatus();
-            ShowSuccess("Signing is ready on this PC. You can now paste an activation request and generate its License Key.");
+            RefreshSigningStatus();
+            SetStatus("Signing key is ready on this developer PC.", false);
         }
         catch (Exception ex)
         {
-            ShowError($"Could not import the signing key.\r\n{ex.Message}");
+            SetStatus($"Could not restore the signing key: {ex.Message}", true);
         }
     }
 
@@ -558,10 +518,9 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     {
         if (!SigningKeyStore.IsConfigured)
         {
-            ShowError("Set up the signing key on this PC first.");
+            SetStatus("Set up the signing key first.", true);
             return;
         }
-
         var password = SigningKeyPasswordForm.PromptForBackup(this);
         if (password is null)
             return;
@@ -575,94 +534,26 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
-
         try
         {
             SigningKeyStore.ExportEncryptedBackup(dialog.FileName, password);
-            ShowSuccess("Encrypted signing-key backup created. Keep the file and its password private. Use Set Up / Restore Key on your work PC.");
+            SetStatus("Encrypted signing-key backup created.", false);
         }
         catch (Exception ex)
         {
-            ShowError($"Could not create the signing-key backup.\r\n{ex.Message}");
+            SetStatus($"Could not back up the signing key: {ex.Message}", true);
         }
     }
 
-    private void OpenDeviceLicenseManager(bool importRequest = false)
-    {
-        if (!_isConnected)
-        {
-            ShowError("Connect to the licensing database first.");
-            return;
-        }
-        var expectedBusiness = string.IsNullOrWhiteSpace(_storeName.Text) ? null : _storeName.Text.Trim();
-        var displayedKey = _keyValue.Text ?? "";
-        var expectedKey = Regex.IsMatch(displayedKey, @"^HBL-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
-            ? displayedKey.Trim()
-            : null;
-        using var form = new DeviceLicenseManagerForm(
-            ConnectionString(LicensingDatabase),
-            _server.Text.Trim(),
-            _username.Text.Trim(),
-            _password.Text,
-            importRequest,
-            expectedBusiness,
-            expectedKey);
-        form.ShowDialog(this);
-    }
-
-    private static string GenerateKey()
-    {
-        const string characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        var bytes = new byte[12];
-        RandomNumberGenerator.Fill(bytes);
-        var key = bytes.Select(value => characters[value % characters.Length]).ToArray();
-        return $"HBL-{new string(key, 0, 4)}-{new string(key, 4, 4)}-{new string(key, 8, 4)}";
-    }
-
-    private void CopyLicenseKey()
-    {
-        if (string.IsNullOrWhiteSpace(_keyValue.Text) || _keyValue.Text == "—")
-            return;
-        try
-        {
-            Clipboard.SetText(_keyValue.Text);
-            ShowSuccess("The license key was copied to the clipboard.");
-        }
-        catch (Exception ex)
-        {
-            ShowError($"Could not copy the license key.\r\n{ex.Message}");
-        }
-    }
-
-    private void ShowLicense(string key, string details, bool canExport)
-    {
-        _keyValue.Text = key;
-        _databaseDetails.Text = details;
-        _copyKey.Enabled = true;
-        _exportLicense.Enabled = canExport;
-        _resultCard.Tag = AdminTheme.Copper;
-        _resultCard.Invalidate();
-    }
-
-    private void ClearResult()
-    {
-        _keyValue.Text = "—";
-        _databaseDetails.Text = "No license selected";
-        _copyKey.Enabled = false;
-        _exportLicense.Enabled = false;
-        _resultCard.Tag = AdminTheme.CopperDark;
-        _resultCard.Invalidate();
-    }
-
-    private void RefreshSigningKeyStatus()
+    private void RefreshSigningStatus()
     {
         var configured = SigningKeyStore.IsConfigured;
         _signingStatus.Text = configured
-            ? "●  Ready - protected for this Windows user"
-            : "●  One-time setup required before issuing licenses";
-        _signingStatus.ForeColor = configured ? AdminTheme.Green : AdminTheme.Muted;
-        _importSigningKey.Text = configured ? "RESTORE / REPLACE KEY" : "SET UP / RESTORE KEY";
-        _backupSigningKey.Enabled = configured;
+            ? "●  Signing ready for this Windows user"
+            : "●  Signing setup required";
+        _signingStatus.ForeColor = configured ? AdminTheme.Green : AdminTheme.Red;
+        _setupSigning.Text = configured ? "RESTORE / REPLACE KEY" : "SET UP / RESTORE KEY";
+        _backupSigning.Enabled = configured;
     }
 
     private void MarkConnectionStale()
@@ -670,15 +561,41 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         if (!_isConnected)
             return;
         _isConnected = false;
+        _service = null;
+        _connectionStatus.Text = "●  Connection settings changed - reconnect";
+        _connectionStatus.ForeColor = AdminTheme.Muted;
         _generate.Enabled = false;
-        _lookup.Enabled = false;
-        SetDatabaseStatus("Connection settings changed - reconnect", AdminTheme.Muted);
     }
 
-    private void SetDatabaseStatus(string text, Color color)
+    private void ConfigureGrid()
     {
-        _dbStatus.Text = $"●  {text}";
-        _dbStatus.ForeColor = color;
+        _registeredPcs.BackgroundColor = Color.White;
+        _registeredPcs.ForeColor = AdminTheme.Text;
+        _registeredPcs.GridColor = AdminTheme.Panel2;
+        _registeredPcs.BorderStyle = BorderStyle.FixedSingle;
+        _registeredPcs.ReadOnly = true;
+        _registeredPcs.AllowUserToAddRows = false;
+        _registeredPcs.AllowUserToDeleteRows = false;
+        _registeredPcs.RowHeadersVisible = false;
+        _registeredPcs.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _registeredPcs.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _registeredPcs.EnableHeadersVisualStyles = false;
+        _registeredPcs.ColumnHeadersDefaultCellStyle.BackColor = AdminTheme.Blue;
+        _registeredPcs.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
+        _registeredPcs.ColumnHeadersDefaultCellStyle.Font = AdminTheme.Bold(9);
+        _registeredPcs.DefaultCellStyle.SelectionBackColor = AdminTheme.Panel2;
+        _registeredPcs.DefaultCellStyle.SelectionForeColor = AdminTheme.BlueDark;
+        _registeredPcs.Columns.Add("Computer", "Computer");
+        _registeredPcs.Columns.Add("PcId", "PC ID");
+        _registeredPcs.Columns.Add("Status", "Status");
+        _registeredPcs.Columns.Add("Expires", "Expires");
+    }
+
+    private void LoadPcGrid(IEnumerable<RegisteredLicensePc> devices)
+    {
+        _registeredPcs.Rows.Clear();
+        foreach (var pc in devices)
+            _registeredPcs.Rows.Add(pc.DeviceName, pc.DeviceId, pc.Status, pc.ExpiresDate.ToString("MM/dd/yyyy"));
     }
 
     private void SetBusy(bool busy, string? message = null)
@@ -686,27 +603,22 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
         UseWaitCursor = busy;
         _connect.Enabled = !busy;
         _generate.Enabled = !busy && _isConnected;
-        _lookup.Enabled = !busy && _isConnected;
-        _deviceLicenses.Enabled = !busy && _isConnected;
-        _importSigningKey.Enabled = !busy;
-        _backupSigningKey.Enabled = !busy && SigningKeyStore.IsConfigured;
+        _setupSigning.Enabled = !busy;
+        _backupSigning.Enabled = !busy && SigningKeyStore.IsConfigured;
         if (busy && !string.IsNullOrWhiteSpace(message))
-            ShowInfo(message);
+            SetStatus(message, false);
     }
 
-    private void ShowError(string message) => SetStatus(message, AdminTheme.Red, "\uEA39");
-    private void ShowSuccess(string message) => SetStatus(message, AdminTheme.Green, "\uE73E");
-    private void ShowInfo(string message) => SetStatus(message, AdminTheme.Copper, "\uE946");
-
-    private void SetStatus(string message, Color color, string glyph)
+    private void SetStatus(string message, bool error)
     {
-        _statusText.Text = message;
-        _statusText.ForeColor = color;
-        _statusIcon.Text = glyph;
-        _statusIcon.ForeColor = color;
-        _statusCard.Tag = color;
-        _statusCard.Invalidate();
+        _status.Text = message;
+        _status.ForeColor = error ? AdminTheme.Red : AdminTheme.Green;
     }
 
-    private sealed record DatabaseSelection(string DatabaseName, bool Exists, bool Cancelled);
+    private static string SafeFileName(string value)
+    {
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+            value = value.Replace(invalid, '_');
+        return value.Replace(' ', '_');
+    }
 }

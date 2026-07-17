@@ -228,6 +228,12 @@ public sealed class ReportService : IReportService
             Purchases = purchases.Sum(x => x.Total)
         };
 
+        data.Payroll = await db.PayrollEntries.AsNoTracking()
+            .Where(x => x.PayrollRun!.StoreId == storeId && x.PayrollRun.Status == PayrollRunStatus.Finalized &&
+                        x.PayrollRun.PayDate >= from && x.PayrollRun.PayDate <= to)
+            .SumAsync(x => (decimal?)x.GrossPay, ct) ?? 0m;
+        var hasFinalizedPayroll = data.Payroll > 0;
+
         // Bank Statement Transactions
         try
         {
@@ -257,7 +263,7 @@ public sealed class ReportService : IReportService
                 {
                     if (cat.Contains("utilit")) data.Utilities += txn.TotalDebit;
                     else if (cat.Contains("rent") || cat.Contains("lease")) data.Rent += txn.TotalDebit;
-                    else if (cat.Contains("payroll") || cat.Contains("salary") || cat.Contains("wage")) data.Payroll += txn.TotalDebit;
+                    else if ((cat.Contains("payroll") || cat.Contains("salary") || cat.Contains("wage")) && !hasFinalizedPayroll) data.Payroll += txn.TotalDebit;
                     else if (cat.Contains("insurance")) data.Insurance += txn.TotalDebit;
                     else if (cat.Contains("bank") || cat.Contains("fee") || cat.Contains("service charge")) data.BankFees += txn.TotalDebit;
                     else if (cat.Contains("tax")) data.Taxes += txn.TotalDebit;
@@ -289,7 +295,24 @@ public sealed class ReportService : IReportService
 
         SelectedOptionReportPdf.GenerateProfitLoss(storeName, storeAddress, from, to,
             data.GrossSales, data.SalesTax, data.Purchases,
-            data.CashPayouts, data.CheckPayouts, outputPdfPath);
+            data.CashPayouts, data.CheckPayouts, data.Payroll, outputPdfPath);
+    }
+
+    #endregion
+
+    #region Payroll
+
+    public async Task GeneratePayrollPdfAsync(DateOnly from, DateOnly to, string outputPdfPath, CancellationToken ct = default)
+    {
+        PdfRuntime.EnsureAvailableOrThrow();
+        var (storeId, storeName, storeAddress) = await GetCurrentStoreAsync(ct);
+        using var db = CreateDb();
+        var runs = await db.PayrollRuns.AsNoTracking()
+            .Include(x => x.Entries)
+            .Where(x => x.StoreId == storeId && x.Status == PayrollRunStatus.Finalized && x.PayDate >= from && x.PayDate <= to)
+            .OrderBy(x => x.PayDate)
+            .ToListAsync(ct);
+        SelectedOptionReportPdf.GeneratePayroll(storeName, storeAddress, from, to, runs, outputPdfPath);
     }
 
     #endregion
@@ -326,7 +349,11 @@ public sealed class ReportService : IReportService
             .OrderBy(x => x.InvoiceDate)
             .ToListAsync(ct);
 
-        SelectedOptionReportPdf.GenerateAllReportsBundle(storeName, storeAddress, from, to, effShifts, effCash, effChecks, purchases, outputPdfPath);
+        var payroll = await db.PayrollEntries.AsNoTracking()
+            .Where(x => x.PayrollRun!.StoreId == storeId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate >= from && x.PayrollRun.PayDate <= to)
+            .SumAsync(x => (decimal?)x.GrossPay, ct) ?? 0m;
+
+        SelectedOptionReportPdf.GenerateAllReportsBundle(storeName, storeAddress, from, to, effShifts, effCash, effChecks, purchases, payroll, outputPdfPath);
     }
 
     private static List<T> EffectiveRows<T>(IEnumerable<T> all,

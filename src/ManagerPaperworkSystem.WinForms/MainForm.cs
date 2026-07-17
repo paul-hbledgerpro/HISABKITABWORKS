@@ -17,7 +17,7 @@ using UglyToad.PdfPig;
 
 namespace ManagerPaperworkSystem.WinForms;
 
-internal sealed class MainForm : Form
+internal sealed partial class MainForm : Form
 {
     private readonly IServiceProvider _services;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
@@ -61,9 +61,7 @@ internal sealed class MainForm : Form
             CurrentStoreId = _loginStoreConnectionId
         };
         _purchaseService = new PurchaseService(new StoreDbContextFactory(_storeConnections), _paths);
-        foreach (var kvp in AppBootstrap.LoadStoreConnections())
-            if (int.TryParse(kvp.Key, out var id))
-                _storeConnections.RegisterStore(id, kvp.Value);
+        ReloadLicensedStoreConnections();
         if (_reportService is ReportService concreteReportService)
             concreteReportService.SetStoreConnectionService(_storeConnections);
 
@@ -217,6 +215,10 @@ internal sealed class MainForm : Form
         AddNav("Bank Statement", "Bank Statement", false);
         AddNav("Product Costs", "Product Costs", false);
         AddNav("Price Alerts", "Price Alerts", false);
+        if (LicenseRuntime.HasService("Payroll"))
+            AddNav("Payroll", "Payroll", true);
+        if (LicenseRuntime.HasService("Scheduling"))
+            AddNav("Scheduling", "Scheduling", true);
         AddNav("Profit & Loss", "Profit & Loss", false);
         AddNav("Reports", "Reports", false);
         AddSection("ADMIN");
@@ -283,6 +285,8 @@ internal sealed class MainForm : Form
             "Bank Statement" => "\uE825",
             "Product Costs" => "\uE71B",
             "Price Alerts" => "\uE7BA",
+            "Payroll" => "\uE8C7",
+            "Scheduling" => "\uE787",
             "Profit & Loss" => "\uE9D9",
             "Reports" => "\uE749",
             "Stores" => "\uE719",
@@ -318,6 +322,8 @@ internal sealed class MainForm : Form
                 "Bank Statement" => BuildBankStatement(),
                 "Product Costs" => BuildProductCosts(),
                 "Price Alerts" => BuildPriceAlerts(),
+                "Payroll" => BuildPayroll(),
+                "Scheduling" => BuildScheduling(),
                 "Profit & Loss" => BuildProfitLoss(),
                 "Reports" => BuildReports(),
                 _ => BuildDashboard()
@@ -420,7 +426,7 @@ internal sealed class MainForm : Form
             _storeCombo.DataSource = stores;
             _storeCombo.DisplayMember = nameof(Store.Name);
             _storeCombo.ValueMember = nameof(Store.Id);
-            var selected = stores.FirstOrDefault(s => s.Id == _loginStoreConnectionId)
+            var selected = stores.FirstOrDefault(s => s.Id == _currentConnectionStoreId)
                 ?? stores.FirstOrDefault(s => StoreNamesMatch(s.Name, _session.StoreName))
                 ?? stores.FirstOrDefault();
             if (selected is not null)
@@ -540,7 +546,7 @@ internal sealed class MainForm : Form
         return ModuleShell("\uE783", module, "This section hit an error, but the app is still usable.", panel);
     }
 
-    private void OpenAdminForm<T>() where T : Form
+    private async void OpenAdminForm<T>() where T : Form
     {
         if (!_session.IsAdmin)
         {
@@ -550,7 +556,17 @@ internal sealed class MainForm : Form
 
         using var form = _services.GetRequiredService<T>();
         form.ShowDialog(this);
-        _ = LoadStoresAsync();
+        ReloadLicensedStoreConnections();
+        await LoadStoresAsync();
+        ShowModule(_currentModule);
+    }
+
+    private void ReloadLicensedStoreConnections()
+    {
+        var connections = AppBootstrap.LoadStoreConnections()
+            .Where(pair => int.TryParse(pair.Key, out _))
+            .ToDictionary(pair => int.Parse(pair.Key), pair => pair.Value);
+        _storeConnections.ReplaceStoreConnections(connections);
     }
 
     private void OpenForm<T>() where T : Form
@@ -2678,15 +2694,18 @@ internal sealed class MainForm : Form
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
         var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
+        var payroll = db.PayrollEntries.AsNoTracking()
+            .Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate.Month == month && x.PayrollRun.PayDate.Year == year)
+            .Sum(x => (decimal?)x.GrossPay).GetValueOrDefault();
         var netSales = shifts.Sum(x => x.NetSales);
         var costOfGoods = purchases.Sum(x => x.Total);
-        var expenses = cash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount);
+        var expenses = cash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount) + payroll;
         var netProfit = netSales - costOfGoods - expenses;
         return new[]
         {
             new[] { "Net Sales", netSales.ToString("C2"), netSales >= 0 ? "Positive" : "Negative" },
             new[] { "Cost of Goods Sold", costOfGoods.ToString("C2"), "Expense" },
-            new[] { "Expenses", expenses.ToString("C2"), "Expense" },
+            new[] { "Expenses (including payroll)", expenses.ToString("C2"), "Expense" },
             new[] { "Net Profit", netProfit.ToString("C2"), netProfit >= 0 ? "Positive" : "Negative" }
         };
     }
@@ -3514,10 +3533,14 @@ internal sealed class MainForm : Form
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
         var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
+        var payroll = db.PayrollEntries.AsNoTracking()
+            .Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate.Month == month && x.PayrollRun.PayDate.Year == year)
+            .Sum(x => (decimal?)x.GrossPay).GetValueOrDefault();
         var revenue = shifts.Sum(x => x.NetSales);
         var tax = shifts.Sum(x => x.Tax);
         var cogs = purchases.Sum(x => x.Total);
-        var payoutExpenses = cash.Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount);
+        var cashCheckExpenses = cash.Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount);
+        var payoutExpenses = cashCheckExpenses + payroll;
         var expenses = cogs + payoutExpenses;
         var net = revenue - expenses;
         var margin = revenue == 0 ? 0 : (net / revenue) * 100m;
@@ -3577,7 +3600,7 @@ internal sealed class MainForm : Form
         var trend = MockBorderCard("Net Profit Trend", "\uE9D9", 38);
         var trendHost = (Panel)trend.Parent!;
         trendHost.Margin = new Padding(4, 6, 6, 6);
-        trend.Controls.Add(new Label { Text = "Net profit trend preview uses current month shift, purchase, cash payout, and check payout totals.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(11), TextAlign = ContentAlignment.MiddleCenter }, 0, 1);
+        trend.Controls.Add(new Label { Text = "Net profit preview uses current month sales, purchases, payouts, and finalized gross payroll.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(11), TextAlign = ContentAlignment.MiddleCenter }, 0, 1);
         visuals.Controls.Add(trendHost, 0, 0);
         var expense = MockBorderCard("Expenses by Category", "\uE8A7", 38);
         var expenseHost = (Panel)expense.Parent!;
@@ -3588,7 +3611,8 @@ internal sealed class MainForm : Form
             {
                 new[] { "Purchases", MoneyText(cogs), expenses == 0 ? "0.00%" : PercentText(cogs / expenses * 100m) },
                 new[] { "Cash Payouts", MoneyText(cash.Sum(x => x.PayoutAmount)), expenses == 0 ? "0.00%" : PercentText(cash.Sum(x => x.PayoutAmount) / expenses * 100m) },
-                new[] { "Check Payouts", MoneyText(checks.Sum(x => x.CheckAmount)), expenses == 0 ? "0.00%" : PercentText(checks.Sum(x => x.CheckAmount) / expenses * 100m) }
+                new[] { "Check Payouts", MoneyText(checks.Sum(x => x.CheckAmount)), expenses == 0 ? "0.00%" : PercentText(checks.Sum(x => x.CheckAmount) / expenses * 100m) },
+                new[] { "Payroll", MoneyText(payroll), expenses == 0 ? "0.00%" : PercentText(payroll / expenses * 100m) }
             }), 0, 1);
         visuals.Controls.Add(expenseHost, 1, 0);
 
@@ -3597,11 +3621,12 @@ internal sealed class MainForm : Form
         {
             new { Category = "Sales", Sales = revenue, COGS = 0m, GrossProfit = revenue, Expense = 0m, NetProfit = revenue, Margin = revenue == 0 ? "0.00%" : "100.00%", Change = "" },
             new { Category = "Purchases", Sales = 0m, COGS = cogs, GrossProfit = -cogs, Expense = cogs, NetProfit = -cogs, Margin = "", Change = "" },
-            new { Category = "Cash + Check Payouts", Sales = 0m, COGS = 0m, GrossProfit = 0m, Expense = payoutExpenses, NetProfit = -payoutExpenses, Margin = "", Change = "" },
+            new { Category = "Cash + Check Payouts", Sales = 0m, COGS = 0m, GrossProfit = 0m, Expense = cashCheckExpenses, NetProfit = -cashCheckExpenses, Margin = "", Change = "" },
+            new { Category = "Payroll", Sales = 0m, COGS = 0m, GrossProfit = 0m, Expense = payroll, NetProfit = -payroll, Margin = "", Change = "" },
             new { Category = "Total", Sales = revenue, COGS = cogs, GrossProfit = revenue - cogs, Expense = payoutExpenses, NetProfit = net, Margin = PercentText(margin), Change = "" }
         }.ToList();
         root.Controls.Add(grid, 0, 3);
-        root.Controls.Add(new Label { Text = "Calculated from shifts, purchases, cash payouts, and check payouts.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(9), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0) }, 0, 4);
+        root.Controls.Add(new Label { Text = "Calculated from shifts, purchases, cash payouts, check payouts, and finalized gross payroll.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(9), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0) }, 0, 4);
         return ModuleShell("\uE9D9", "Profit & Loss", "Analyze sales, expenses, and net profit by period.", root);
     }
 
@@ -3639,7 +3664,10 @@ internal sealed class MainForm : Form
         genShell.Controls.Add(gen);
         gen.Controls.Add(new Label { Text = "Generate Report", Dock = DockStyle.Fill, ForeColor = WinTheme.Copper, Font = WinTheme.BoldFont(12), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         gen.SetColumnSpan(gen.GetControlFromPosition(0, 0)!, 4);
-        var type = SectionCombo("All", "Shift Log", "Cash On Hand", "Check Payouts", "Sales Summary by Date", "Profit & Loss");
+        var reportTypes = LicenseRuntime.HasService("Payroll")
+            ? new[] { "All", "Shift Log", "Cash On Hand", "Check Payouts", "Sales Summary by Date", "Profit & Loss", "Payroll" }
+            : new[] { "All", "Shift Log", "Cash On Hand", "Check Payouts", "Sales Summary by Date", "Profit & Loss" };
+        var type = SectionCombo(reportTypes);
         var reportFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
         var reportTo = DateTime.Today;
         var period = SectionCombo(
@@ -3689,7 +3717,9 @@ internal sealed class MainForm : Form
         quickShell.Controls.Add(quick);
         quick.Controls.Add(new Label { Text = "Quick View", Dock = DockStyle.Fill, ForeColor = WinTheme.Copper, Font = WinTheme.BoldFont(12), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         quick.SetColumnSpan(quick.GetControlFromPosition(0, 0)!, 2);
-        var quickButtons = new[] { "Sales Summary", "Shift Log", "Cash On Hand", "Check Payouts", "Profit & Loss" };
+        var quickButtons = LicenseRuntime.HasService("Payroll")
+            ? new[] { "Sales Summary", "Shift Log", "Cash On Hand", "Check Payouts", "Profit & Loss", "Payroll" }
+            : new[] { "Sales Summary", "Shift Log", "Cash On Hand", "Check Payouts", "Profit & Loss" };
         for (var i = 0; i < quickButtons.Length; i++)
         {
             var reportName = quickButtons[i];
@@ -3698,7 +3728,7 @@ internal sealed class MainForm : Form
             b.Margin = new Padding(6);
             b.Click += async (_, _) => await OpenReportViewerAsync(reportName, DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo));
             quick.Controls.Add(b, i % 2, 1 + i / 2);
-            if (i == 4) quick.SetColumnSpan(b, 2);
+            if (quickButtons.Length == 5 && i == 4) quick.SetColumnSpan(b, 2);
         }
 
         var preview = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = WinTheme.Bg };
@@ -3742,9 +3772,12 @@ internal sealed class MainForm : Form
                 .Where(x => x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo)).ToList();
             var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
                 .Where(x => x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo)).ToList();
+            var payroll = db.PayrollEntries.AsNoTracking()
+                .Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate >= DateOnly.FromDateTime(reportFrom) && x.PayrollRun.PayDate <= DateOnly.FromDateTime(reportTo))
+                .Sum(x => (decimal?)x.GrossPay).GetValueOrDefault();
             var netSales = shifts.Sum(x => x.NetSales);
             var cogs = purchases.Sum(x => x.Total);
-            var expenses = cash.Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount);
+            var expenses = cash.Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount) + payroll;
             var profit = netSales - cogs - expenses;
             netSalesLabel.Text = MoneyText(netSales);
             cogsLabel.Text = MoneyText(cogs);
@@ -3753,7 +3786,7 @@ internal sealed class MainForm : Form
             netProfitLabel.Text = MoneyText(profit);
             netProfitLabel.ForeColor = profit >= 0 ? WinTheme.Green : WinTheme.Red;
             txLabel.Text = shifts.Count.ToString(CultureInfo.InvariantCulture);
-            grid.DataSource = new[]
+            var reportHistory = new[]
             {
                 new { ReportName = "Sales Summary by Date", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
                 new { ReportName = "Shift Log", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
@@ -3761,6 +3794,9 @@ internal sealed class MainForm : Form
                 new { ReportName = "Check Payouts", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
                 new { ReportName = "Profit & Loss Statement", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" }
             }.ToList();
+            if (LicenseRuntime.HasService("Payroll"))
+                reportHistory.Add(new { ReportName = "Payroll", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" });
+            grid.DataSource = reportHistory;
         }
 
         var previousPeriod = "Current Month";
@@ -4049,6 +4085,7 @@ internal sealed class MainForm : Form
             "checkpayout" or "checkpayouts" => ReportType.CheckPayouts,
             "salessummary" or "salessummarybydate" => ReportType.SalesSummaryByDate,
             "profitloss" or "profitandloss" or "profitlossstatement" or "profitandlossstatement" => ReportType.ProfitLoss,
+            "payroll" or "payrollreport" => ReportType.Payroll,
             _ => ReportType.ShiftLog
         };
     }
@@ -4086,6 +4123,7 @@ internal sealed class MainForm : Form
             ReportType.CheckPayouts => _reportService.GenerateCheckPayoutsPdfAsync(from, to, path),
             ReportType.SalesSummaryByDate => _reportService.GenerateSalesSummaryByDatePdfAsync(from, to, path),
             ReportType.ProfitLoss => _reportService.GenerateProfitLossPdfAsync(from, to, path),
+            ReportType.Payroll => _reportService.GeneratePayrollPdfAsync(from, to, path),
             _ => _reportService.GenerateShiftLogPdfAsync(from, to, path)
         };
     }

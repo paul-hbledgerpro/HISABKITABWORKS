@@ -54,6 +54,9 @@ public interface IReportService
     // Profit & Loss Report
     Task GenerateProfitLossPdfAsync(DateOnly from, DateOnly to, string outputPdfPath, CancellationToken ct = default);
 
+    // Payroll Report
+    Task GeneratePayrollPdfAsync(DateOnly from, DateOnly to, string outputPdfPath, CancellationToken ct = default);
+
     // Combined report packet
     Task GenerateAllReportsBundlePdfAsync(DateOnly from, DateOnly to, string outputPdfPath, CancellationToken ct = default);
     

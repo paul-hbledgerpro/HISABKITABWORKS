@@ -19,6 +19,15 @@ internal static class LicenseRuntime
 {
     public static bool IsReadOnly { get; set; }
     public static DeviceLicensePayloadV2? CurrentLicense { get; set; }
+
+    public static bool HasService(string service)
+    {
+        if (string.Equals(service, "Accounting", StringComparison.OrdinalIgnoreCase))
+            return true;
+        var enabled = CurrentLicense?.EnabledServices ?? "";
+        return enabled.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(value => string.Equals(value, service, StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 internal static class DeviceLicenseService
@@ -64,7 +73,13 @@ internal static class DeviceLicenseService
         return record;
     }
 
-    public static DeviceLicenseRequestV2 CreateRequest(string businessName, string storeGuid, string storeZip)
+    public static DeviceLicenseRequestV2 CreateRequest(
+        string businessName,
+        string storeGuid,
+        string storeZip,
+        string storeState = "",
+        string businessType = "",
+        string subscriptionKey = "")
     {
         if (string.IsNullOrWhiteSpace(businessName))
             throw new InvalidOperationException("Enter the store name before creating the activation request.");
@@ -72,15 +87,26 @@ internal static class DeviceLicenseService
             throw new InvalidOperationException("Enter the Store GUID (the store database name).");
         if (string.IsNullOrWhiteSpace(storeZip))
             throw new InvalidOperationException("Enter the store ZIP code.");
+        if (!StoreGuidFormat.IsValid(storeGuid.Trim()))
+            throw new InvalidOperationException("Store GUID must use STATE_STORENAME_BUSINESSTYPE_ZIP format.");
+        if (!string.IsNullOrWhiteSpace(storeState) || !string.IsNullOrWhiteSpace(businessType))
+        {
+            var expectedGuid = StoreGuidFormat.Create(storeState, businessName, businessType, storeZip);
+            if (!string.Equals(expectedGuid, storeGuid.Trim(), StringComparison.Ordinal))
+                throw new InvalidOperationException($"Store GUID must be {expectedGuid} for the entered store details.");
+        }
 
         var identity = GetOrCreateIdentity();
         var request = new DeviceLicenseRequestV2
         {
-            Version = 2,
+            Version = 3,
             RequestId = Guid.NewGuid().ToString("N"),
             BusinessName = businessName.Trim(),
+            SubscriptionKey = subscriptionKey.Trim(),
             StoreGuid = storeGuid.Trim(),
             StoreZip = storeZip.Trim(),
+            StoreState = storeState.Trim().ToUpperInvariant(),
+            BusinessType = businessType.Trim().ToUpperInvariant(),
             AppVersion = Application.ProductVersion,
             DeviceId = identity.DeviceId,
             InstallationId = identity.InstallationId,
@@ -99,12 +125,27 @@ internal static class DeviceLicenseService
         return request;
     }
 
-    public static string CreateRequestText(string businessName, string storeGuid, string storeZip)
-        => ActivationCodeCodec.FormatRequest(CreateRequest(businessName, storeGuid, storeZip));
+    public static string CreateRequestText(
+        string businessName,
+        string storeGuid,
+        string storeZip,
+        string storeState = "",
+        string businessType = "",
+        string subscriptionKey = "")
+        => ActivationCodeCodec.FormatRequest(CreateRequest(
+            businessName, storeGuid, storeZip, storeState, businessType, subscriptionKey));
 
-    public static void ExportRequest(string path, string businessName, string storeGuid, string storeZip)
+    public static void ExportRequest(
+        string path,
+        string businessName,
+        string storeGuid,
+        string storeZip,
+        string storeState = "",
+        string businessType = "",
+        string subscriptionKey = "")
     {
-        var request = CreateRequest(businessName, storeGuid, storeZip);
+        var request = CreateRequest(
+            businessName, storeGuid, storeZip, storeState, businessType, subscriptionKey);
         File.WriteAllText(path, JsonSerializer.Serialize(request, JsonOptions));
     }
 
@@ -130,11 +171,19 @@ internal static class DeviceLicenseService
         }
     }
 
-    public static DeviceLicenseValidation InstallLicense(string sourcePath)
+    public static DeviceLicenseValidation InstallLicense(
+        string sourcePath,
+        IReadOnlyCollection<string>? requiredExistingDatabases = null,
+        string expectedAddedDatabase = "",
+        string expectedAddedBusinessName = "")
     {
         var validation = ValidateLicenseFile(sourcePath, allowExpired: false, updateClockState: false);
         if (validation.Status != DeviceLicenseStatus.Valid || validation.Payload is null)
             return validation;
+
+        EnsureExistingBusinessesRemainLicensed(validation.Payload, requiredExistingDatabases);
+        EnsureRequestedBusinessIsLicensed(
+            validation.Payload, expectedAddedDatabase, expectedAddedBusinessName);
 
         Directory.CreateDirectory(AppBootstrap.AppDataPath);
         File.Copy(sourcePath, InstalledLicensePath, true);
@@ -151,19 +200,30 @@ internal static class DeviceLicenseService
         string activationText,
         string expectedBusinessName,
         string expectedStoreGuid,
-        string expectedStoreZip)
+        string expectedStoreZip,
+        IReadOnlyCollection<string>? requiredExistingDatabases = null,
+        bool addingLicensedStore = false)
     {
         var licenseJson = ActivationCodeCodec.DecodeLicenseJson(activationText);
         var validation = ValidateLicenseJson(licenseJson, allowExpired: false, updateClockState: false);
         if (validation.Status != DeviceLicenseStatus.Valid || validation.Payload is null)
             return validation;
         var payload = validation.Payload;
-        if (!string.Equals(payload.BusinessName, expectedBusinessName.Trim(), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("This license key belongs to a different store name.");
-        if (!string.Equals(payload.StoreGuid, expectedStoreGuid.Trim(), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("This license key belongs to a different Store GUID/database.");
-        if (!string.Equals(payload.StoreZip, expectedStoreZip.Trim(), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("This license key belongs to a different ZIP code.");
+        if (addingLicensedStore)
+        {
+            EnsureRequestedBusinessIsLicensed(payload, expectedStoreGuid, expectedBusinessName);
+        }
+        else
+        {
+            if (!string.Equals(payload.BusinessName, expectedBusinessName.Trim(), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("This license key belongs to a different store name.");
+            if (!string.Equals(payload.StoreGuid, expectedStoreGuid.Trim(), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("This license key belongs to a different Store GUID/database.");
+            if (!string.Equals(payload.StoreZip, expectedStoreZip.Trim(), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("This license key belongs to a different ZIP code.");
+        }
+
+        EnsureExistingBusinessesRemainLicensed(payload, requiredExistingDatabases);
 
         Directory.CreateDirectory(AppBootstrap.AppDataPath);
         File.WriteAllText(InstalledLicensePath, licenseJson);
@@ -174,6 +234,45 @@ internal static class DeviceLicenseService
         LicenseRuntime.CurrentLicense = payload;
         LicenseRuntime.IsReadOnly = false;
         return validation;
+    }
+
+    private static void EnsureExistingBusinessesRemainLicensed(
+        DeviceLicensePayloadV2 payload,
+        IReadOnlyCollection<string>? requiredExistingDatabases)
+    {
+        if (requiredExistingDatabases is null || requiredExistingDatabases.Count == 0)
+            return;
+
+        var updatedDatabases = payload.Businesses
+            .Select(x => x.DatabaseName)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missing = requiredExistingDatabases
+            .Where(x => !updatedDatabases.Contains(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException(
+                "The updated license does not include every store already licensed on this PC. " +
+                "Ask the developer to keep the existing stores and add the new store before generating the updated key.");
+    }
+
+    private static void EnsureRequestedBusinessIsLicensed(
+        DeviceLicensePayloadV2 payload,
+        string expectedDatabase,
+        string expectedBusinessName)
+    {
+        if (string.IsNullOrWhiteSpace(expectedDatabase))
+            return;
+
+        if (!payload.Businesses.Any(x =>
+                string.Equals(
+                    string.IsNullOrWhiteSpace(x.StoreGuid) ? x.DatabaseName : x.StoreGuid,
+                    expectedDatabase.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.BusinessName, expectedBusinessName.Trim(), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "The updated license does not contain the new store requested on this PC. " +
+                "Ask the developer to add this Store GUID to the existing client subscription and generate the key again.");
     }
 
     public static DeviceLicenseValidation ValidateLicenseFile(string path, bool allowExpired, bool updateClockState)
@@ -202,7 +301,9 @@ internal static class DeviceLicenseService
         if (string.IsNullOrWhiteSpace(payload.BusinessName) || string.IsNullOrWhiteSpace(payload.StoreGuid))
             throw new InvalidOperationException("The license is missing the Store Name or Store GUID.");
         if (payload.Businesses.Count > 0 && !payload.Businesses.Any(business =>
-                string.Equals(business.DatabaseName, payload.StoreGuid, StringComparison.OrdinalIgnoreCase)))
+                string.Equals(
+                    string.IsNullOrWhiteSpace(business.StoreGuid) ? business.DatabaseName : business.StoreGuid,
+                    payload.StoreGuid, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("The Store GUID does not match an approved database in this license.");
         var identity = GetOrCreateIdentity();
         if (!string.Equals(payload.DeviceId, identity.DeviceId, StringComparison.Ordinal) ||
@@ -379,10 +480,13 @@ internal static class DeviceLicenseService
         File.WriteAllText(AppBootstrap.LicenseFilePath, JsonSerializer.Serialize(new
         {
             Version = 2,
+            payload.ActivationId,
             payload.LicenseKey,
             payload.BusinessName,
             payload.StoreGuid,
             payload.StoreZip,
+            payload.StoreState,
+            payload.BusinessType,
             payload.DeviceId,
             payload.DeviceName,
             payload.MaxDevices,
@@ -445,6 +549,8 @@ internal sealed class DeviceLicenseRequestV2
     public string SubscriptionKey { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string StoreZip { get; set; } = "";
+    public string StoreState { get; set; } = "";
+    public string BusinessType { get; set; } = "";
     public string AppVersion { get; set; } = "";
     public string DeviceId { get; set; } = "";
     public string InstallationId { get; set; } = "";
@@ -455,8 +561,11 @@ internal sealed class DeviceLicenseRequestV2
     public string Proof { get; set; } = "";
 
     public string SigningText()
-        => string.Join("\n", Version, RequestId, BusinessName, SubscriptionKey, StoreGuid, StoreZip, AppVersion, DeviceId, InstallationId, DeviceName,
+    {
+        var original = string.Join("\n", Version, RequestId, BusinessName, SubscriptionKey, StoreGuid, StoreZip, AppVersion, DeviceId, InstallationId, DeviceName,
             DevicePublicKey, FingerprintHash, CreatedUtc);
+        return Version >= 3 ? string.Join("\n", original, StoreState, BusinessType) : original;
+    }
 }
 
 internal sealed class DeviceLicenseEnvelopeV2
@@ -468,12 +577,15 @@ internal sealed class DeviceLicenseEnvelopeV2
 
 internal sealed class DeviceLicensePayloadV2
 {
+    public string ActivationId { get; set; } = "";
     public string LicenseKey { get; set; } = "";
     public int CustomerId { get; set; }
     public int LicenseId { get; set; }
     public string BusinessName { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string StoreZip { get; set; } = "";
+    public string StoreState { get; set; } = "";
+    public string BusinessType { get; set; } = "";
     public string AppVersion { get; set; } = "";
     public string DeviceId { get; set; } = "";
     public string InstallationId { get; set; } = "";
@@ -483,6 +595,7 @@ internal sealed class DeviceLicensePayloadV2
     public int MaxDevices { get; set; }
     public int MaxStores { get; set; }
     public int MaxUsers { get; set; }
+    public string EnabledServices { get; set; } = "Accounting";
     public string IssuedUtc { get; set; } = "";
     public string ExpiresUtc { get; set; } = "";
     public string EncryptedConnectionKey { get; set; } = "";
@@ -497,6 +610,7 @@ internal sealed class LicensedBusinessPayloadV1
     public int BusinessId { get; set; }
     public string BusinessName { get; set; } = "";
     public string Address { get; set; } = "";
+    public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
     public bool IsPrimary { get; set; }
     public string EncryptedConnectionKey { get; set; } = "";

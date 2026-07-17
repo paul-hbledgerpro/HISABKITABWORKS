@@ -24,6 +24,14 @@ public sealed class AppDbContext : DbContext
     public DbSet<PurchaseInvoiceLine> PurchaseInvoiceLines => Set<PurchaseInvoiceLine>();
     public DbSet<ProductCost> ProductCosts => Set<ProductCost>();
     public DbSet<PriceAlert> PriceAlerts => Set<PriceAlert>();
+    public DbSet<Employee> Employees => Set<Employee>();
+    public DbSet<EmployeeDocument> EmployeeDocuments => Set<EmployeeDocument>();
+    public DbSet<ScheduleShift> ScheduleShifts => Set<ScheduleShift>();
+    public DbSet<EmployeePeriodHours> EmployeePeriodHours => Set<EmployeePeriodHours>();
+    public DbSet<PayrollRun> PayrollRuns => Set<PayrollRun>();
+    public DbSet<PayrollEntry> PayrollEntries => Set<PayrollEntry>();
+    public DbSet<PayrollAuditEntry> PayrollAuditEntries => Set<PayrollAuditEntry>();
+    public DbSet<ScheduleNotification> ScheduleNotifications => Set<ScheduleNotification>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +50,14 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<PurchaseInvoiceLine>().ToTable("PurchaseInvoiceLines");
         modelBuilder.Entity<ProductCost>().ToTable("ProductCosts");
         modelBuilder.Entity<PriceAlert>().ToTable("PriceAlerts");
+        modelBuilder.Entity<Employee>().ToTable("Employees");
+        modelBuilder.Entity<EmployeeDocument>().ToTable("EmployeeDocuments");
+        modelBuilder.Entity<ScheduleShift>().ToTable("ScheduleShifts");
+        modelBuilder.Entity<EmployeePeriodHours>().ToTable("EmployeePeriodHours");
+        modelBuilder.Entity<PayrollRun>().ToTable("PayrollRuns");
+        modelBuilder.Entity<PayrollEntry>().ToTable("PayrollEntries");
+        modelBuilder.Entity<PayrollAuditEntry>().ToTable("PayrollAuditEntries");
+        modelBuilder.Entity<ScheduleNotification>().ToTable("ScheduleNotifications");
 
         // SQL Server handles DATE type natively - no converter needed
 
@@ -70,6 +86,15 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<PurchaseInvoiceLine>().HasIndex(x => x.PurchaseInvoiceId);
         modelBuilder.Entity<ProductCost>().HasIndex(x => new { x.StoreId, x.ProductKey }).IsUnique();
         modelBuilder.Entity<PriceAlert>().HasIndex(x => new { x.StoreId, x.IsRead, x.CreatedUtc });
+        modelBuilder.Entity<Employee>().HasIndex(x => new { x.StoreId, x.EmployeeNumber }).IsUnique();
+        modelBuilder.Entity<Employee>().HasIndex(x => new { x.StoreId, x.IsActive, x.LastName });
+        modelBuilder.Entity<EmployeeDocument>().HasIndex(x => new { x.EmployeeId, x.DocumentType, x.CreatedUtc });
+        modelBuilder.Entity<ScheduleShift>().HasIndex(x => new { x.StoreId, x.ShiftDate, x.EmployeeId });
+        modelBuilder.Entity<EmployeePeriodHours>().HasIndex(x => new { x.StoreId, x.EmployeeId, x.PeriodStart, x.PeriodEnd }).IsUnique();
+        modelBuilder.Entity<PayrollRun>().HasIndex(x => new { x.StoreId, x.PeriodStart, x.PeriodEnd });
+        modelBuilder.Entity<PayrollEntry>().HasIndex(x => new { x.PayrollRunId, x.EmployeeId }).IsUnique();
+        modelBuilder.Entity<PayrollAuditEntry>().HasIndex(x => new { x.PayrollRunId, x.PerformedUtc });
+        modelBuilder.Entity<ScheduleNotification>().HasIndex(x => new { x.StoreId, x.ScheduleFrom, x.EmployeeId });
 
         // Relationships - use NO ACTION for SQL Server to avoid cascade conflicts
         modelBuilder.Entity<CashOnHandEntry>()
@@ -101,5 +126,29 @@ public sealed class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(x => x.PurchaseInvoiceId)
             .OnDelete(DeleteBehavior.NoAction);
+
+        modelBuilder.Entity<EmployeeDocument>()
+            .HasOne(x => x.Employee)
+            .WithMany()
+            .HasForeignKey(x => x.EmployeeId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ScheduleShift>()
+            .HasOne(x => x.Employee)
+            .WithMany()
+            .HasForeignKey(x => x.EmployeeId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        modelBuilder.Entity<EmployeePeriodHours>()
+            .HasOne(x => x.Employee)
+            .WithMany()
+            .HasForeignKey(x => x.EmployeeId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        modelBuilder.Entity<PayrollRun>()
+            .HasMany(x => x.Entries)
+            .WithOne(x => x.PayrollRun)
+            .HasForeignKey(x => x.PayrollRunId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

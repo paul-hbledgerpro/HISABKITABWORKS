@@ -9,9 +9,11 @@ namespace ManagerPaperworkSystem.WinForms;
 internal sealed class StoreManagerForm : Form
 {
     private readonly DataGridView _grid = WinTheme.Grid();
+    private readonly IServiceProvider _services;
 
-    public StoreManagerForm(IDbContextFactory<AppDbContext> dbFactory)
+    public StoreManagerForm(IDbContextFactory<AppDbContext> dbFactory, IServiceProvider services)
     {
+        _services = services;
         WinTheme.Apply(this);
         Text = "Licensed Businesses - HISAB KITAB";
         Size = new Size(980, 640);
@@ -34,9 +36,32 @@ internal sealed class StoreManagerForm : Form
         root.Controls.Add(_grid, 0, 1);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         actions.Controls.Add(Button("Close", () => Close()));
-        actions.Controls.Add(Button("Import Updated PC License", ImportUpdatedLicense, true, 240));
+        actions.Controls.Add(Button("Add Store", AddLicensedStore, true, 180));
+        actions.Controls.Add(Button("Import Updated License File", ImportUpdatedLicense, false, 240));
         root.Controls.Add(actions, 0, 2);
         return root;
+    }
+
+    private async void AddLicensedStore()
+    {
+        using var activation = new DeviceActivationForm(addingLicensedStore: true);
+        if (activation.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        try
+        {
+            await LicensedBusinessService.SynchronizeAsync(_services);
+            RefreshGrid();
+            MessageBox.Show(this,
+                "The signed business list was updated and all existing licensed stores were preserved.",
+                "Licensed Stores Updated", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                AppBootstrap.RedactSensitiveText(ex.Message),
+                "Store Synchronization Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private Button Button(string text, Action action, bool filled = false, int width = 160)
@@ -56,6 +81,7 @@ internal sealed class StoreManagerForm : Form
             {
                 x.BusinessId,
                 Name = x.BusinessName,
+                x.StoreGuid,
                 x.Address,
                 Database = x.DatabaseName,
                 Type = x.IsPrimary ? "Primary Login Business" : "Additional Business",
@@ -76,7 +102,12 @@ internal sealed class StoreManagerForm : Form
 
         try
         {
-            var result = DeviceLicenseService.InstallLicense(dialog.FileName);
+            var existingDatabases = LicensedBusinessService.Load()
+                .Select(x => x.DatabaseName)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var result = DeviceLicenseService.InstallLicense(dialog.FileName, existingDatabases);
             if (result.Status != DeviceLicenseStatus.Valid)
                 throw new InvalidOperationException(result.Message);
             RefreshGrid();

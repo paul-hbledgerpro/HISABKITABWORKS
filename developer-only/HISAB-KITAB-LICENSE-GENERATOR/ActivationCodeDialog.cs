@@ -54,7 +54,7 @@ internal sealed class ActivationCodeDialog : Form
     {
         using var form = new ActivationCodeDialog(
             "Paste Customer Activation Details",
-            "Paste the complete activation details copied from the customer's HISAB KITAB registration window. It contains the Store GUID, Business Name, ZIP Code, App Serial Number, and protected PC identity.");
+            "Paste the complete activation details copied from the customer's HISAB KITAB registration window. It contains the Store GUID, Business Name, ZIP Code, PC ID, and protected proof from that computer.");
         var continueButton = AdminTheme.Button("CONTINUE", true);
         var pasteButton = AdminTheme.Button("PASTE FROM CLIPBOARD");
         var loadButton = AdminTheme.Button("LOAD REQUEST FILE");

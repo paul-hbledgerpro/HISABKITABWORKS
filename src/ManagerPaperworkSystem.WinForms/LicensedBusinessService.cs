@@ -47,6 +47,9 @@ internal static class LicensedBusinessService
                     BusinessId = business.BusinessId,
                     BusinessName = business.BusinessName.Trim(),
                     Address = business.Address.Trim(),
+                    StoreGuid = string.IsNullOrWhiteSpace(business.StoreGuid)
+                        ? business.DatabaseName.Trim()
+                        : business.StoreGuid.Trim(),
                     DatabaseName = business.DatabaseName.Trim(),
                     IsPrimary = business.IsPrimary,
                     Connection = settings
@@ -207,6 +210,7 @@ internal sealed class LicensedBusinessConnection
     public int BusinessId { get; set; }
     public string BusinessName { get; set; } = "";
     public string Address { get; set; } = "";
+    public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
     public bool IsPrimary { get; set; }
     public DatabaseConnectionSettings Connection { get; set; } = new();

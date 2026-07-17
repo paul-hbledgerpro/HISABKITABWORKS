@@ -18,11 +18,22 @@ internal static class ActivationCodeCodec
 
     public static string FormatLicense(DeviceLicensePayloadV2 payload, string licenseJson)
         => $"HISAB KITAB LICENSE ACTIVATION\r\n" +
+           $"License Key: {DisplayLicenseKey(payload)}\r\n" +
            $"Store GUID: {payload.StoreGuid}\r\n" +
            $"Store Name: {payload.BusinessName}\r\n" +
+           $"State: {payload.StoreState}\r\n" +
+           $"Business Type: {payload.BusinessType}\r\n" +
            $"ZIP Code: {payload.StoreZip}\r\n" +
-           $"App Serial Number: {payload.DeviceId}\r\n\r\n" +
-           $"License Key:\r\n{EncodeRaw(LicensePrefix, licenseJson)}";
+           $"PC ID: {payload.DeviceId}\r\n\r\n" +
+           $"Protected License Code:\r\n{EncodeRaw(LicensePrefix, licenseJson)}";
+
+    public static string DisplayLicenseKey(DeviceLicensePayloadV2 payload)
+    {
+        var source = new string((payload.ActivationId ?? "").Where(Uri.IsHexDigit).ToArray()).ToUpperInvariant();
+        if (source.Length < 16)
+            source = Guid.NewGuid().ToString("N").ToUpperInvariant();
+        return $"HKL-{source[..4]}-{source[4..8]}-{source[8..12]}-{source[12..16]}";
+    }
 
     private static string EncodeRaw(string prefix, string json)
     {

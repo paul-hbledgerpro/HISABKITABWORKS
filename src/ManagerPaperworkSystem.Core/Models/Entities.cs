@@ -27,6 +27,16 @@ public sealed class AppSettings : Entity
     // Multi-store: keep last-selected store for the user.
     public int DefaultStoreId { get; set; } = 1;
     public int LastStoreId { get; set; } = 1;
+
+    public bool SmsGatewayEnabled { get; set; }
+
+    [MaxLength(500)]
+    public string SmsGatewayUrl { get; set; } = "";
+
+    [MaxLength(200)]
+    public string SmsGatewayUsername { get; set; } = "";
+
+    public byte[] SmsGatewayPasswordEncrypted { get; set; } = Array.Empty<byte>();
 }
 
 public enum ReportType
@@ -36,7 +46,8 @@ public enum ReportType
     CheckPayouts = 3,
     All = 4,
     SalesSummaryByDate = 5,
-    ProfitLoss = 6
+    ProfitLoss = 6,
+    Payroll = 7
 }
 
 public enum UserRole

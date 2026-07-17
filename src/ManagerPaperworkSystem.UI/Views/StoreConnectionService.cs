@@ -43,6 +43,17 @@ public class StoreConnectionService
     }
 
     /// <summary>
+    /// Atomically refresh the complete licensed store-to-database map after a
+    /// replacement license is installed while the desktop app is still open.
+    /// </summary>
+    public void ReplaceStoreConnections(IReadOnlyDictionary<int, string> connections)
+    {
+        _storeConnections.Clear();
+        foreach (var pair in connections)
+            RegisterStore(pair.Key, pair.Value);
+    }
+
+    /// <summary>
     /// Get the connection string for a specific store.
     /// Returns the store-specific one if registered, otherwise the default.
     /// </summary>

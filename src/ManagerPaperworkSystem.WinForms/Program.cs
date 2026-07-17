@@ -26,8 +26,9 @@ internal static class Program
 
         if (args.Any(x => x.Equals("--device-activation", StringComparison.OrdinalIgnoreCase)))
         {
-            Application.Run(new DeviceActivationForm());
-            return;
+            using var activation = new DeviceActivationForm();
+            if (activation.ShowDialog() != DialogResult.OK)
+                return;
         }
 
         try
