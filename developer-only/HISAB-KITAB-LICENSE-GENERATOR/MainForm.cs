@@ -8,6 +8,7 @@ internal sealed partial class MainForm : Form
     private readonly Button _connect = AdminTheme.Button("CONNECT", true);
     private readonly Button _setupSigning = AdminTheme.Button("SET UP / RESTORE KEY");
     private readonly Button _backupSigning = AdminTheme.Button("BACK UP KEY");
+    private readonly Button _signTaxRules = AdminTheme.Button("SIGN TAX RULES");
     private readonly Label _connectionStatus = AdminTheme.Label("●  Not connected", AdminTheme.Muted, 9);
     private readonly Label _signingStatus = AdminTheme.Label("●  Checking signing key", AdminTheme.Muted, 9);
 
@@ -98,6 +99,7 @@ internal sealed partial class MainForm : Form
         _connect.Click += (_, _) => Connect();
         _setupSigning.Click += (_, _) => RestoreSigningKey();
         _backupSigning.Click += (_, _) => BackupSigningKey();
+        _signTaxRules.Click += (_, _) => SignTaxRules();
         _pasteStoreGuid.Click += (_, _) => PasteSimpleField(_storeGuid, "Store GUID");
         _pasteStoreName.Click += (_, _) => PasteSimpleField(_storeName, "Store Name");
         _pasteStoreZip.Click += (_, _) => PasteSimpleField(_storeZip, "Store ZIP");
@@ -545,6 +547,59 @@ internal sealed partial class MainForm : Form
         }
     }
 
+    private void SignTaxRules()
+    {
+        if (!SigningKeyStore.IsConfigured)
+        {
+            SetStatus("Set up or restore the private signing key first.", true);
+            return;
+        }
+
+        using var open = new OpenFileDialog
+        {
+            Title = "Select verified payroll tax-rule JSON",
+            Filter = "Payroll tax rules (*.json)|*.json|All files (*.*)|*.*"
+        };
+        if (open.ShowDialog(this) != DialogResult.OK)
+            return;
+        var version = "update";
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(open.FileName));
+            version = document.RootElement.GetProperty("Version").GetString() ?? version;
+        }
+        catch
+        {
+            // The signer performs the authoritative validation and reports any issue.
+        }
+
+        using var save = new SaveFileDialog
+        {
+            Title = "Save signed payroll tax package",
+            Filter = "HISAB KITAB tax package (*.hktax)|*.hktax",
+            FileName = $"HISAB_KITAB_TaxRules_{version}.hktax"
+        };
+        if (save.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        try
+        {
+            TaxRulePackageSigner.Sign(open.FileName, save.FileName);
+            SetStatus($"Signed payroll tax package created: {save.FileName}", false);
+            MessageBox.Show(
+                this,
+                "The signed package is ready. Attach it to the latest GitHub Release. " +
+                "Client PCs will discover it from CHECK TAX UPDATES or the automatic daily check.",
+                "Tax Package Created",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Tax package was not created: {ex.Message}", true);
+        }
+    }
+
     private void RefreshSigningStatus()
     {
         var configured = SigningKeyStore.IsConfigured;
@@ -554,6 +609,7 @@ internal sealed partial class MainForm : Form
         _signingStatus.ForeColor = configured ? AdminTheme.Green : AdminTheme.Red;
         _setupSigning.Text = configured ? "RESTORE / REPLACE KEY" : "SET UP / RESTORE KEY";
         _backupSigning.Enabled = configured;
+        _signTaxRules.Enabled = configured;
     }
 
     private void MarkConnectionStale()
@@ -605,6 +661,7 @@ internal sealed partial class MainForm : Form
         _generate.Enabled = !busy && _isConnected;
         _setupSigning.Enabled = !busy;
         _backupSigning.Enabled = !busy && SigningKeyStore.IsConfigured;
+        _signTaxRules.Enabled = !busy && SigningKeyStore.IsConfigured;
         if (busy && !string.IsNullOrWhiteSpace(message))
             SetStatus(message, false);
     }

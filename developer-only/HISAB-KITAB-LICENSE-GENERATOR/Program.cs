@@ -55,6 +55,18 @@ internal static class Program
                 return 2;
             }
         }
+        if (args.Length >= 3 && args[0].Equals("--sign-tax-rules", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                TaxRulePackageSigner.Sign(args[1], args[2]);
+                return 0;
+            }
+            catch
+            {
+                return 2;
+            }
+        }
         Application.Run(new MainForm());
         return 0;
     }

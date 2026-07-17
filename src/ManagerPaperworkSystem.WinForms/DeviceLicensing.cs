@@ -295,17 +295,7 @@ internal static class DeviceLicenseService
 
         var payloadBytes = Convert.FromBase64String(envelope.Payload);
         var signatureBytes = Convert.FromBase64String(envelope.Signature);
-        var signatureValid = false;
-        foreach (var trustedPublicKey in TrustedLicenseSigningPublicKeys)
-        {
-            using var signer = RSA.Create();
-            signer.ImportSubjectPublicKeyInfo(Convert.FromBase64String(trustedPublicKey), out _);
-            if (!signer.VerifyData(payloadBytes, signatureBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
-                continue;
-            signatureValid = true;
-            break;
-        }
-        if (!signatureValid)
+        if (!VerifyAuthorizedSignature(payloadBytes, signatureBytes))
             throw new InvalidOperationException("The license signature is invalid. The file was not issued by an authorized License Generator.");
 
         var payload = JsonSerializer.Deserialize<DeviceLicensePayloadV2>(payloadBytes, JsonOptions)
@@ -347,6 +337,23 @@ internal static class DeviceLicenseService
         if (updateClockState)
             SaveClockState(payload, now);
         return new(DeviceLicenseStatus.Valid, $"Licensed to {payload.BusinessName} until {expiresUtc:MM/dd/yyyy}.", payload);
+    }
+
+    internal static bool VerifyAuthorizedSignature(byte[] payloadBytes, byte[] signatureBytes)
+    {
+        foreach (var trustedPublicKey in TrustedLicenseSigningPublicKeys)
+        {
+            using var signer = RSA.Create();
+            signer.ImportSubjectPublicKeyInfo(Convert.FromBase64String(trustedPublicKey), out _);
+            if (signer.VerifyData(
+                    payloadBytes,
+                    signatureBytes,
+                    HashAlgorithmName.SHA256,
+                    RSASignaturePadding.Pkcs1))
+                return true;
+        }
+
+        return false;
     }
 
     public static DatabaseConnectionSettings? LoadProtectedConnection()

@@ -101,6 +101,9 @@ public sealed class Employee : Entity
     [MaxLength(20)]
     public string WorkState { get; set; } = "IL";
 
+    [MaxLength(20)]
+    public string ResidenceState { get; set; } = "IL";
+
     public DateOnly HireDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
     public DateOnly? TerminationDate { get; set; }
     public bool IsActive { get; set; } = true;
@@ -121,6 +124,28 @@ public sealed class Employee : Entity
     public decimal FederalExtraWithholding { get; set; }
 
     public bool FederalExempt { get; set; }
+
+    [MaxLength(50)]
+    public string StateFilingStatus { get; set; } = "Single";
+
+    public int StateAllowances { get; set; }
+    public int StateAdditionalAllowances { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal StateDeductions { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal StateCredits { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal StateExtraWithholding { get; set; }
+
+    public bool StateExempt { get; set; }
+
+    [MaxLength(4000)]
+    public string StateFormDataJson { get; set; } = "{}";
+
+    // Retained for backward compatibility with existing Illinois employee records.
     public int IllinoisLine1Allowances { get; set; }
     public int IllinoisLine2Allowances { get; set; }
 
@@ -238,6 +263,20 @@ public sealed class PayrollRun : Entity
     public int TaxYear { get; set; }
     public PayrollRunStatus Status { get; set; } = PayrollRunStatus.Draft;
 
+    [MaxLength(100)]
+    public string TaxRuleSetId { get; set; } = "";
+
+    [MaxLength(40)]
+    public string TaxRuleVersion { get; set; } = "";
+
+    [MaxLength(64)]
+    public string TaxRuleSha256 { get; set; } = "";
+
+    [MaxLength(1000)]
+    public string TaxRuleSources { get; set; } = "";
+
+    public DateTime? TaxRulesVerifiedUtc { get; set; }
+
     [MaxLength(120)]
     public string CreatedByName { get; set; } = "";
 
@@ -313,6 +352,15 @@ public sealed class PayrollEntry : Entity
 
     [Column(TypeName = "decimal(18,2)")]
     public decimal StateWithholding { get; set; }
+
+    [MaxLength(2)]
+    public string WorkState { get; set; } = "";
+
+    [MaxLength(100)]
+    public string StateTaxRuleId { get; set; } = "";
+
+    [MaxLength(40)]
+    public string StateTaxRuleVersion { get; set; } = "";
 
     [Column(TypeName = "decimal(18,2)")]
     public decimal NetPay { get; set; }

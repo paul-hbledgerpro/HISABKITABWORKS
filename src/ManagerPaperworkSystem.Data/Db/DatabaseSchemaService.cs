@@ -294,6 +294,7 @@ public static class DatabaseSchemaService
                         [IsOvertimeEligible] BIT NOT NULL DEFAULT 1,
                         [HolidayMultiplier] DECIMAL(8,4) NOT NULL DEFAULT 1.5,
                         [WorkState] NVARCHAR(20) NOT NULL DEFAULT 'IL',
+                        [ResidenceState] NVARCHAR(20) NOT NULL DEFAULT 'IL',
                         [HireDate] DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME()),
                         [TerminationDate] DATE NULL,
                         [IsActive] BIT NOT NULL DEFAULT 1,
@@ -304,6 +305,14 @@ public static class DatabaseSchemaService
                         [FederalDeductions] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [FederalExtraWithholding] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [FederalExempt] BIT NOT NULL DEFAULT 0,
+                        [StateFilingStatus] NVARCHAR(50) NOT NULL DEFAULT 'Single',
+                        [StateAllowances] INT NOT NULL DEFAULT 0,
+                        [StateAdditionalAllowances] INT NOT NULL DEFAULT 0,
+                        [StateDeductions] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [StateCredits] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [StateExtraWithholding] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [StateExempt] BIT NOT NULL DEFAULT 0,
+                        [StateFormDataJson] NVARCHAR(4000) NOT NULL DEFAULT '{}',
                         [IllinoisLine1Allowances] INT NOT NULL DEFAULT 0,
                         [IllinoisLine2Allowances] INT NOT NULL DEFAULT 0,
                         [IllinoisExtraWithholding] DECIMAL(18,2) NOT NULL DEFAULT 0,
@@ -319,6 +328,24 @@ public static class DatabaseSchemaService
                     CREATE INDEX [IX_Employees_Store_Active_LastName]
                         ON [dbo].[Employees] ([StoreId], [IsActive], [LastName]);
                 END");
+
+            await EnsureColumnAsync(conn, "Employees", "ResidenceState",
+                "NVARCHAR(20) NOT NULL DEFAULT 'IL'",
+                "UPDATE [dbo].[Employees] SET [ResidenceState] = CASE WHEN LEN(LTRIM(RTRIM([State]))) = 2 THEN UPPER(LTRIM(RTRIM([State]))) ELSE UPPER(LTRIM(RTRIM([WorkState]))) END WHERE [ResidenceState] = 'IL'");
+            await EnsureColumnAsync(conn, "Employees", "StateFilingStatus", "NVARCHAR(50) NOT NULL DEFAULT 'Single'");
+            await EnsureColumnAsync(conn, "Employees", "StateAllowances",
+                "INT NOT NULL DEFAULT 0",
+                "UPDATE [dbo].[Employees] SET [StateAllowances] = [IllinoisLine1Allowances] WHERE [StateAllowances] = 0 AND [IllinoisLine1Allowances] <> 0");
+            await EnsureColumnAsync(conn, "Employees", "StateAdditionalAllowances",
+                "INT NOT NULL DEFAULT 0",
+                "UPDATE [dbo].[Employees] SET [StateAdditionalAllowances] = [IllinoisLine2Allowances] WHERE [StateAdditionalAllowances] = 0 AND [IllinoisLine2Allowances] <> 0");
+            await EnsureColumnAsync(conn, "Employees", "StateDeductions", "DECIMAL(18,2) NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "Employees", "StateCredits", "DECIMAL(18,2) NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "Employees", "StateExtraWithholding",
+                "DECIMAL(18,2) NOT NULL DEFAULT 0",
+                "UPDATE [dbo].[Employees] SET [StateExtraWithholding] = [IllinoisExtraWithholding] WHERE [StateExtraWithholding] = 0 AND [IllinoisExtraWithholding] <> 0");
+            await EnsureColumnAsync(conn, "Employees", "StateExempt", "BIT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "Employees", "StateFormDataJson", "NVARCHAR(4000) NOT NULL DEFAULT '{}'");
 
             await ExecuteSafe(conn, @"
                 IF OBJECT_ID(N'[dbo].[EmployeeDocuments]', N'U') IS NULL
@@ -374,6 +401,11 @@ public static class DatabaseSchemaService
                         [PayFrequency] INT NOT NULL,
                         [TaxYear] INT NOT NULL,
                         [Status] INT NOT NULL DEFAULT 0,
+                        [TaxRuleSetId] NVARCHAR(100) NOT NULL DEFAULT '',
+                        [TaxRuleVersion] NVARCHAR(40) NOT NULL DEFAULT '',
+                        [TaxRuleSha256] NVARCHAR(64) NOT NULL DEFAULT '',
+                        [TaxRuleSources] NVARCHAR(1000) NOT NULL DEFAULT '',
+                        [TaxRulesVerifiedUtc] DATETIME2 NULL,
                         [CreatedByName] NVARCHAR(120) NOT NULL DEFAULT '',
                         [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
                         [ApprovedByName] NVARCHAR(120) NOT NULL DEFAULT '',
@@ -384,6 +416,12 @@ public static class DatabaseSchemaService
                     CREATE INDEX [IX_PayrollRuns_Store_Period]
                         ON [dbo].[PayrollRuns] ([StoreId], [PeriodStart], [PeriodEnd]);
                 END");
+
+            await EnsureColumnAsync(conn, "PayrollRuns", "TaxRuleSetId", "NVARCHAR(100) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PayrollRuns", "TaxRuleVersion", "NVARCHAR(40) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PayrollRuns", "TaxRuleSha256", "NVARCHAR(64) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PayrollRuns", "TaxRuleSources", "NVARCHAR(1000) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PayrollRuns", "TaxRulesVerifiedUtc", "DATETIME2 NULL");
 
             await ExecuteSafe(conn, @"
                 IF OBJECT_ID(N'[dbo].[EmployeePeriodHours]', N'U') IS NULL
@@ -432,6 +470,9 @@ public static class DatabaseSchemaService
                         [SocialSecurityWithholding] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [MedicareWithholding] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [StateWithholding] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [WorkState] NVARCHAR(2) NOT NULL DEFAULT '',
+                        [StateTaxRuleId] NVARCHAR(100) NOT NULL DEFAULT '',
+                        [StateTaxRuleVersion] NVARCHAR(40) NOT NULL DEFAULT '',
                         [NetPay] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [GrossPayYtd] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [FederalWithholdingYtd] DECIMAL(18,2) NOT NULL DEFAULT 0,
@@ -450,6 +491,10 @@ public static class DatabaseSchemaService
                 IF COL_LENGTH('dbo.PayrollEntries', 'RegularPay') IS NULL ALTER TABLE dbo.PayrollEntries ADD RegularPay DECIMAL(18,2) NOT NULL DEFAULT 0;
                 IF COL_LENGTH('dbo.PayrollEntries', 'OvertimePay') IS NULL ALTER TABLE dbo.PayrollEntries ADD OvertimePay DECIMAL(18,2) NOT NULL DEFAULT 0;
                 IF COL_LENGTH('dbo.PayrollEntries', 'HolidayPay') IS NULL ALTER TABLE dbo.PayrollEntries ADD HolidayPay DECIMAL(18,2) NOT NULL DEFAULT 0;");
+
+            await EnsureColumnAsync(conn, "PayrollEntries", "WorkState", "NVARCHAR(2) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PayrollEntries", "StateTaxRuleId", "NVARCHAR(100) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PayrollEntries", "StateTaxRuleVersion", "NVARCHAR(40) NOT NULL DEFAULT ''");
 
             await ExecuteSafe(conn, @"
                 IF OBJECT_ID(N'[dbo].[PayrollAuditEntries]', N'U') IS NULL

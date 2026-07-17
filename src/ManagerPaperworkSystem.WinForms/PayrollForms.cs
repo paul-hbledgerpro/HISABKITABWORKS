@@ -4,6 +4,7 @@ using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using ManagerPaperworkSystem.Core.Models;
+using ManagerPaperworkSystem.Core.Payroll;
 using ManagerPaperworkSystem.Data.Db;
 using ManagerPaperworkSystem.Reports.Pdf;
 using Microsoft.EntityFrameworkCore;
@@ -138,6 +139,11 @@ internal sealed class EmployeeManagerForm : Form
     private readonly NumericUpDown _ilLine1 = PayrollUi.Number(99, 0);
     private readonly NumericUpDown _ilLine2 = PayrollUi.Number(99, 0);
     private readonly NumericUpDown _ilExtra = PayrollUi.Number();
+    private readonly NumericUpDown _stateDeductions = PayrollUi.Number();
+    private readonly NumericUpDown _stateCredits = PayrollUi.Number();
+    private readonly TextBox _residenceState = PayrollUi.TextBox();
+    private readonly TextBox _stateFilingStatus = PayrollUi.TextBox();
+    private readonly CheckBox _stateExempt = new() { Text = "State withholding exempt", AutoSize = true };
     private readonly DateTimePicker _hireDate = new() { Width = 230, Format = DateTimePickerFormat.Short };
     private readonly TextBox _workState = PayrollUi.TextBox();
     private int? _employeeId;
@@ -208,7 +214,7 @@ internal sealed class EmployeeManagerForm : Form
 
     private TabPage BuildTaxTab()
     {
-        var tab = new TabPage("Federal & Illinois Withholding") { BackColor = WinTheme.Panel, Padding = new Padding(14) };
+        var tab = new TabPage("Federal & State Withholding") { BackColor = WinTheme.Panel, Padding = new Padding(14) };
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = WinTheme.Panel };
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
@@ -222,12 +228,17 @@ internal sealed class EmployeeManagerForm : Form
             PayrollUi.Field("DEDUCTIONS (STEP 4B)", _deductions),
             PayrollUi.Field("EXTRA FEDERAL / PAY PERIOD", _extraFederal),
             PayrollUi.Field("FEDERAL EXEMPT", _federalExempt, 260),
-            PayrollUi.Field("IL-W-4 LINE 1 ALLOWANCES", _ilLine1),
-            PayrollUi.Field("IL-W-4 LINE 2 ALLOWANCES", _ilLine2),
-            PayrollUi.Field("EXTRA ILLINOIS / PAY PERIOD", _ilExtra)
+            PayrollUi.Field("RESIDENCE STATE (2 LETTERS)", _residenceState, 200),
+            PayrollUi.Field("STATE FILING STATUS", _stateFilingStatus),
+            PayrollUi.Field("STATE PRIMARY ALLOWANCES", _ilLine1),
+            PayrollUi.Field("STATE ADDITIONAL ALLOWANCES", _ilLine2),
+            PayrollUi.Field("STATE DEDUCTIONS (ANNUAL)", _stateDeductions),
+            PayrollUi.Field("STATE CREDITS (ANNUAL)", _stateCredits),
+            PayrollUi.Field("EXTRA STATE / PAY PERIOD", _ilExtra),
+            PayrollUi.Field("STATE EXEMPT", _stateExempt, 260)
         });
         root.Controls.Add(fields, 0, 0);
-        var note = new Label { Dock = DockStyle.Fill, Text = "2026 calculations use IRS Publication 15-T automated percentage method and Illinois IL-700-T. Review imported values before payroll.", ForeColor = WinTheme.Muted, TextAlign = ContentAlignment.MiddleLeft, Font = WinTheme.BodyFont(9.5f) };
+        var note = new Label { Dock = DockStyle.Fill, Text = "Payroll uses signed, effective-dated federal and state tax rules. Unsupported or expired rules are blocked before calculation.", ForeColor = WinTheme.Muted, TextAlign = ContentAlignment.MiddleLeft, Font = WinTheme.BodyFont(9.5f) };
         root.Controls.Add(note, 0, 1);
         tab.Controls.Add(root);
         return tab;
@@ -242,7 +253,7 @@ internal sealed class EmployeeManagerForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = WinTheme.Panel };
         var email = PayrollUi.Button("EMAIL W-4 LINK", true, 180); email.Click += (_, _) => EmailW4();
         var importW4 = PayrollUi.Button("IMPORT COMPLETED W-4", true, 220); importW4.Click += async (_, _) => await ImportW4Async();
-        var state = PayrollUi.Button("ATTACH IL-W-4", false, 180); state.Click += async (_, _) => await AttachAsync(EmployeeDocumentType.StateWithholding);
+        var state = PayrollUi.Button("ATTACH STATE FORM", false, 190); state.Click += async (_, _) => await AttachAsync(EmployeeDocumentType.StateWithholding);
         var id = PayrollUi.Button("ATTACH ID / LICENSE", false, 200); id.Click += async (_, _) => await AttachAsync(EmployeeDocumentType.DriversLicenseOrId);
         var i9 = PayrollUi.Button("ATTACH I-9", false, 150); i9.Click += async (_, _) => await AttachAsync(EmployeeDocumentType.FormI9);
         var open = PayrollUi.Button("OPEN SELECTED", false, 170); open.Click += async (_, _) => await OpenDocumentAsync();
@@ -296,7 +307,14 @@ internal sealed class EmployeeManagerForm : Form
         _filingStatus.SelectedItem = e.FederalFilingStatus; _multipleJobs.Checked = e.FederalMultipleJobs; _federalExempt.Checked = e.FederalExempt;
         _dependents.Value = Clamp(_dependents, e.FederalDependentsCredit); _otherIncome.Value = Clamp(_otherIncome, e.FederalOtherIncome);
         _deductions.Value = Clamp(_deductions, e.FederalDeductions); _extraFederal.Value = Clamp(_extraFederal, e.FederalExtraWithholding);
-        _ilLine1.Value = Clamp(_ilLine1, e.IllinoisLine1Allowances); _ilLine2.Value = Clamp(_ilLine2, e.IllinoisLine2Allowances); _ilExtra.Value = Clamp(_ilExtra, e.IllinoisExtraWithholding);
+        _residenceState.Text = string.IsNullOrWhiteSpace(e.ResidenceState) ? e.State : e.ResidenceState;
+        _stateFilingStatus.Text = string.IsNullOrWhiteSpace(e.StateFilingStatus) ? "Single" : e.StateFilingStatus;
+        _stateExempt.Checked = e.StateExempt;
+        _stateDeductions.Value = Clamp(_stateDeductions, e.StateDeductions);
+        _stateCredits.Value = Clamp(_stateCredits, e.StateCredits);
+        _ilLine1.Value = Clamp(_ilLine1, e.StateAllowances == 0 ? e.IllinoisLine1Allowances : e.StateAllowances);
+        _ilLine2.Value = Clamp(_ilLine2, e.StateAdditionalAllowances == 0 ? e.IllinoisLine2Allowances : e.StateAdditionalAllowances);
+        _ilExtra.Value = Clamp(_ilExtra, e.StateExtraWithholding == 0 ? e.IllinoisExtraWithholding : e.StateExtraWithholding);
         await RefreshDocumentsAsync();
     }
 
@@ -304,9 +322,10 @@ internal sealed class EmployeeManagerForm : Form
     {
         _employeeId = null;
         foreach (var box in new[] { _number, _first, _middle, _last, _address, _city, _state, _zip, _phone, _email, _ssn }) box.Clear();
-        _state.Text = "IL"; _workState.Text = "IL"; _payRate.Value = 0; _payType.SelectedItem = EmployeePayType.Hourly; _frequency.SelectedItem = PayFrequency.Biweekly;
+        _state.Text = "IL"; _workState.Text = "IL"; _residenceState.Text = "IL"; _stateFilingStatus.Text = "Single"; _payRate.Value = 0; _payType.SelectedItem = EmployeePayType.Hourly; _frequency.SelectedItem = PayFrequency.Biweekly;
         _overtime.Checked = true; _filingStatus.SelectedItem = FederalFilingStatus.SingleOrMarriedFilingSeparately; _multipleJobs.Checked = false; _federalExempt.Checked = false;
-        _dependents.Value = _otherIncome.Value = _deductions.Value = _extraFederal.Value = _ilLine1.Value = _ilLine2.Value = _ilExtra.Value = 0;
+        _stateExempt.Checked = false;
+        _dependents.Value = _otherIncome.Value = _deductions.Value = _extraFederal.Value = _ilLine1.Value = _ilLine2.Value = _ilExtra.Value = _stateDeductions.Value = _stateCredits.Value = 0;
         _documents.DataSource = null;
         _ = AssignNextNumberAsync();
     }
@@ -322,6 +341,13 @@ internal sealed class EmployeeManagerForm : Form
     {
         if (string.IsNullOrWhiteSpace(_number.Text) || string.IsNullOrWhiteSpace(_first.Text) || string.IsNullOrWhiteSpace(_last.Text))
         { MessageBox.Show(this, "Employee number, first name, and last name are required.", "Employee", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        var workState = (string.IsNullOrWhiteSpace(_workState.Text) ? _state.Text : _workState.Text).Trim().ToUpperInvariant();
+        var residenceState = (string.IsNullOrWhiteSpace(_residenceState.Text) ? _state.Text : _residenceState.Text).Trim().ToUpperInvariant();
+        if (!IsStateCode(workState) || !IsStateCode(residenceState))
+        {
+            MessageBox.Show(this, "Work State and Residence State must be valid two-letter U.S. state codes.", "Employee", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
         await using var db = _createDb();
         var e = _employeeId.HasValue ? await db.Employees.FirstOrDefaultAsync(x => x.Id == _employeeId && x.StoreId == _storeId) : null;
         e ??= new Employee { StoreId = _storeId, CreatedUtc = DateTime.UtcNow };
@@ -331,13 +357,27 @@ internal sealed class EmployeeManagerForm : Form
         var ssnDigits = Regex.Replace(_ssn.Text, @"\D", "");
         if (ssnDigits.Length == 9) { e.EncryptedSsn = PayrollSensitiveDataProtector.ProtectText(ssnDigits); e.SsnLast4 = ssnDigits[^4..]; }
         e.PayRate = _payRate.Value; e.PayType = (EmployeePayType)(_payType.SelectedItem ?? EmployeePayType.Hourly); e.PayFrequency = (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Biweekly);
-        e.IsOvertimeEligible = _overtime.Checked; e.WorkState = string.IsNullOrWhiteSpace(_workState.Text) ? e.State : _workState.Text.Trim().ToUpperInvariant(); e.HireDate = DateOnly.FromDateTime(_hireDate.Value);
+        e.IsOvertimeEligible = _overtime.Checked; e.WorkState = workState; e.ResidenceState = residenceState; e.HireDate = DateOnly.FromDateTime(_hireDate.Value);
         e.FederalFilingStatus = (FederalFilingStatus)(_filingStatus.SelectedItem ?? FederalFilingStatus.SingleOrMarriedFilingSeparately); e.FederalMultipleJobs = _multipleJobs.Checked;
         e.FederalDependentsCredit = _dependents.Value; e.FederalOtherIncome = _otherIncome.Value; e.FederalDeductions = _deductions.Value; e.FederalExtraWithholding = _extraFederal.Value; e.FederalExempt = _federalExempt.Checked;
-        e.IllinoisLine1Allowances = decimal.ToInt32(_ilLine1.Value); e.IllinoisLine2Allowances = decimal.ToInt32(_ilLine2.Value); e.IllinoisExtraWithholding = _ilExtra.Value; e.UpdatedUtc = DateTime.UtcNow;
+        e.StateFilingStatus = string.IsNullOrWhiteSpace(_stateFilingStatus.Text) ? "Single" : _stateFilingStatus.Text.Trim();
+        e.StateAllowances = decimal.ToInt32(_ilLine1.Value); e.StateAdditionalAllowances = decimal.ToInt32(_ilLine2.Value);
+        e.StateDeductions = _stateDeductions.Value; e.StateCredits = _stateCredits.Value;
+        e.StateExtraWithholding = _ilExtra.Value; e.StateExempt = _stateExempt.Checked;
+        // Keep the legacy Illinois fields synchronized for old records and old app compatibility.
+        if (workState == "IL")
+        {
+            e.IllinoisLine1Allowances = e.StateAllowances;
+            e.IllinoisLine2Allowances = e.StateAdditionalAllowances;
+            e.IllinoisExtraWithholding = e.StateExtraWithholding;
+        }
+        e.UpdatedUtc = DateTime.UtcNow;
         try { await db.SaveChangesAsync(); _employeeId = e.Id; await RefreshAsync(); await RefreshDocumentsAsync(); }
         catch (Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "Employee Save Failed", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
+
+    private static bool IsStateCode(string value)
+        => value.Length == 2 && value.All(character => character is >= 'A' and <= 'Z');
 
     private async Task DeactivateAsync()
     {
@@ -1083,6 +1123,9 @@ internal sealed class PayrollWorkRow
     public decimal State { get; set; }
     public decimal Net { get; set; }
     public string CheckNumber { get; set; } = "";
+    [Browsable(false)] public string WorkState { get; set; } = "";
+    [Browsable(false)] public string StateTaxRuleId { get; set; } = "";
+    [Browsable(false)] public string StateTaxRuleVersion { get; set; } = "";
 }
 
 internal sealed class PayrollRunForm : Form
@@ -1098,6 +1141,7 @@ internal sealed class PayrollRunForm : Form
     private readonly DataGridView _grid = WinTheme.Grid();
     private readonly BindingList<PayrollWorkRow> _rows = new();
     private readonly Label _totals = new() { Dock = DockStyle.Fill, ForeColor = WinTheme.BlueDark, Font = WinTheme.BoldFont(10), TextAlign = ContentAlignment.MiddleLeft };
+    private TaxRulePackageSnapshot? _taxPackage;
     private int? _runId;
 
     public PayrollRunForm(Func<AppDbContext> createDb, int storeId, string user)
@@ -1225,26 +1269,54 @@ internal sealed class PayrollRunForm : Form
         _grid.EndEdit();
         if (_rows.Count == 0) return false;
         var employeeIds = _rows.Select(x => x.EmployeeId).ToList(); var payDate = DateOnly.FromDateTime(_payDate.Value);
-        if (payDate.Year != PayrollCalculator2026.TaxYear)
+        try
         {
-            MessageBox.Show(this, $"Payroll tax tables are currently certified for {PayrollCalculator2026.TaxYear}. Install the new tax-year update before calculating a {payDate.Year} payroll.", "Tax Table Update Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _taxPackage = TaxRulePackageService.LoadForDate(payDate);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Tax Table Update Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
         }
         await using var db = _createDb();
         var employees = await db.Employees.AsNoTracking().Where(x => employeeIds.Contains(x.Id) && x.StoreId == _storeId).ToDictionaryAsync(x => x.Id);
-        var unsupported = employees.Values.FirstOrDefault(x => !x.WorkState.Equals("IL", StringComparison.OrdinalIgnoreCase));
-        if (unsupported is not null)
+        foreach (var employee in employees.Values)
         {
-            MessageBox.Show(this, $"{unsupported.FullName} uses work state {unsupported.WorkState}. This release includes verified Illinois withholding only, so payroll was not calculated.", "State Tax Table Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return false;
+            try
+            {
+                _ = PayrollTaxCalculator.GetStateRule(_taxPackage.RuleSet, employee.WorkState, payDate);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    this,
+                    $"{employee.FullName}: {ex.Message}",
+                    "State Tax Table Required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return false;
+            }
         }
         var prior = await db.PayrollEntries.AsNoTracking().Where(x => employeeIds.Contains(x.EmployeeId) && x.PayrollRun!.StoreId == _storeId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.TaxYear == payDate.Year && x.PayrollRun.PayDate < payDate).GroupBy(x => x.EmployeeId).Select(x => new { EmployeeId = x.Key, Gross = x.Sum(y => y.GrossPay) }).ToDictionaryAsync(x => x.EmployeeId, x => x.Gross);
         foreach (var row in _rows)
         {
             if (!employees.TryGetValue(row.EmployeeId, out var employee)) continue;
-            var calculation = PayrollCalculator2026.Calculate(employee, Math.Max(0, row.Regular), Math.Max(0, row.Overtime), Math.Max(0, row.Holiday), Math.Max(0, row.Bonus), Math.Max(0, row.CashAdvance), Math.Max(0, row.OtherDeduction), prior.GetValueOrDefault(row.EmployeeId));
+            var calculation = PayrollTaxCalculator.Calculate(
+                employee,
+                Math.Max(0, row.Regular),
+                Math.Max(0, row.Overtime),
+                Math.Max(0, row.Holiday),
+                Math.Max(0, row.Bonus),
+                Math.Max(0, row.CashAdvance),
+                Math.Max(0, row.OtherDeduction),
+                prior.GetValueOrDefault(row.EmployeeId),
+                payDate,
+                _taxPackage.RuleSet);
             row.RegularPay = calculation.RegularPay; row.OvertimePay = calculation.OvertimePay; row.HolidayPay = calculation.HolidayPay;
             row.Gross = calculation.GrossPay; row.Federal = calculation.FederalWithholding; row.SocialSecurity = calculation.SocialSecurity; row.Medicare = calculation.Medicare; row.State = calculation.StateWithholding; row.Net = calculation.NetPay;
+            row.WorkState = employee.WorkState.Trim().ToUpperInvariant();
+            row.StateTaxRuleId = calculation.StateRuleId;
+            row.StateTaxRuleVersion = calculation.StateRuleVersion;
         }
         _rows.ResetBindings(); UpdateTotals();
         return true;
@@ -1269,7 +1341,14 @@ internal sealed class PayrollRunForm : Form
             run = new PayrollRun { StoreId = _storeId, CreatedByName = _user, CreatedUtc = DateTime.UtcNow, Status = PayrollRunStatus.Draft };
             db.PayrollRuns.Add(run);
         }
+        if (_taxPackage is null)
+            throw new InvalidOperationException("Payroll tax rules were not loaded.");
         run.PeriodStart = start; run.PeriodEnd = end; run.PayDate = payDate; run.PayFrequency = (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Weekly); run.TaxYear = payDate.Year;
+        run.TaxRuleSetId = _taxPackage.RuleSet.RuleSetId;
+        run.TaxRuleVersion = _taxPackage.RuleSet.Version;
+        run.TaxRuleSha256 = _taxPackage.Sha256;
+        run.TaxRuleSources = _taxPackage.RuleSet.SourceSummary;
+        run.TaxRulesVerifiedUtc = _taxPackage.RuleSet.VerifiedUtc;
         await db.SaveChangesAsync();
         var employeeIds = _rows.Select(x => x.EmployeeId).ToList();
         var prior = await PriorYtdAsync(db, employeeIds, payDate, run.Id);
@@ -1285,6 +1364,7 @@ internal sealed class PayrollRunForm : Form
                 RegularPay = row.RegularPay, OvertimePay = row.OvertimePay, HolidayPay = row.HolidayPay, BonusPay = row.Bonus,
                 CashAdvanceDeduction = row.CashAdvance, OtherDeduction = row.OtherDeduction,
                 GrossPay = row.Gross, FederalWithholding = row.Federal, SocialSecurityWithholding = row.SocialSecurity, MedicareWithholding = row.Medicare, StateWithholding = row.State, NetPay = row.Net,
+                WorkState = row.WorkState, StateTaxRuleId = row.StateTaxRuleId, StateTaxRuleVersion = row.StateTaxRuleVersion,
                 GrossPayYtd = ytd.Gross + row.Gross, FederalWithholdingYtd = ytd.Federal + row.Federal, SocialSecurityWithholdingYtd = ytd.SocialSecurity + row.SocialSecurity, MedicareWithholdingYtd = ytd.Medicare + row.Medicare, StateWithholdingYtd = ytd.State + row.State,
                 CheckNumber = row.CheckNumber, OverrideReason = row.OverrideReason
             });
@@ -1302,6 +1382,13 @@ internal sealed class PayrollRunForm : Form
         await using var db = _createDb(); await using var tx = await db.Database.BeginTransactionAsync();
         var run = await db.PayrollRuns.FirstAsync(x => x.Id == _runId && x.StoreId == _storeId);
         if (run.Status != PayrollRunStatus.Draft) { MessageBox.Show(this, "This payroll is no longer a draft."); return; }
+        if (string.IsNullOrWhiteSpace(run.TaxRuleSetId) ||
+            string.IsNullOrWhiteSpace(run.TaxRuleVersion) ||
+            string.IsNullOrWhiteSpace(run.TaxRuleSha256))
+        {
+            MessageBox.Show(this, "This payroll has no verified tax-rule audit record and cannot be finalized.", "Payroll Safety Check", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
         run.Status = PayrollRunStatus.Finalized; run.ApprovedByName = _user; run.ApprovedUtc = DateTime.UtcNow; run.FinalizedByName = _user; run.FinalizedUtc = DateTime.UtcNow;
         var shifts = await db.ScheduleShifts.Where(x => x.StoreId == _storeId && x.ShiftDate >= run.PeriodStart && x.ShiftDate <= run.PeriodEnd && x.Status == ScheduleShiftStatus.Published).ToListAsync();
         foreach (var shift in shifts) { shift.Status = ScheduleShiftStatus.Completed; shift.UpdatedByName = _user; shift.UpdatedUtc = DateTime.UtcNow; }

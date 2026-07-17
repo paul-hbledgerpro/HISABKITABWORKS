@@ -108,25 +108,29 @@ internal sealed partial class MainForm
 
     private Control BuildSigningSetup()
     {
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 2, RowCount = 3, Margin = new Padding(14, 0, 0, 0) };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = AdminTheme.Panel, ColumnCount = 3, RowCount = 3, Margin = new Padding(14, 0, 0, 0) };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var heading = AdminTheme.Label("PRIVATE LICENSE SIGNING", AdminTheme.Copper, 10, true);
         heading.Dock = DockStyle.Fill;
         layout.Controls.Add(heading, 0, 0);
-        layout.SetColumnSpan(heading, 2);
+        layout.SetColumnSpan(heading, 3);
         _setupSigning.Dock = DockStyle.Fill;
         _backupSigning.Dock = DockStyle.Fill;
+        _signTaxRules.Dock = DockStyle.Fill;
         _setupSigning.Margin = new Padding(0, 0, 6, 0);
-        _backupSigning.Margin = new Padding(6, 0, 0, 0);
+        _backupSigning.Margin = new Padding(6, 0, 6, 0);
+        _signTaxRules.Margin = new Padding(6, 0, 0, 0);
         layout.Controls.Add(_setupSigning, 0, 1);
         layout.Controls.Add(_backupSigning, 1, 1);
+        layout.Controls.Add(_signTaxRules, 2, 1);
         _signingStatus.Dock = DockStyle.Fill;
         layout.Controls.Add(_signingStatus, 0, 2);
-        layout.SetColumnSpan(_signingStatus, 2);
+        layout.SetColumnSpan(_signingStatus, 3);
         return layout;
     }
 

@@ -77,6 +77,7 @@ internal sealed partial class MainForm : Form
         {
             await LoadStoresAsync();
             ShowModule("Dashboard");
+            BeginInvoke(new Action(async () => await AppUpdateStartupService.CheckAtStartupAsync(this)));
         };
     }
 
@@ -146,6 +147,8 @@ internal sealed partial class MainForm : Form
         settings.DropDownItems.Add(MenuItem("Database Connection...", (_, _) => OpenAdminForm<DatabaseSettingsForm>()));
 
         var help = new ToolStripMenuItem("Help") { ForeColor = Color.White };
+        help.DropDownItems.Add(MenuItem("Check for Updates...", async (_, _) => await AppUpdateStartupService.CheckManuallyAsync(this)));
+        help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add(MenuItem("About", (_, _) => MessageBox.Show(this, "HISAB KITAB WinForms\nConverted shell using the existing database logic.", "About", MessageBoxButtons.OK, MessageBoxIcon.Information)));
 
         menu.Items.Add(file);
@@ -1480,6 +1483,7 @@ internal sealed partial class MainForm : Form
         actions.Controls.Add(delete);
         recalc();
         refresh();
+        clearAllShiftFields();
         return ModuleShell("\uE8C7", "Shift Cash Drop", "Record and track shift cash drops and register payouts.", root);
     }
 
@@ -1843,7 +1847,30 @@ internal sealed partial class MainForm : Form
         pendingPayouts = MockSummaryValue(stats, "Payouts This Month", WinTheme.Red, 210);
         closingBalance = MockSummaryValue(stats, "Closing Balance", WinTheme.Green, 210);
         currentBalance = MockSummaryValue(stats, "Carry Forward", WinTheme.Copper, 210);
-        _ = loadLookupsAsync().ContinueWith(_ => refreshAsync(), TaskScheduler.FromCurrentSynchronizationContext());
+        var cashOnHandInitialized = false;
+        root.HandleCreated += async (_, _) =>
+        {
+            if (cashOnHandInitialized)
+                return;
+
+            cashOnHandInitialized = true;
+            try
+            {
+                await loadLookupsAsync();
+                await refreshAsync();
+                clearCashOnHandFields();
+            }
+            catch (Exception ex)
+            {
+                cashOnHandInitialized = false;
+                MessageBox.Show(
+                    this,
+                    $"Cash On Hand could not load.\n\n{AppBootstrap.RedactSensitiveText(ex.Message)}",
+                    "Cash On Hand",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        };
         return ModuleShell("\uEAFD", "Cash On Hand", "Track cash added, payouts, and carry forward balance.", root);
     }
 

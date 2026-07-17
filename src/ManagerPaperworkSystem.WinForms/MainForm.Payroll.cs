@@ -28,9 +28,12 @@ internal sealed partial class MainForm
         AddPayrollAction(actions, "ENTER EMPLOYEE HOURS", () => { using var form = new EmployeeHoursForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); }, true);
         AddPayrollAction(actions, "RUN PAYROLL", () => { using var form = new PayrollRunForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Payroll"); }, true);
         AddPayrollAction(actions, "PAYROLL HISTORY", () => { using var form = new PayrollHistoryForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); }, false);
+        AddPayrollAction(actions, "TAX RULES", () => { using var form = new TaxRuleStatusForm(); form.ShowDialog(this); }, false);
         if (LicenseRuntime.HasService("Scheduling"))
             AddPayrollAction(actions, "SCHEDULING", () => ShowModule("Scheduling"), false);
         body.Controls.Add(actions, 0, 1);
+
+        _ = Task.Run(async () => await TaxRulePackageService.CheckForUpdatesAsync(false));
 
         var grid = WinTheme.Grid();
         grid.DataSource = runs.Select(x => new
