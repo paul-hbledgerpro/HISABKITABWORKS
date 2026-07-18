@@ -1,5 +1,5 @@
 #define MyAppName "HISAB KITAB WORKS Admin License Generator"
-#define MyAppVersion "1.0.82"
+#define MyAppVersion "1.0.83"
 #define MyAppPublisher "Hisab Kitab Works"
 #define MyAppExeName "HISAB KITAB WORKS License Generator.exe"
 

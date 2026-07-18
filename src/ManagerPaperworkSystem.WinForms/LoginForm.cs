@@ -125,6 +125,20 @@ internal sealed class LoginForm : Form
             loginCard.SetBounds(leftPosition, topPosition, width, height);
         }
 
+        void PositionResponsiveColumns()
+        {
+            // Keep the approved artwork unchanged at the preferred desktop size,
+            // but release more room to the login card on smaller/scaled displays.
+            var targetLeftWidth = Math.Clamp(
+                (int)Math.Round(root.ClientSize.Width * 0.44),
+                520,
+                730);
+            if (left.Width != targetLeftWidth)
+                left.Width = targetLeftWidth;
+            PositionLoginCard();
+        }
+
+        root.Layout += (_, _) => PositionResponsiveColumns();
         right.Layout += (_, _) => PositionLoginCard();
 
         var content = new TableLayoutPanel
@@ -336,7 +350,7 @@ internal sealed class LoginForm : Form
             Margin = Padding.Empty
         };
         content.Controls.Add(trustMessage, 0, 11);
-        PositionLoginCard();
+        PositionResponsiveColumns();
         ShowCredentialStep();
 
         _login.Click += async (_, _) => await LoginAsync();

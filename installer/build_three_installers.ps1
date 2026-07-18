@@ -34,7 +34,11 @@ function Reset-BuildDirectory([string]$Path) {
     New-Item -ItemType Directory -Force -Path $fullPath | Out-Null
 }
 
-function Publish-DesktopApp([string]$Project, [string]$OutputDirectory, [string]$ExpectedExe) {
+function Publish-DesktopApp(
+    [string]$Project,
+    [string]$OutputDirectory,
+    [string]$ExpectedExe,
+    [bool]$SingleFile = $false) {
     if (-not (Test-Path -LiteralPath $Project)) {
         throw "Project not found: $Project"
     }
@@ -48,10 +52,12 @@ function Publish-DesktopApp([string]$Project, [string]$OutputDirectory, [string]
         "-r", $Runtime,
         "-o", $OutputDirectory,
         "--self-contained", "true",
-        "/p:PublishSingleFile=false",
+        ("/p:PublishSingleFile=" + $SingleFile.ToString().ToLowerInvariant()),
         "/p:UseAppHost=true",
         "/p:PublishTrimmed=false",
         "/p:PublishReadyToRun=false",
+        "/p:IncludeNativeLibrariesForSelfExtract=true",
+        "/p:EnableCompressionInSingleFile=true",
         "/p:DebugType=None",
         "/p:DebugSymbols=false"
     )
@@ -80,23 +86,14 @@ if (-not $iscc) {
 New-Item -ItemType Directory -Force -Path $publishRoot, $releaseDir | Out-Null
 
 Publish-DesktopApp $clientProject $clientPublish "HISAB KITAB.exe"
-Publish-DesktopApp $updaterProject $updaterPublish "Upgrade.exe"
+Publish-DesktopApp $updaterProject $updaterPublish "Upgrade.exe" $true
 $updaterPayloadDirectory = Join-Path $clientPublish "UpdaterPayload"
 New-Item -ItemType Directory -Force -Path $updaterPayloadDirectory | Out-Null
-foreach ($updaterFileName in @(
-    "Upgrade.exe",
-    "Upgrade.dll",
-    "Upgrade.deps.json",
-    "Upgrade.runtimeconfig.json"
-)) {
-    $updaterFile = Join-Path $updaterPublish $updaterFileName
-    if (-not (Test-Path -LiteralPath $updaterFile)) {
-        throw "Updater publish did not create the required file: $updaterFile"
-    }
-    Copy-Item -LiteralPath $updaterFile -Destination (Join-Path $clientPublish $updaterFileName) -Force
-    Copy-Item -LiteralPath $updaterFile -Destination (Join-Path $updaterPayloadDirectory $updaterFileName) -Force
+foreach ($updaterFile in Get-ChildItem -LiteralPath $updaterPublish -File) {
+    Copy-Item -LiteralPath $updaterFile.FullName -Destination (Join-Path $updaterPayloadDirectory $updaterFile.Name) -Force
 }
-Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.82" -Encoding Ascii
+Copy-Item -LiteralPath (Join-Path $updaterPublish "Upgrade.exe") -Destination (Join-Path $clientPublish "Upgrade.exe") -Force
+Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.83" -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
 Publish-DesktopApp $accountProject $accountPublish "HISAB KITAB WORKS Client Account Manager.exe"
@@ -191,12 +188,12 @@ function New-ClientUpdatePackage([string]$Version) {
     return $updateZip
 }
 
-$clientUpdateZip = New-ClientUpdatePackage "1.0.82"
+$clientUpdateZip = New-ClientUpdatePackage "1.0.83"
 
 $expectedInstallers = @(
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.82.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.82.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.82.exe")
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.83.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.83.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.83.exe")
 )
 
 Write-Host ""

@@ -25,13 +25,6 @@ internal static class AppUpdateStartupService
     private const string PreferredAssetPrefix = "HISAB_KITAB_Update_win-x64";
     private const string UpdaterPayloadDirectoryName = "UpdaterPayload";
     private const int MaximumDeferrals = 3;
-    private static readonly string[] UpdaterRuntimeFiles =
-    {
-        "Upgrade.exe",
-        "Upgrade.dll",
-        "Upgrade.deps.json",
-        "Upgrade.runtimeconfig.json"
-    };
     private static readonly byte[] StateEntropy =
         Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-APP-UPDATE-DEFERRALS-V1");
     private static readonly SemaphoreSlim Gate = new(1, 1);
@@ -257,15 +250,17 @@ internal static class AppUpdateStartupService
         Directory.CreateDirectory(workingDirectory);
 
         var copiedFiles = 0;
-        foreach (var fileName in UpdaterRuntimeFiles)
+        foreach (var source in Directory.EnumerateFiles(
+                     sourceDirectory,
+                     "*",
+                     SearchOption.AllDirectories))
         {
-            var source = Path.Combine(sourceDirectory, fileName);
-            if (!File.Exists(source))
-                continue;
-
+            var relativePath = Path.GetRelativePath(sourceDirectory, source);
+            var destination = Path.Combine(workingDirectory, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(
                 source,
-                Path.Combine(workingDirectory, fileName),
+                destination,
                 overwrite: true);
             copiedFiles++;
         }
