@@ -215,7 +215,17 @@ internal static class AppUpdateStartupService
             ?? throw new InvalidOperationException("The updater could not be started.");
 
         owner.Hide();
-        owner.BeginInvoke(new Action(Application.Exit));
+        owner.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                owner.Close();
+            }
+            finally
+            {
+                Application.Exit();
+            }
+        }));
         return Task.CompletedTask;
     }
 

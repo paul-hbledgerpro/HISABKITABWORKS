@@ -562,9 +562,17 @@ public class UpdateManagerForm : Form
             try
             {
                 p.CloseMainWindow();
-                if (!p.WaitForExit(5000)) p.Kill(true);
+                if (!p.WaitForExit(1500))
+                {
+                    p.Kill(true);
+                    p.WaitForExit(5000);
+                }
             }
             catch { }
+            finally
+            {
+                p.Dispose();
+            }
         }
     }
 
@@ -577,8 +585,15 @@ public class UpdateManagerForm : Form
                 using var process = Process.GetProcessById(pid);
                 if (!process.HasExited)
                 {
-                    _lblProgress.Text = "Waiting for HISAB KITAB to close...";
-                    await Task.Run(() => process.WaitForExit(12000));
+                    _lblProgress.Text = "Closing HISAB KITAB...";
+                    process.CloseMainWindow();
+                    var exited = await Task.Run(() => process.WaitForExit(3000));
+                    if (!exited)
+                    {
+                        _lblProgress.Text = "Finishing application shutdown...";
+                        process.Kill(true);
+                        await Task.Run(() => process.WaitForExit(5000));
+                    }
                 }
             }
             catch (ArgumentException)
@@ -588,7 +603,7 @@ public class UpdateManagerForm : Form
         }
 
         CloseMainApp();
-        await Task.Delay(750);
+        await Task.Delay(300);
     }
 
     private static bool IsNewerVersion(string latest, string current)

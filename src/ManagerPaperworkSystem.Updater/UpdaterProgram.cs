@@ -91,8 +91,9 @@ internal static class Program
                 try
                 {
                     var proc = Process.GetProcessById(pid);
-                    if (!proc.WaitForExit(15000))
+                    if (!proc.WaitForExit(3000))
                     {
+                        Log($"Process {pid} did not close promptly. Forcing it to exit.");
                         proc.Kill(true);
                         proc.WaitForExit(5000);
                     }
@@ -104,9 +105,9 @@ internal static class Program
             var appName = Path.GetFileNameWithoutExtension(appExe);
             foreach (var p in Process.GetProcessesByName(appName))
             {
-                try { p.CloseMainWindow(); if (!p.WaitForExit(3000)) p.Kill(true); } catch { }
+                try { p.CloseMainWindow(); if (!p.WaitForExit(1500)) p.Kill(true); } catch { }
             }
-            Thread.Sleep(1500);
+            Thread.Sleep(500);
 
             // Apply update
             ApplyZipUpdate(zipPath, installDir, Log);
@@ -167,7 +168,7 @@ internal static class Program
 
                 try
                 {
-                    File.Copy(src, dest, overwrite: true);
+                    CopyWithRetry(src, dest);
                 }
                 catch (IOException) when (rel.Equals("Upgrade.exe", StringComparison.OrdinalIgnoreCase) || rel.Equals("Update.exe", StringComparison.OrdinalIgnoreCase))
                 {
@@ -176,7 +177,7 @@ internal static class Program
                     var oldPath = dest + ".old";
                     try { File.Delete(oldPath); } catch { }
                     File.Move(dest, oldPath);
-                    File.Copy(src, dest, overwrite: true);
+                    CopyWithRetry(src, dest);
                     Log($"{rel} self-updated via rename trick");
                 }
 
@@ -195,6 +196,27 @@ internal static class Program
         {
             MessageBox.Show($"Update partially applied: {copied} updated, {failed} failed.\n\n" +
                 string.Join("\n", failedFiles.Take(5)), "Update", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private static void CopyWithRetry(string source, string destination)
+    {
+        const int maximumAttempts = 6;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Copy(source, destination, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < maximumAttempts)
+            {
+                Thread.Sleep(250 * attempt);
+            }
+            catch (UnauthorizedAccessException) when (attempt < maximumAttempts)
+            {
+                Thread.Sleep(250 * attempt);
+            }
         }
     }
 
