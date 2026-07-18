@@ -489,27 +489,30 @@ internal sealed class AppUpdateDownloadForm : Form
             response.EnsureSuccessStatusCode();
             var length = response.Content.Headers.ContentLength;
             await using var input = await response.Content.ReadAsStreamAsync();
-            await using var output = new FileStream(
-                destination,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                81920,
-                useAsync: true);
             var buffer = new byte[81920];
             long readTotal = 0;
-            int read;
-            while ((read = await input.ReadAsync(buffer)) > 0)
+            await using (var output = new FileStream(
+                             destination,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             81920,
+                             useAsync: true))
             {
-                await output.WriteAsync(buffer.AsMemory(0, read));
-                readTotal += read;
-                if (length is > 0)
-                    _progress.Value = Math.Clamp((int)(readTotal * 100 / length.Value), 0, 100);
-                _status.Text = length is > 0
-                    ? $"Downloading... {_progress.Value}%"
-                    : $"Downloading... {readTotal / 1024:N0} KB";
+                int read;
+                while ((read = await input.ReadAsync(buffer)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read));
+                    readTotal += read;
+                    if (length is > 0)
+                        _progress.Value = Math.Clamp((int)(readTotal * 100 / length.Value), 0, 100);
+                    _status.Text = length is > 0
+                        ? $"Downloading... {_progress.Value}%"
+                        : $"Downloading... {readTotal / 1024:N0} KB";
+                }
+                await output.FlushAsync();
             }
-            await output.FlushAsync();
+
             if (readTotal < 1024)
                 throw new InvalidOperationException("The downloaded update package is incomplete.");
             var signature = new byte[4];
