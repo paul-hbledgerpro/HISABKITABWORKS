@@ -389,8 +389,10 @@ function completionPage(): Response {
 </head>
 <body><main>
   <h1>HISAB KITAB WORKS</h1>
-  <p class="ok">Your secure bank-linking session is complete.</p>
-  <p>Return to HISAB KITAB, wait a few seconds, and click <strong>Sync Now</strong>.
-     You may close this browser window.</p>
+  <p class="ok">Your secure bank-linking browser session has closed.</p>
+  <p>Return to HISAB KITAB while it confirms the result. The bank is connected only
+     after HISAB KITAB displays <strong>Bank Connected</strong>. If it does not,
+     follow the message shown in the app and try again.</p>
+  <p>You may close this browser window.</p>
 </main></body></html>`);
 }

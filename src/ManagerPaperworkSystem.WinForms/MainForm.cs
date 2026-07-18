@@ -3784,7 +3784,37 @@ internal sealed partial class MainForm : Form
         {
             try
             {
-                var local = await LoadLiveBankStatusAsync();
+                LocalBankConnectionStatus? local;
+                using (var client = new LiveBankSyncClient())
+                {
+                    if (client.IsConfigured)
+                    {
+                        var remoteConnections = await client.GetConnectionsAsync();
+                        var remote = remoteConnections
+                            .OrderByDescending(connection => connection.LastSyncedUtc)
+                            .FirstOrDefault();
+                        if (remote is null)
+                        {
+                            await ClearLocalBankConnectionStatusAsync();
+                            liveBankStatus.Text = "Not connected — click Connect to link a bank";
+                            liveBankStatus.ForeColor = WinTheme.Muted;
+                            return;
+                        }
+
+                        local = new LocalBankConnectionStatus(
+                            remote.InstitutionName,
+                            remote.AccountName,
+                            remote.AccountMask,
+                            remote.Status,
+                            remote.LastSyncedUtc,
+                            remote.LastError);
+                    }
+                    else
+                    {
+                        local = await LoadLiveBankStatusAsync();
+                    }
+                }
+
                 if (local is null)
                 {
                     liveBankStatus.Text = "Not connected — statement upload remains available";
@@ -5482,6 +5512,17 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
             reader[3]?.ToString() ?? "",
             synced,
             reader[5]?.ToString() ?? "");
+    }
+
+    private async Task ClearLocalBankConnectionStatusAsync()
+    {
+        await EnsureBankStatementTablesAsync();
+        await using var conn = CreateBankConnection();
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM BankConnections WHERE StoreId=@sid";
+        AddParam(cmd, "@sid", _currentStoreId);
+        await cmd.ExecuteNonQueryAsync();
     }
 
     private async Task SaveLiveBankSyncAsync(LiveBankSyncResult result)

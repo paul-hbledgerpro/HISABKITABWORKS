@@ -1,5 +1,5 @@
 #define MyAppName "HISAB KITAB"
-#define MyAppVersion "1.0.92"
+#define MyAppVersion "1.0.93"
 #define MyAppPublisher "Hisab Kitab"
 #define MyAppExeName "HISAB KITAB.exe"
 #define MySourceDir "..\publish\win-x64"
