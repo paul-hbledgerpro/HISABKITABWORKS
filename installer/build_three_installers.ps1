@@ -81,7 +81,18 @@ New-Item -ItemType Directory -Force -Path $publishRoot, $releaseDir | Out-Null
 
 Publish-DesktopApp $clientProject $clientPublish "HISAB KITAB.exe"
 Publish-DesktopApp $updaterProject $updaterPublish "Upgrade.exe"
-Copy-Item -LiteralPath (Join-Path $updaterPublish "Upgrade.exe") -Destination (Join-Path $clientPublish "Upgrade.exe") -Force
+foreach ($updaterFileName in @(
+    "Upgrade.exe",
+    "Upgrade.dll",
+    "Upgrade.deps.json",
+    "Upgrade.runtimeconfig.json"
+)) {
+    $updaterFile = Join-Path $updaterPublish $updaterFileName
+    if (-not (Test-Path -LiteralPath $updaterFile)) {
+        throw "Updater publish did not create the required file: $updaterFile"
+    }
+    Copy-Item -LiteralPath $updaterFile -Destination (Join-Path $clientPublish $updaterFileName) -Force
+}
 Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.79" -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
