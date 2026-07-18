@@ -53,6 +53,12 @@ public sealed class SettingsService : ISettingsService
                 existing.ScreenMode = settings.ScreenMode;
                 existing.DefaultStoreId = settings.DefaultStoreId;
                 existing.LastStoreId = settings.LastStoreId;
+                existing.SmsGatewayEnabled = settings.SmsGatewayEnabled;
+                existing.SmsGatewayUrl = settings.SmsGatewayUrl;
+                existing.SmsGatewayUsername = settings.SmsGatewayUsername;
+                existing.SmsGatewayPasswordEncrypted = settings.SmsGatewayPasswordEncrypted;
+                existing.AccountantEmail = settings.AccountantEmail;
+                existing.AutoEmailBankStatementOnFifth = settings.AutoEmailBankStatementOnFifth;
             }
             else
             {

@@ -85,6 +85,21 @@ public static class DbInitializer
                     ALTER TABLE [dbo].[ShiftLogs] ADD [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '';
                 END";
             await shiftCmd.ExecuteNonQueryAsync(ct);
+
+            using var settingsCmd = conn.CreateCommand();
+            settingsCmd.CommandText = @"
+                IF OBJECT_ID(N'[dbo].[AppSettings]', N'U') IS NOT NULL
+                BEGIN
+                    IF COL_LENGTH(N'[dbo].[AppSettings]', N'DefaultReportType') IS NULL
+                        ALTER TABLE [dbo].[AppSettings] ADD [DefaultReportType] INT NOT NULL DEFAULT 1;
+                    IF COL_LENGTH(N'[dbo].[AppSettings]', N'ScreenMode') IS NULL
+                        ALTER TABLE [dbo].[AppSettings] ADD [ScreenMode] INT NOT NULL DEFAULT 0;
+                    IF COL_LENGTH(N'[dbo].[AppSettings]', N'AccountantEmail') IS NULL
+                        ALTER TABLE [dbo].[AppSettings] ADD [AccountantEmail] NVARCHAR(254) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[AppSettings]', N'AutoEmailBankStatementOnFifth') IS NULL
+                        ALTER TABLE [dbo].[AppSettings] ADD [AutoEmailBankStatementOnFifth] BIT NOT NULL DEFAULT 0;
+                END";
+            await settingsCmd.ExecuteNonQueryAsync(ct);
         }
         finally
         {
@@ -122,6 +137,39 @@ public static class DbInitializer
             {
                 using var alterCmd = conn.CreateCommand();
                 alterCmd.CommandText = "ALTER TABLE ShiftLogs ADD COLUMN PayoutReason TEXT NOT NULL DEFAULT ''";
+                await alterCmd.ExecuteNonQueryAsync(ct);
+            }
+
+            using var settingsColumnCmd = conn.CreateCommand();
+            settingsColumnCmd.CommandText = "PRAGMA table_info('AppSettings')";
+            var settingsColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await using (var reader = await settingsColumnCmd.ExecuteReaderAsync(ct))
+            {
+                while (await reader.ReadAsync(ct))
+                    settingsColumns.Add(reader["name"]?.ToString() ?? "");
+            }
+            if (!settingsColumns.Contains("AccountantEmail"))
+            {
+                using var alterCmd = conn.CreateCommand();
+                alterCmd.CommandText = "ALTER TABLE AppSettings ADD COLUMN AccountantEmail TEXT NOT NULL DEFAULT ''";
+                await alterCmd.ExecuteNonQueryAsync(ct);
+            }
+            if (!settingsColumns.Contains("DefaultReportType"))
+            {
+                using var alterCmd = conn.CreateCommand();
+                alterCmd.CommandText = "ALTER TABLE AppSettings ADD COLUMN DefaultReportType INTEGER NOT NULL DEFAULT 1";
+                await alterCmd.ExecuteNonQueryAsync(ct);
+            }
+            if (!settingsColumns.Contains("ScreenMode"))
+            {
+                using var alterCmd = conn.CreateCommand();
+                alterCmd.CommandText = "ALTER TABLE AppSettings ADD COLUMN ScreenMode INTEGER NOT NULL DEFAULT 0";
+                await alterCmd.ExecuteNonQueryAsync(ct);
+            }
+            if (!settingsColumns.Contains("AutoEmailBankStatementOnFifth"))
+            {
+                using var alterCmd = conn.CreateCommand();
+                alterCmd.CommandText = "ALTER TABLE AppSettings ADD COLUMN AutoEmailBankStatementOnFifth INTEGER NOT NULL DEFAULT 0";
                 await alterCmd.ExecuteNonQueryAsync(ct);
             }
         }

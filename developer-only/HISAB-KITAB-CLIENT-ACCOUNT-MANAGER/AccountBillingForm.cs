@@ -93,7 +93,7 @@ internal sealed class AccountBillingForm : Form
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 232));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 250));
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         var heading = DeveloperTheme.Label("CLIENT ACCOUNTS", true, DeveloperTheme.Orange);
@@ -115,7 +115,7 @@ internal sealed class AccountBillingForm : Form
 
     private Control BuildServicePriceEditor()
     {
-        var card = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 6, ColumnCount = 2, Padding = new Padding(8), BackColor = DeveloperTheme.PaleBlue };
+        var card = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 7, ColumnCount = 2, Padding = new Padding(8), BackColor = DeveloperTheme.PaleBlue };
         card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -123,6 +123,7 @@ internal sealed class AccountBillingForm : Form
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var instruction = DeveloperTheme.Label("ENTER MONTHLY PRICE FOR EACH ACTIVE SERVICE", true, DeveloperTheme.OrangeDark);
         instruction.Font = DeveloperTheme.Bold(9);
@@ -132,9 +133,19 @@ internal sealed class AccountBillingForm : Form
         AddRateRow(card, 2, "PAYROLL ADD-ON", _payrollRate);
         AddRateRow(card, 3, "SCHEDULING ADD-ON", _schedulingRate);
         AddRateRow(card, 4, "AUTOMATIC MONTHLY REPORTS", _monthlyReportsRate);
-        var help = DeveloperTheme.Label("Older accounts without saved pricing can be entered here before generating their first invoice.", false, DeveloperTheme.Muted);
+        var flat = DeveloperTheme.Label(
+            $"STANDARD: Accounting {StandardServicePricing.Accounting:C2} • Payroll {StandardServicePricing.Payroll:C2} • Scheduling {StandardServicePricing.Scheduling:C2} • Reports {StandardServicePricing.MonthlyReports:C2}",
+            true,
+            DeveloperTheme.Green);
+        flat.Font = DeveloperTheme.Body(7.7f);
+        card.Controls.Add(flat, 0, 5);
+        card.SetColumnSpan(flat, 2);
+        var help = DeveloperTheme.Label(
+            $"Flat monthly pricing — no active-employee fee. One-time software license remains {StandardServicePricing.OneTimeLicenseFee:C0}.",
+            false,
+            DeveloperTheme.Muted);
         help.Font = DeveloperTheme.Body(8);
-        card.Controls.Add(help, 0, 5);
+        card.Controls.Add(help, 0, 6);
         card.SetColumnSpan(help, 2);
         return card;
     }

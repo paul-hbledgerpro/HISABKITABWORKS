@@ -37,6 +37,11 @@ public sealed class AppSettings : Entity
     public string SmsGatewayUsername { get; set; } = "";
 
     public byte[] SmsGatewayPasswordEncrypted { get; set; } = Array.Empty<byte>();
+
+    [MaxLength(254)]
+    public string AccountantEmail { get; set; } = "";
+
+    public bool AutoEmailBankStatementOnFifth { get; set; }
 }
 
 public enum ReportType

@@ -10,6 +10,7 @@ internal sealed class ReportViewerForm : Form
     private readonly string _title;
     private readonly Func<string, Task> _savePdfAsync;
     private readonly Func<string, string, Task>? _emailPdfAsync;
+    private readonly string _defaultEmailRecipient;
     private readonly WebView2 _pdfView;
     private readonly Label _status;
     private readonly Label _loadingMessage;
@@ -25,11 +26,13 @@ internal sealed class ReportViewerForm : Form
     public ReportViewerForm(
         string title,
         Func<string, Task> savePdfAsync,
-        Func<string, string, Task>? emailPdfAsync = null)
+        Func<string, string, Task>? emailPdfAsync = null,
+        string? defaultEmailRecipient = null)
     {
         _title = title;
         _savePdfAsync = savePdfAsync;
         _emailPdfAsync = emailPdfAsync;
+        _defaultEmailRecipient = defaultEmailRecipient?.Trim() ?? "";
 
         Text = title;
         StartPosition = FormStartPosition.CenterParent;
@@ -299,9 +302,15 @@ internal sealed class ReportViewerForm : Form
         await EnsurePreviewPdfAsync();
         if (_emailPdfAsync is null || string.IsNullOrWhiteSpace(_previewPath) || !File.Exists(_previewPath))
             return;
-        var recipient = PromptForRecipient();
-        if (recipient is null)
+        if (!MailAddress.TryCreate(_defaultEmailRecipient, out _))
+        {
+            MessageBox.Show(this,
+                "No valid email address is saved for this user or business.\n\n"
+                + "An Owner/Admin can add the email address in User Accounts, then reopen this report.",
+                "Email Address Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
+        }
+        var recipient = _defaultEmailRecipient;
 
         SetActionButtons(false);
         _status.Text = "Sending report email...";
@@ -323,82 +332,6 @@ internal sealed class ReportViewerForm : Form
         {
             SetActionButtons(true);
         }
-    }
-
-    private string? PromptForRecipient()
-    {
-        using var dialog = new Form
-        {
-            Text = "Email Report",
-            StartPosition = FormStartPosition.CenterParent,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            ClientSize = new Size(560, 205),
-            MinimizeBox = false,
-            MaximizeBox = false,
-            ShowInTaskbar = false,
-            BackColor = WinTheme.Bg,
-            Icon = WinTheme.TryLoadIcon()
-        };
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(18),
-            RowCount = 4,
-            ColumnCount = 1,
-            BackColor = WinTheme.Bg
-        };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.Controls.Add(new Label
-        {
-            Text = "EMAIL REPORT PDF",
-            Dock = DockStyle.Fill,
-            ForeColor = WinTheme.Copper,
-            Font = WinTheme.BoldFont(12),
-            TextAlign = ContentAlignment.MiddleLeft
-        }, 0, 0);
-        layout.Controls.Add(new Label
-        {
-            Text = "Recipient email address",
-            Dock = DockStyle.Fill,
-            ForeColor = WinTheme.Text,
-            Font = WinTheme.BoldFont(9.5f),
-            TextAlign = ContentAlignment.BottomLeft
-        }, 0, 1);
-        var email = WinTheme.TextBox();
-        email.Dock = DockStyle.Fill;
-        layout.Controls.Add(email, 0, 2);
-        var actions = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.RightToLeft,
-            WrapContents = false,
-            Padding = new Padding(0, 8, 0, 0)
-        };
-        var send = WinTheme.Button("Send PDF", true);
-        send.Width = 150;
-        send.DialogResult = DialogResult.OK;
-        var cancel = WinTheme.Button("Cancel");
-        cancel.Width = 120;
-        cancel.DialogResult = DialogResult.Cancel;
-        actions.Controls.Add(send);
-        actions.Controls.Add(cancel);
-        layout.Controls.Add(actions, 0, 3);
-        dialog.Controls.Add(layout);
-        dialog.AcceptButton = send;
-        dialog.CancelButton = cancel;
-        dialog.Shown += (_, _) => email.Focus();
-
-        while (dialog.ShowDialog(this) == DialogResult.OK)
-        {
-            if (MailAddress.TryCreate(email.Text.Trim(), out _))
-                return email.Text.Trim();
-            MessageBox.Show(dialog, "Enter a valid email address.", "Email Report",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        return null;
     }
 
     private void DisposePreview()

@@ -27,6 +27,16 @@ Pricing, invoices, invoice line items, and payment history are stored only in th
 
 Older accounts that were created before service-level pricing was added can be selected normally. Enter their Accounting, Payroll, and Scheduling monthly prices in **Account Payments & Invoices**, then click **Save Monthly Service Prices** before creating the first invoice.
 
+## Standard pricing
+
+- One-time software license: **$200.00**
+- Core Accounting: **$14.99/month**
+- Payroll: **$19.99/month**
+- Scheduling: **$12.99/month**
+- Automatic Monthly Reports: **$9.99/month**
+
+Payroll pricing is flat and does not include an active-employee or per-employee fee. Existing accounts with previously saved custom rates keep those rates; the standard rates are supplied automatically when an account has not been priced yet.
+
 ## Release build
 
 ```powershell

@@ -13,6 +13,7 @@
     <ApplicationIcon>..\HISAB-KITAB-LICENSE-GENERATOR\Assets\HisabKitab.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Shared\DeveloperAutoUpdateService.cs" Link="DeveloperAutoUpdateService.cs" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
     <PackageReference Include="QuestPDF" Version="2024.3.0" />
   </ItemGroup>

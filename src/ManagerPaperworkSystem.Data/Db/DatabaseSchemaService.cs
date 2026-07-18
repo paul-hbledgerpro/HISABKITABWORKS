@@ -73,17 +73,25 @@ public static class DatabaseSchemaService
                     [Id] INT IDENTITY(1,1) PRIMARY KEY,
                     [StoreName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [StoreAddress] NVARCHAR(500) NOT NULL DEFAULT '',
+                    [DefaultReportType] INT NOT NULL DEFAULT 1,
+                    [ScreenMode] INT NOT NULL DEFAULT 0,
                     [DefaultStoreId] INT NOT NULL DEFAULT 1,
                     [LastStoreId] INT NOT NULL DEFAULT 1,
                     [SmsGatewayEnabled] BIT NOT NULL DEFAULT 0,
                     [SmsGatewayUrl] NVARCHAR(500) NOT NULL DEFAULT '',
                     [SmsGatewayUsername] NVARCHAR(200) NOT NULL DEFAULT '',
-                    [SmsGatewayPasswordEncrypted] VARBINARY(MAX) NOT NULL DEFAULT 0x
+                    [SmsGatewayPasswordEncrypted] VARBINARY(MAX) NOT NULL DEFAULT 0x,
+                    [AccountantEmail] NVARCHAR(254) NOT NULL DEFAULT '',
+                    [AutoEmailBankStatementOnFifth] BIT NOT NULL DEFAULT 0
                 );
+                IF COL_LENGTH('dbo.AppSettings', 'DefaultReportType') IS NULL ALTER TABLE dbo.AppSettings ADD DefaultReportType INT NOT NULL DEFAULT 1;
+                IF COL_LENGTH('dbo.AppSettings', 'ScreenMode') IS NULL ALTER TABLE dbo.AppSettings ADD ScreenMode INT NOT NULL DEFAULT 0;
                 IF COL_LENGTH('dbo.AppSettings', 'SmsGatewayEnabled') IS NULL ALTER TABLE dbo.AppSettings ADD SmsGatewayEnabled BIT NOT NULL DEFAULT 0;
                 IF COL_LENGTH('dbo.AppSettings', 'SmsGatewayUrl') IS NULL ALTER TABLE dbo.AppSettings ADD SmsGatewayUrl NVARCHAR(500) NOT NULL DEFAULT '';
                 IF COL_LENGTH('dbo.AppSettings', 'SmsGatewayUsername') IS NULL ALTER TABLE dbo.AppSettings ADD SmsGatewayUsername NVARCHAR(200) NOT NULL DEFAULT '';
-                IF COL_LENGTH('dbo.AppSettings', 'SmsGatewayPasswordEncrypted') IS NULL ALTER TABLE dbo.AppSettings ADD SmsGatewayPasswordEncrypted VARBINARY(MAX) NOT NULL DEFAULT 0x;");
+                IF COL_LENGTH('dbo.AppSettings', 'SmsGatewayPasswordEncrypted') IS NULL ALTER TABLE dbo.AppSettings ADD SmsGatewayPasswordEncrypted VARBINARY(MAX) NOT NULL DEFAULT 0x;
+                IF COL_LENGTH('dbo.AppSettings', 'AccountantEmail') IS NULL ALTER TABLE dbo.AppSettings ADD AccountantEmail NVARCHAR(254) NOT NULL DEFAULT '';
+                IF COL_LENGTH('dbo.AppSettings', 'AutoEmailBankStatementOnFifth') IS NULL ALTER TABLE dbo.AppSettings ADD AutoEmailBankStatementOnFifth BIT NOT NULL DEFAULT 0;");
 
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserAccounts')

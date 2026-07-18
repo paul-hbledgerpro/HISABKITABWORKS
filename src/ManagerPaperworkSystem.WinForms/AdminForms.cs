@@ -16,28 +16,52 @@ internal sealed class StoreManagerForm : Form
         _services = services;
         WinTheme.Apply(this);
         Text = "Licensed Businesses - HISAB KITAB";
-        Size = new Size(980, 640);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        StartPosition = FormStartPosition.CenterParent;
+        ClientSize = new Size(1080, 690);
+        MinimumSize = new Size(900, 610);
         Controls.Add(Build());
         Load += (_, _) => RefreshGrid();
     }
 
     private Control Build()
     {
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, BackColor = WinTheme.Bg, Padding = new Padding(18) };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 3,
+            ColumnCount = 1,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(22, 18, 22, 18)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 104));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         var message = WinTheme.Label(
-            "These businesses are digitally signed into this PC license. To add or remove one, the developer updates the client account and reissues this PC license.");
+            "These businesses are digitally signed into this PC license.\r\n"
+            + "To add or remove one, the developer updates the client account and reissues this PC license.");
         message.Dock = DockStyle.Fill;
         message.TextAlign = ContentAlignment.MiddleLeft;
         message.ForeColor = WinTheme.Muted;
+        message.AutoSize = false;
+        message.Padding = new Padding(6, 0, 6, 0);
         root.Controls.Add(message, 0, 0);
+        _grid.Margin = new Padding(4, 0, 4, 10);
         root.Controls.Add(_grid, 0, 1);
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
-        actions.Controls.Add(Button("Close", () => Close()));
-        actions.Controls.Add(Button("Add Store", AddLicensedStore, true, 180));
-        actions.Controls.Add(Button("Import Updated License File", ImportUpdatedLicense, false, 240));
+        var actions = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 1,
+            Margin = new Padding(4, 2, 4, 0)
+        };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 165));
+        actions.Controls.Add(Button("Import Updated License", ImportUpdatedLicense), 1, 0);
+        actions.Controls.Add(Button("Add Store", AddLicensedStore, true), 2, 0);
+        actions.Controls.Add(Button("Close", () => Close()), 3, 0);
         root.Controls.Add(actions, 0, 2);
         return root;
     }
@@ -64,10 +88,11 @@ internal sealed class StoreManagerForm : Form
         }
     }
 
-    private Button Button(string text, Action action, bool filled = false, int width = 160)
+    private Button Button(string text, Action action, bool filled = false)
     {
         var b = WinTheme.Button(text, filled);
-        b.Width = width;
+        b.Dock = DockStyle.Fill;
+        b.Margin = new Padding(6, 8, 0, 8);
         b.Click += (_, _) => action();
         return b;
     }
@@ -88,6 +113,27 @@ internal sealed class StoreManagerForm : Form
                 Licensed = true
             })
             .ToList();
+        _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        if (_grid.Columns.Contains("BusinessId"))
+        {
+            _grid.Columns["BusinessId"]!.HeaderText = "Business ID";
+            _grid.Columns["BusinessId"]!.FillWeight = 65;
+        }
+        if (_grid.Columns.Contains("Name"))
+            _grid.Columns["Name"]!.FillWeight = 115;
+        if (_grid.Columns.Contains("StoreGuid"))
+        {
+            _grid.Columns["StoreGuid"]!.HeaderText = "Store GUID";
+            _grid.Columns["StoreGuid"]!.FillWeight = 150;
+        }
+        if (_grid.Columns.Contains("Address"))
+            _grid.Columns["Address"]!.FillWeight = 145;
+        if (_grid.Columns.Contains("Database"))
+            _grid.Columns["Database"]!.FillWeight = 145;
+        if (_grid.Columns.Contains("Type"))
+            _grid.Columns["Type"]!.FillWeight = 135;
+        if (_grid.Columns.Contains("Licensed"))
+            _grid.Columns["Licensed"]!.FillWeight = 70;
     }
 
     private void ImportUpdatedLicense()

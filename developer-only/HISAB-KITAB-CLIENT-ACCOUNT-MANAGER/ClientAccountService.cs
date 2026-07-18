@@ -12,6 +12,24 @@ internal sealed record ClientAccount(
 
 internal sealed record ServicePrice(string ServiceName, bool Enabled, decimal MonthlyRate);
 
+internal static class StandardServicePricing
+{
+    public const decimal OneTimeLicenseFee = 200m;
+    public const decimal Accounting = 14.99m;
+    public const decimal Payroll = 19.99m;
+    public const decimal Scheduling = 12.99m;
+    public const decimal MonthlyReports = 9.99m;
+
+    public static decimal For(string serviceName) => serviceName switch
+    {
+        "Accounting" => Accounting,
+        "Payroll" => Payroll,
+        "Scheduling" => Scheduling,
+        "MonthlyReports" => MonthlyReports,
+        _ => 0m
+    };
+}
+
 internal sealed record AccountInvoice(
     int Id, int CustomerId, int LicenseId, string InvoiceNumber, DateTime InvoiceDate, DateTime DueDate,
     DateTime PeriodStart, DateTime PeriodEnd, decimal Subtotal, decimal AmountPaid, string Status, string Notes,
@@ -243,13 +261,13 @@ WHERE LicenseId=@license;", connection);
         while (reader.Read()) saved[reader.GetString(0)] = reader.GetDecimal(1);
 
         var result = new List<ServicePrice>();
-        var firstEnabled = true;
         foreach (var service in new[] { "Accounting", "Payroll", "Scheduling", "MonthlyReports" })
         {
             var isEnabled = enabled.Contains(service);
-            var fallback = saved.Count == 0 && isEnabled && firstEnabled ? account.MonthlyFee : 0m;
+            var fallback = saved.Count == 0 && isEnabled
+                ? StandardServicePricing.For(service)
+                : 0m;
             result.Add(new ServicePrice(service, isEnabled, saved.GetValueOrDefault(service, fallback)));
-            if (isEnabled) firstEnabled = false;
         }
         return result;
     }

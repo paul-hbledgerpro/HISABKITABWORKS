@@ -1,6 +1,7 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Runtime = "win-x64"
+    [string]$Runtime = "win-x64",
+    [string]$Version = "1.0.98"
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,10 +94,18 @@ foreach ($updaterFile in Get-ChildItem -LiteralPath $updaterPublish -File) {
     Copy-Item -LiteralPath $updaterFile.FullName -Destination (Join-Path $updaterPayloadDirectory $updaterFile.Name) -Force
 }
 Copy-Item -LiteralPath (Join-Path $updaterPublish "Upgrade.exe") -Destination (Join-Path $clientPublish "Upgrade.exe") -Force
-Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.97" -Encoding Ascii
+Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value $Version -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
 Publish-DesktopApp $accountProject $accountPublish "HISAB KITAB WORKS Client Account Manager.exe"
+foreach ($developerPublish in @($licensePublish, $accountPublish)) {
+    $developerUpdaterPayload = Join-Path $developerPublish "UpdaterPayload"
+    New-Item -ItemType Directory -Force -Path $developerUpdaterPayload | Out-Null
+    foreach ($updaterFile in Get-ChildItem -LiteralPath $updaterPublish -File) {
+        Copy-Item -LiteralPath $updaterFile.FullName -Destination (Join-Path $developerUpdaterPayload $updaterFile.Name) -Force
+    }
+    Set-Content -LiteralPath (Join-Path $developerPublish "version.txt") -Value $Version -Encoding Ascii
+}
 
 $scripts = @(
     (Join-Path $innoDir "HISAB_KITAB_WORKS_Client.iss"),
@@ -194,12 +203,81 @@ function New-ClientUpdatePackage([string]$Version) {
     return $updateZip
 }
 
-$clientUpdateZip = New-ClientUpdatePackage "1.0.97"
+function New-DeveloperUpdatePackage(
+    [string]$PublishDirectory,
+    [string]$AssetPrefix,
+    [string]$ExpectedExecutable,
+    [string]$ExpectedVersion) {
+    $updateZip = Join-Path $releaseDir ($AssetPrefix + "_" + $ExpectedVersion + ".zip")
+    if (Test-Path -LiteralPath $updateZip) {
+        Remove-Item -LiteralPath $updateZip -Force
+    }
+
+    foreach ($required in @(
+        $ExpectedExecutable,
+        "version.txt",
+        "UpdaterPayload\Upgrade.exe"
+    )) {
+        $requiredPath = Join-Path $PublishDirectory $required
+        if (-not (Test-Path -LiteralPath $requiredPath)) {
+            throw "Required developer update file is missing: $requiredPath"
+        }
+    }
+
+    $versionText = (Get-Content -LiteralPath (Join-Path $PublishDirectory "version.txt") -Raw).Trim()
+    if ($versionText -ne $ExpectedVersion) {
+        throw "Developer update version mismatch. Expected $ExpectedVersion, found $versionText."
+    }
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $publishPrefix = $PublishDirectory.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $stream = [IO.File]::Open($updateZip, [IO.FileMode]::CreateNew)
+    try {
+        $archive = [IO.Compression.ZipArchive]::new(
+            $stream,
+            [IO.Compression.ZipArchiveMode]::Create,
+            $false)
+        try {
+            foreach ($file in Get-ChildItem -LiteralPath $PublishDirectory -File -Recurse) {
+                if (-not $file.FullName.StartsWith($publishPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Refusing to package a file outside the developer publish folder: $($file.FullName)"
+                }
+                $relative = $file.FullName.Substring($publishPrefix.Length).Replace('\', '/')
+                [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                    $archive,
+                    $file.FullName,
+                    $relative,
+                    [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+        }
+        finally {
+            $archive.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+
+    return $updateZip
+}
+
+$clientUpdateZip = New-ClientUpdatePackage $Version
+$licenseUpdateZip = New-DeveloperUpdatePackage `
+    $licensePublish `
+    "HISAB_KITAB_License_Generator_Update_win-x64" `
+    "HISAB KITAB WORKS License Generator.exe" `
+    $Version
+$accountUpdateZip = New-DeveloperUpdatePackage `
+    $accountPublish `
+    "HISAB_KITAB_Account_Manager_Update_win-x64" `
+    "HISAB KITAB WORKS Client Account Manager.exe" `
+    $Version
 
 $expectedInstallers = @(
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.97.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.97.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.97.exe")
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_$Version.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_$Version.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_$Version.exe")
 )
 
 Write-Host ""
@@ -226,7 +304,9 @@ foreach ($installer in $expectedInstallers) {
     Write-Host ("    SHA256: {0}" -f $hash) -ForegroundColor DarkGray
 }
 
-$updateFile = Get-Item -LiteralPath $clientUpdateZip
-$updateHash = (Get-FileHash -LiteralPath $clientUpdateZip -Algorithm SHA256).Hash
-Write-Host ("  {0}  ({1:N1} MB)" -f $updateFile.FullName, ($updateFile.Length / 1MB)) -ForegroundColor Green
-Write-Host ("    SHA256: {0}" -f $updateHash) -ForegroundColor DarkGray
+foreach ($updateZip in @($clientUpdateZip, $licenseUpdateZip, $accountUpdateZip)) {
+    $updateFile = Get-Item -LiteralPath $updateZip
+    $updateHash = (Get-FileHash -LiteralPath $updateZip -Algorithm SHA256).Hash
+    Write-Host ("  {0}  ({1:N1} MB)" -f $updateFile.FullName, ($updateFile.Length / 1MB)) -ForegroundColor Green
+    Write-Host ("    SHA256: {0}" -f $updateHash) -ForegroundColor DarkGray
+}

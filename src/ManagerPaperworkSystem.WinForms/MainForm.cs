@@ -2,12 +2,15 @@ using System.Diagnostics;
 using System.Data.Common;
 using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.Net.Mail;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClosedXML.Excel;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
 using ManagerPaperworkSystem.Data.Services;
+using ManagerPaperworkSystem.Reports.Pdf;
 using ManagerPaperworkSystem.UI.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
@@ -35,6 +38,8 @@ internal sealed partial class MainForm : Form
     private readonly ComboBox _storeCombo = WinTheme.ComboBox();
     private readonly Label _status = WinTheme.Label("");
     private readonly Dictionary<string, Button> _navButtons = new();
+    private readonly SemaphoreSlim _bankDeliveryGate = new(1, 1);
+    private readonly System.Windows.Forms.Timer _monthlyDeliveryTimer = new() { Interval = 60 * 60 * 1000 };
     private readonly int _loginStoreConnectionId;
     private int _currentConnectionStoreId;
     private int _currentStoreId;
@@ -74,11 +79,19 @@ internal sealed partial class MainForm : Form
         MinimumSize = new Size(1280, 760);
 
         Controls.Add(BuildRoot());
+        _monthlyDeliveryTimer.Tick += async (_, _) => await BeginMonthlyBankStatementDeliveryAsync();
         Load += async (_, _) =>
         {
             await LoadStoresAsync();
             ShowModule("Dashboard");
             _ = BeginMonthlyReportDeliveryAsync();
+            _ = BeginMonthlyBankStatementDeliveryAsync();
+            _monthlyDeliveryTimer.Start();
+        };
+        FormClosed += (_, _) =>
+        {
+            _monthlyDeliveryTimer.Stop();
+            _monthlyDeliveryTimer.Dispose();
         };
     }
 
@@ -87,6 +100,266 @@ internal sealed partial class MainForm : Form
         var message = await MonthlyReportDeliveryService.TrySendDueAsync(_reportService, _paths);
         if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
             BeginInvoke(() => _status.Text = message);
+    }
+
+    private async Task BeginMonthlyBankStatementDeliveryAsync()
+    {
+        if (!await _bankDeliveryGate.WaitAsync(0))
+            return;
+
+        try
+        {
+            var message = await TrySendMonthlyBankStatementAsync();
+            if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
+                BeginInvoke(() => _status.Text = message);
+        }
+        catch
+        {
+            // Automatic delivery is retried the next day the app is opened.
+            // It must never prevent the client from using the application.
+        }
+        finally
+        {
+            _bankDeliveryGate.Release();
+        }
+    }
+
+    private async Task<string?> TrySendMonthlyBankStatementAsync()
+    {
+        var today = DateTime.Today;
+        if (today.Day < 5)
+            return null;
+
+        await using var db = CreateDb();
+        var settings = await db.Settings.AsNoTracking().FirstOrDefaultAsync();
+        if (settings is null ||
+            !settings.AutoEmailBankStatementOnFifth ||
+            !MailAddress.TryCreate(settings.AccountantEmail, out _))
+            return null;
+
+        var storeGuid = LicenseRuntime.ActiveStoreGuid.Trim().ToUpperInvariant();
+        if (storeGuid.Length == 0)
+            return null;
+
+        var previousMonth = new DateTime(today.Year, today.Month, 1).AddMonths(-1);
+        var periodKey = previousMonth.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+        var statePath = Path.Combine(_paths.AppDataDirectory, "monthly-bank-statement-delivery-state.json");
+        var state = LoadBankStatementDeliveryState(statePath);
+        var stateKey = $"{LicenseRuntime.CurrentLicense?.LicenseId ?? 0}:{storeGuid}";
+        if (state.LastSentPeriodByStore.GetValueOrDefault(stateKey) == periodKey ||
+            state.LastAttemptDateByStore.GetValueOrDefault(stateKey) == today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+            return null;
+
+        state.LastAttemptDateByStore[stateKey] = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        SaveBankStatementDeliveryState(statePath, state);
+
+        using (var bankClient = new LiveBankSyncClient())
+        {
+            if (bankClient.IsConfigured && (await bankClient.GetConnectionsAsync()).Count > 0)
+            {
+                var syncResult = await bankClient.SyncAsync();
+                await SaveLiveBankSyncAsync(syncResult);
+            }
+        }
+
+        var rows = await LoadBankStatementRowsAsync(previousMonth.Month, previousMonth.Year);
+        if (rows.Count == 0)
+            return $"Monthly bank statement for {_session.StoreName} is waiting for {previousMonth:MMMM} transactions.";
+
+        var from = new DateOnly(previousMonth.Year, previousMonth.Month, 1);
+        var finalDay = previousMonth.AddMonths(1).AddDays(-1);
+        var to = new DateOnly(finalDay.Year, finalDay.Month, finalDay.Day);
+        var folder = Path.Combine(_paths.AppDataDirectory, "Monthly Bank Statements");
+        Directory.CreateDirectory(folder);
+        var fileName = $"BankStatement_{periodKey}_{SafeBankFilePart(storeGuid)}.pdf";
+        var pdfPath = Path.Combine(folder, fileName);
+        BankStatementReportPdf.Generate(
+            string.IsNullOrWhiteSpace(settings.StoreName) ? _session.StoreName : settings.StoreName,
+            settings.StoreAddress,
+            from,
+            to,
+            rows.Select(row => new BankStatementReportRow(
+                row.Date,
+                row.Description,
+                row.Debit,
+                row.Credit,
+                row.Category,
+                row.Source,
+                row.IsMatched,
+                row.CheckNumber)).ToList(),
+            pdfPath);
+
+        var pdfBytes = await File.ReadAllBytesAsync(pdfPath);
+        using (var bankClient = new LiveBankSyncClient())
+        {
+            await bankClient.EmailReportAsync(
+                settings.AccountantEmail,
+                $"{_session.StoreName} Bank Statement",
+                $"{from:M/d/yyyy} to {to:M/d/yyyy}",
+                fileName,
+                pdfBytes);
+        }
+
+        state.LastSentPeriodByStore[stateKey] = periodKey;
+        SaveBankStatementDeliveryState(statePath, state);
+        return $"{previousMonth:MMMM yyyy} bank statement for {_session.StoreName} was emailed to {settings.AccountantEmail}.";
+    }
+
+    private async Task ShowBankStatementEmailSettingsAsync()
+    {
+        if (!_session.IsAdmin)
+        {
+            MessageBox.Show(this, "Only an Owner/Admin can change accountant delivery settings.",
+                "Access Restricted", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        await using var db = CreateDb();
+        var settings = await db.Settings.FirstOrDefaultAsync();
+        if (settings is null)
+        {
+            settings = new AppSettings { StoreName = _session.StoreName };
+            db.Settings.Add(settings);
+        }
+
+        using var dialog = new Form
+        {
+            Text = $"Accountant Bank Statement Delivery - {_session.StoreName}",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            AutoScaleMode = AutoScaleMode.Dpi,
+            ClientSize = new Size(690, 370),
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            BackColor = WinTheme.Bg,
+            Icon = WinTheme.TryLoadIcon()
+        };
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 6,
+            Padding = new Padding(24),
+            BackColor = WinTheme.Bg
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        layout.Controls.Add(new Label
+        {
+            Text = "ACCOUNTANT DELIVERY",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Copper,
+            Font = WinTheme.HeaderFont(16),
+            TextAlign = ContentAlignment.MiddleLeft
+        });
+        layout.Controls.Add(new Label
+        {
+            Text = $"These settings apply only to {_session.StoreName}. Other licensed stores keep their own bank connection and accountant email.",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BodyFont(9.5f),
+            TextAlign = ContentAlignment.MiddleLeft
+        });
+        layout.Controls.Add(new Label
+        {
+            Text = "ACCOUNTANT EMAIL",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.BoldFont(9.5f),
+            TextAlign = ContentAlignment.BottomLeft
+        });
+        var email = WinTheme.TextBox();
+        email.Dock = DockStyle.Fill;
+        email.Text = settings.AccountantEmail;
+        layout.Controls.Add(email);
+        var enabled = new CheckBox
+        {
+            Text = "Automatically email the previous month’s bank statement on the 5th",
+            Checked = settings.AutoEmailBankStatementOnFifth,
+            AutoSize = true,
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.BodyFont(10),
+            Padding = new Padding(0, 14, 0, 0)
+        };
+        layout.Controls.Add(enabled);
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+        var save = WinTheme.Button("Save Settings", true);
+        save.Width = 180;
+        save.DialogResult = DialogResult.OK;
+        var cancel = WinTheme.Button("Cancel");
+        cancel.Width = 130;
+        cancel.DialogResult = DialogResult.Cancel;
+        actions.Controls.Add(save);
+        actions.Controls.Add(cancel);
+        layout.Controls.Add(actions);
+        dialog.Controls.Add(layout);
+        dialog.AcceptButton = save;
+        dialog.CancelButton = cancel;
+
+        while (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            var value = email.Text.Trim();
+            if (enabled.Checked && !MailAddress.TryCreate(value, out _))
+            {
+                MessageBox.Show(dialog, "Enter a valid accountant email address before enabling automatic delivery.",
+                    "Accountant Email", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                continue;
+            }
+
+            settings.AccountantEmail = value;
+            settings.AutoEmailBankStatementOnFifth = enabled.Checked;
+            await db.SaveChangesAsync();
+            MessageBox.Show(this,
+                enabled.Checked
+                    ? $"Automatic bank statement delivery is enabled for {_session.StoreName}."
+                    : $"Automatic bank statement delivery is disabled for {_session.StoreName}.",
+                "Bank Statement Delivery", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (enabled.Checked)
+                _ = BeginMonthlyBankStatementDeliveryAsync();
+            return;
+        }
+    }
+
+    private static BankStatementDeliveryState LoadBankStatementDeliveryState(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                ? JsonSerializer.Deserialize<BankStatementDeliveryState>(File.ReadAllText(path))
+                  ?? new BankStatementDeliveryState()
+                : new BankStatementDeliveryState();
+        }
+        catch
+        {
+            return new BankStatementDeliveryState();
+        }
+    }
+
+    private static void SaveBankStatementDeliveryState(string path, BankStatementDeliveryState state)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(temporary, path, true);
+    }
+
+    private static string SafeBankFilePart(string value)
+        => string.Concat(value.Select(character => char.IsLetterOrDigit(character) ? character : '_'));
+
+    private sealed class BankStatementDeliveryState
+    {
+        public Dictionary<string, string> LastSentPeriodByStore { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> LastAttemptDateByStore { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private AppDbContext CreateDb() => _storeConnections.CreateDbContext();
@@ -518,6 +791,7 @@ internal sealed partial class MainForm : Form
         await SaveSelectedStorePreferenceAsync(store.Id, store.Name, store.Address);
 
         ShowModule(_currentModule);
+        _ = BeginMonthlyBankStatementDeliveryAsync();
     }
 
     private async Task EnsureCurrentStoreDatabaseReadyAsync(string businessName)
@@ -3796,16 +4070,17 @@ internal sealed partial class MainForm : Form
         var liveBankPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 4,
+            ColumnCount = 5,
             RowCount = 1,
             BackColor = Color.FromArgb(242, 248, 255),
             Margin = new Padding(4, 5, 4, 2),
             Padding = new Padding(8, 4, 8, 4)
         };
-        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
+        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
         liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135));
+        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
+        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
         var liveBankTitle = new Label
         {
             Text = "LIVE BANK",
@@ -3826,13 +4101,17 @@ internal sealed partial class MainForm : Form
         var connectBank = WinTheme.Button("Connect Bank", true);
         connectBank.Dock = DockStyle.Fill;
         connectBank.Margin = new Padding(4, 0, 4, 0);
+        var bankEmailSettings = WinTheme.Button("Email Setup");
+        bankEmailSettings.Dock = DockStyle.Fill;
+        bankEmailSettings.Margin = new Padding(4, 0, 4, 0);
         var syncBank = WinTheme.Button("Sync Now");
         syncBank.Dock = DockStyle.Fill;
         syncBank.Margin = new Padding(4, 0, 0, 0);
         liveBankPanel.Controls.Add(liveBankTitle, 0, 0);
         liveBankPanel.Controls.Add(liveBankStatus, 1, 0);
-        liveBankPanel.Controls.Add(connectBank, 2, 0);
-        liveBankPanel.Controls.Add(syncBank, 3, 0);
+        liveBankPanel.Controls.Add(bankEmailSettings, 2, 0);
+        liveBankPanel.Controls.Add(connectBank, 3, 0);
+        liveBankPanel.Controls.Add(syncBank, 4, 0);
         filters.Controls.Add(liveBankPanel, 0, 2);
         filters.SetColumnSpan(liveBankPanel, 4);
 
@@ -4148,6 +4427,7 @@ internal sealed partial class MainForm : Form
         {
             await importAndSelectPeriodAsync();
         };
+        bankEmailSettings.Click += async (_, _) => await ShowBankStatementEmailSettingsAsync();
         connectBank.Click += async (_, _) =>
         {
             using var client = new LiveBankSyncClient();
@@ -4959,20 +5239,39 @@ internal sealed partial class MainForm : Form
         return false;
     }
 
-    private Task OpenReportViewerAsync(string reportName, DateOnly from, DateOnly to)
+    private async Task OpenReportViewerAsync(string reportName, DateOnly from, DateOnly to)
     {
         if (to < from)
         {
             MessageBox.Show(this, "To date must be on or after From date.", "Reports", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return Task.CompletedTask;
+            return;
         }
 
+        var recipient = await ResolveSavedReportRecipientAsync();
         using var viewer = new ReportViewerForm(
             $"{reportName} - {from:M/d/yyyy} to {to:M/d/yyyy}",
             outputPath => SaveReportPdfAsync(reportName, from, to, outputPath),
-            (outputPath, recipient) => EmailReportPdfAsync(reportName, from, to, outputPath, recipient));
+            (outputPath, email) => EmailReportPdfAsync(reportName, from, to, outputPath, email),
+            recipient);
         viewer.ShowDialog(this);
-        return Task.CompletedTask;
+    }
+
+    private async Task<string> ResolveSavedReportRecipientAsync()
+    {
+        await using var db = CreateDb();
+        var currentUserEmail = await db.Users.AsNoTracking()
+            .Where(user => user.Id == _session.UserId && user.IsActive)
+            .Select(user => user.Email)
+            .FirstOrDefaultAsync();
+        if (!string.IsNullOrWhiteSpace(currentUserEmail))
+            return currentUserEmail.Trim();
+
+        return (await db.Users.AsNoTracking()
+                .Where(user => user.IsActive && user.Role == UserRole.OwnerAdmin && user.Email != "")
+                .OrderBy(user => user.Id)
+                .Select(user => user.Email)
+                .FirstOrDefaultAsync())
+            ?.Trim() ?? "";
     }
 
     private async Task EmailReportPdfAsync(
