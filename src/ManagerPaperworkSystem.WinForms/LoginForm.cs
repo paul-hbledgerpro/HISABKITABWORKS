@@ -33,6 +33,7 @@ internal sealed class LoginForm : Form
     private Panel? _storeShell;
     private Panel? _usernameShell;
     private Panel? _passwordShell;
+    private TableLayoutPanel? _contentLayout;
 
     public LoginForm(IDbContextFactory<AppDbContext> dbFactory, SessionState session)
     {
@@ -151,7 +152,7 @@ internal sealed class LoginForm : Form
             Padding = Padding.Empty
         };
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 12));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
@@ -163,6 +164,7 @@ internal sealed class LoginForm : Form
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _contentLayout = content;
         loginCard.Controls.Add(content);
 
         var heading = new TableLayoutPanel
@@ -176,15 +178,15 @@ internal sealed class LoginForm : Form
         };
         heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 58));
         heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
-        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 43));
-        heading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
+        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
 
         var titleIcon = new LoginIconBadge
         {
             Text = "\uE77B",
             Dock = DockStyle.Fill,
-            Margin = new Padding(0, 4, 12, 4),
+            Margin = new Padding(0, 4, 12, 24),
             ForeColor = Color.White,
             BackColor = WinTheme.Blue,
             Font = WinTheme.IconFont(22),
@@ -474,6 +476,7 @@ internal sealed class LoginForm : Form
 
     private void ShowCredentialStep()
     {
+        SetCredentialRowsVisible(true);
         _validatedUser = null;
         _matchedStores.Clear();
         _availableStores.Clear();
@@ -494,6 +497,7 @@ internal sealed class LoginForm : Form
 
     private void ShowStoreSelectionStep(List<LoginStoreOption> stores)
     {
+        SetCredentialRowsVisible(false);
         _availableStores.Clear();
         _availableStores.AddRange(stores);
         _storePicker.DataSource = null;
@@ -515,6 +519,20 @@ internal sealed class LoginForm : Form
         _error.ForeColor = WinTheme.Copper;
         _error.Text = $"Select the store for {CurrentUsername()} and click Continue.";
         _storePicker.Focus();
+    }
+
+    private void SetCredentialRowsVisible(bool visible)
+    {
+        if (_contentLayout is null)
+            return;
+
+        // Rows 4-6 contain the spacer, password label, and password input.
+        // Collapse them entirely during store selection so hidden controls do
+        // not leave a large blank area in the middle of the card.
+        _contentLayout.RowStyles[4].Height = visible ? 15 : 0;
+        _contentLayout.RowStyles[5].Height = visible ? 26 : 0;
+        _contentLayout.RowStyles[6].Height = visible ? 62 : 0;
+        _contentLayout.PerformLayout();
     }
 
     private static void SetPlaceholder(TextBox box, string placeholder, bool password)
