@@ -81,6 +81,8 @@ New-Item -ItemType Directory -Force -Path $publishRoot, $releaseDir | Out-Null
 
 Publish-DesktopApp $clientProject $clientPublish "HISAB KITAB.exe"
 Publish-DesktopApp $updaterProject $updaterPublish "Upgrade.exe"
+$updaterPayloadDirectory = Join-Path $clientPublish "UpdaterPayload"
+New-Item -ItemType Directory -Force -Path $updaterPayloadDirectory | Out-Null
 foreach ($updaterFileName in @(
     "Upgrade.exe",
     "Upgrade.dll",
@@ -92,8 +94,9 @@ foreach ($updaterFileName in @(
         throw "Updater publish did not create the required file: $updaterFile"
     }
     Copy-Item -LiteralPath $updaterFile -Destination (Join-Path $clientPublish $updaterFileName) -Force
+    Copy-Item -LiteralPath $updaterFile -Destination (Join-Path $updaterPayloadDirectory $updaterFileName) -Force
 }
-Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.80" -Encoding Ascii
+Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.81" -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
 Publish-DesktopApp $accountProject $accountPublish "HISAB KITAB WORKS Client Account Manager.exe"
@@ -113,9 +116,9 @@ foreach ($script in $scripts) {
 }
 
 $expectedInstallers = @(
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.80.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.80.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.80.exe")
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.81.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.81.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.81.exe")
 )
 
 Write-Host ""

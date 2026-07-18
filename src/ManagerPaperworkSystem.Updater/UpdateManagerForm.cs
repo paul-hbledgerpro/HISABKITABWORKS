@@ -15,7 +15,7 @@ namespace ManagerPaperworkSystem.Updater;
 
 /// <summary>
 /// Professional Update Manager with GitHub integration.
-/// Navy and copper themed to match HISAB KITAB.
+/// Light blue, orange, green and white theme matching HISAB KITAB.
 /// </summary>
 public class UpdateManagerForm : Form
 {
@@ -26,14 +26,18 @@ public class UpdateManagerForm : Form
     private const string PreferredAssetPrefix = "HISAB_KITAB_Update_win-x64";
 
     // Colors
-    private static readonly Color Gold = Color.FromArgb(212, 175, 55);
-    private static readonly Color BgDark = Color.FromArgb(11, 11, 15);
-    private static readonly Color BgCard = Color.FromArgb(19, 19, 26);
-    private static readonly Color BgField = Color.FromArgb(26, 26, 34);
-    private static readonly Color BorderColor = Color.FromArgb(34, 34, 48);
-    private static readonly Color DimText = Color.FromArgb(138, 138, 154);
-    private static readonly Color GreenColor = Color.FromArgb(34, 197, 94);
-    private static readonly Color RedColor = Color.FromArgb(239, 68, 68);
+    private static readonly Color Gold = Color.FromArgb(242, 140, 40);
+    private static readonly Color BgDark = Color.FromArgb(244, 248, 252);
+    private static readonly Color BgCard = Color.White;
+    private static readonly Color BgField = Color.White;
+    private static readonly Color BorderColor = Color.FromArgb(210, 220, 232);
+    private static readonly Color DimText = Color.FromArgb(100, 116, 139);
+    private static readonly Color GreenColor = Color.FromArgb(46, 157, 87);
+    private static readonly Color RedColor = Color.FromArgb(214, 69, 69);
+    private static readonly Color Navy = Color.FromArgb(22, 58, 95);
+    private static readonly Color Blue = Color.FromArgb(37, 99, 235);
+    private static readonly Color TextColor = Color.FromArgb(22, 50, 79);
+    private static readonly Color OrangeDark = Color.FromArgb(201, 106, 18);
 
     private readonly string? _appExe;
     private readonly string? _startupDownloadUrl;
@@ -124,152 +128,266 @@ public class UpdateManagerForm : Form
     private void InitializeUI()
     {
         Text = "HISAB KITAB - Update Manager";
-        Size = new Size(620, 600);
+        ClientSize = new Size(760, 690);
+        MinimumSize = new Size(700, 650);
         StartPosition = FormStartPosition.CenterScreen;
-        FormBorderStyle = FormBorderStyle.FixedSingle;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
+        MinimizeBox = false;
         BackColor = BgDark;
-        ForeColor = Color.White;
-        Font = new Font("Segoe UI", 9.5f);
+        ForeColor = TextColor;
+        Font = new Font("Segoe UI", 10f);
+        AutoScaleMode = AutoScaleMode.Dpi;
 
-        // ── Header bar ──
         var headerPanel = new Panel
         {
-            Dock = DockStyle.Top, Height = 70,
-            BackColor = Color.FromArgb(17, 17, 24)
+            Dock = DockStyle.Top,
+            Height = 112,
+            BackColor = Navy
         };
         headerPanel.Paint += (s, e) =>
         {
-            using var pen = new Pen(Gold, 2);
-            e.Graphics.DrawLine(pen, 0, headerPanel.Height - 1, headerPanel.Width, headerPanel.Height - 1);
+            var bounds = headerPanel.ClientRectangle;
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+                return;
+            using var gradient = new LinearGradientBrush(
+                bounds,
+                Navy,
+                Blue,
+                LinearGradientMode.Horizontal);
+            e.Graphics.FillRectangle(gradient, bounds);
+            using var accent = new SolidBrush(Gold);
+            e.Graphics.FillRectangle(accent, 0, headerPanel.Height - 5, headerPanel.Width, 5);
         };
 
         _lblTitle = new Label
         {
-            Text = "HISAB KITAB",
-            Font = new Font("Segoe UI", 16, FontStyle.Bold),
-            ForeColor = Gold,
-            Location = new Point(20, 10), AutoSize = true
+            Text = "HISAB KITAB WORKS",
+            Font = new Font("Segoe UI", 24, FontStyle.Bold),
+            ForeColor = Color.White,
+            Location = new Point(30, 20),
+            AutoSize = true,
+            BackColor = Color.Transparent
         };
 
         var lblSub = new Label
         {
-            Text = "UPDATE MANAGER",
-            Font = new Font("Segoe UI", 9, FontStyle.Bold),
-            ForeColor = DimText,
-            Location = new Point(22, 42), AutoSize = true
+            Text = "SOFTWARE UPDATE MANAGER",
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            ForeColor = Gold,
+            Location = new Point(33, 67),
+            AutoSize = true,
+            BackColor = Color.Transparent
         };
 
         _lblStatusDot = new Label
         {
-            Text = "●",
-            Font = new Font("Segoe UI", 12),
-            ForeColor = DimText,
-            Location = new Point(520, 25), AutoSize = true
+            Text = "●  READY",
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            ForeColor = Color.FromArgb(190, 220, 255),
+            AutoSize = true,
+            BackColor = Color.Transparent,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right
         };
-
         headerPanel.Controls.AddRange(new Control[] { _lblTitle, lblSub, _lblStatusDot });
+        headerPanel.Layout += (_, _) =>
+            _lblStatusDot.Location = new Point(
+                Math.Max(30, headerPanel.ClientSize.Width - _lblStatusDot.Width - 32),
+                42);
         Controls.Add(headerPanel);
 
-        var y = 85;
+        var body = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = BgDark,
+            Padding = new Padding(26, 22, 26, 22),
+            ColumnCount = 1,
+            RowCount = 6
+        };
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 154));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 145));
+        body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        Controls.Add(body);
 
-        // ── Current version ──
-        _lblCurrentVer = CreateLabel($"Current Version: {_currentVersion}", 20, y, DimText);
-        y += 30;
-
-        // ── Status ──
-        _lblStatus = CreateLabel("Checking GitHub for updates automatically...", 20, y, DimText);
-        _lblStatus.MaximumSize = new Size(560, 0);
-        _lblStatus.AutoSize = true;
-        y += 30;
-
-        // ── Check button ──
-        _btnCheck = CreateButton("🔍  Check for Updates", 20, y, 250, 42, Gold);
+        var statusCard = CreateCard();
+        var statusLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = BgCard,
+            Padding = new Padding(18, 12, 14, 12),
+            ColumnCount = 2,
+            RowCount = 2,
+            Margin = Padding.Empty
+        };
+        statusLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        statusLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 205));
+        statusLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        statusLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _lblCurrentVer = new Label
+        {
+            Text = $"CURRENT VERSION  •  {_currentVersion}",
+            Dock = DockStyle.Fill,
+            ForeColor = Navy,
+            Font = new Font("Segoe UI", 11, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
+        };
+        _lblStatus = new Label
+        {
+            Text = "Checking securely for available updates...",
+            Dock = DockStyle.Fill,
+            ForeColor = DimText,
+            Font = new Font("Segoe UI", 10),
+            TextAlign = ContentAlignment.TopLeft,
+            AutoEllipsis = true
+        };
+        _btnCheck = CreateButton("CHECK FOR UPDATES", Gold, true);
+        _btnCheck.Dock = DockStyle.Fill;
+        _btnCheck.Margin = new Padding(12, 4, 0, 4);
         _btnCheck.Click += async (s, e) => await CheckForUpdates();
-        y += 55;
+        statusLayout.Controls.Add(_lblCurrentVer, 0, 0);
+        statusLayout.Controls.Add(_lblStatus, 0, 1);
+        statusLayout.Controls.Add(_btnCheck, 1, 0);
+        statusLayout.SetRowSpan(_btnCheck, 2);
+        statusCard.Controls.Add(statusLayout);
+        body.Controls.Add(statusCard, 0, 0);
 
-        // ── Server info panel (hidden until check succeeds) ──
         _pnlServerInfo = new Panel
         {
-            Location = new Point(20, y), Size = new Size(560, 120),
-            BackColor = BgCard, Visible = false
+            Dock = DockStyle.Fill,
+            BackColor = BgCard,
+            Visible = false,
+            Padding = new Padding(18, 14, 18, 14),
+            Margin = new Padding(0, 10, 0, 0)
         };
         _pnlServerInfo.Paint += (s, e) =>
         {
-            using var pen = new Pen(BorderColor);
+            using var pen = new Pen(GreenColor, 1);
             e.Graphics.DrawRectangle(pen, 0, 0, _pnlServerInfo.Width - 1, _pnlServerInfo.Height - 1);
         };
-
         _lblServerVer = new Label
         {
             Text = "New Version: —",
-            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            Dock = DockStyle.Top,
+            Height = 30,
+            Font = new Font("Segoe UI", 12, FontStyle.Bold),
             ForeColor = GreenColor,
-            Location = new Point(14, 10), AutoSize = true
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
         };
-
         _lblReleaseNotes = new Label
         {
-            Text = "",
-            ForeColor = Color.White,
-            Location = new Point(14, 34),
-            Size = new Size(530, 36), AutoSize = false
+            Dock = DockStyle.Fill,
+            Text = "Release information will appear here.",
+            ForeColor = TextColor,
+            Font = new Font("Segoe UI", 9.5f),
+            TextAlign = ContentAlignment.TopLeft,
+            AutoEllipsis = true,
+            Padding = new Padding(0, 5, 0, 4)
         };
-
-        _btnDownload = CreateButton("⬇  Download & Install Update", 14, 78, 530, 34, GreenColor);
+        _btnDownload = CreateButton("DOWNLOAD AND INSTALL UPDATE", GreenColor, true);
+        _btnDownload.Dock = DockStyle.Bottom;
+        _btnDownload.Height = 42;
         _btnDownload.Click += async (s, e) => await DownloadAndInstall();
-
         _pnlServerInfo.Controls.AddRange(new Control[] { _lblServerVer, _lblReleaseNotes, _btnDownload });
-        Controls.Add(_pnlServerInfo);
-        y += 130;
+        body.Controls.Add(_pnlServerInfo, 0, 1);
 
-        // ── Progress ──
+        var progressHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = BgDark,
+            Margin = new Padding(0, 8, 0, 0)
+        };
         _progress = new ProgressBar
         {
-            Location = new Point(20, y), Size = new Size(560, 24),
-            Style = ProgressBarStyle.Continuous, Visible = false
+            Dock = DockStyle.Top,
+            Height = 20,
+            Style = ProgressBarStyle.Continuous,
+            Visible = false
         };
-        Controls.Add(_progress);
-
-        _lblProgress = CreateLabel("", 20, y + 28, DimText);
+        _lblProgress = new Label
+        {
+            Dock = DockStyle.Fill,
+            ForeColor = DimText,
+            Font = new Font("Segoe UI", 9.5f),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
+        };
         _lblProgress.Visible = false;
-        y += 60;
+        progressHost.Controls.Add(_lblProgress);
+        progressHost.Controls.Add(_progress);
+        body.Controls.Add(progressHost, 0, 2);
 
-        // ── Separator ──
-        var sep = new Panel { Location = new Point(20, y), Size = new Size(560, 1), BackColor = BorderColor };
-        Controls.Add(sep);
-        y += 16;
-
-        // ── Local file section ──
-        var lblLocal = CreateLabel("APPLY LOCAL UPDATE FILE", 20, y, Gold, true);
-        y += 24;
-
+        var localCard = CreateCard();
+        localCard.Margin = new Padding(0, 8, 0, 0);
+        var localLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = BgCard,
+            Padding = new Padding(18, 10, 18, 12),
+            ColumnCount = 2,
+            RowCount = 3
+        };
+        localLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        localLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+        localLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        localLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        localLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var lblLocal = new Label
+        {
+            Text = "ADVANCED  •  INSTALL FROM A LOCAL UPDATE FILE",
+            Dock = DockStyle.Fill,
+            ForeColor = Navy,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
+        };
+        localLayout.Controls.Add(lblLocal, 0, 0);
+        localLayout.SetColumnSpan(lblLocal, 2);
         _txtFilePath = new TextBox
         {
-            Location = new Point(20, y), Size = new Size(430, 30),
-            BackColor = BgField, ForeColor = Color.White,
+            Dock = DockStyle.Fill,
+            BackColor = BgField,
+            ForeColor = TextColor,
             BorderStyle = BorderStyle.FixedSingle,
-            ReadOnly = true, Text = "No file selected...",
-            Font = new Font("Segoe UI", 9.5f)
+            ReadOnly = true,
+            Text = "No update file selected",
+            Font = new Font("Segoe UI", 10),
+            Margin = new Padding(0, 2, 8, 2)
         };
-        Controls.Add(_txtFilePath);
-
-        _btnBrowse = CreateButton("Browse...", 458, y, 122, 30, BorderColor);
-        _btnBrowse.ForeColor = DimText;
-        _btnBrowse.FlatAppearance.BorderColor = BorderColor;
+        _btnBrowse = CreateButton("BROWSE", Color.White, false);
+        _btnBrowse.Dock = DockStyle.Fill;
+        _btnBrowse.Margin = new Padding(8, 0, 0, 0);
         _btnBrowse.Click += (s, e) => BrowseLocal();
-        y += 40;
-
-        _btnApplyLocal = CreateButton("📁  Apply Local Update", 20, y, 250, 38, Gold);
+        _btnApplyLocal = CreateButton("APPLY LOCAL UPDATE", Gold, true);
+        _btnApplyLocal.Dock = DockStyle.Fill;
+        _btnApplyLocal.Margin = new Padding(0, 8, 0, 0);
         _btnApplyLocal.Enabled = false;
         _btnApplyLocal.Click += (s, e) => ApplyLocal();
-        y += 55;
+        localLayout.Controls.Add(_txtFilePath, 0, 1);
+        localLayout.Controls.Add(_btnBrowse, 1, 1);
+        localLayout.Controls.Add(_btnApplyLocal, 0, 2);
+        localLayout.SetColumnSpan(_btnApplyLocal, 2);
+        localCard.Controls.Add(localLayout);
+        body.Controls.Add(localCard, 0, 3);
 
-        // ── Close button ──
-        _btnClose = CreateButton("Close", 480, y, 100, 34, BorderColor);
-        _btnClose.ForeColor = DimText;
-        _btnClose.FlatAppearance.BorderColor = BorderColor;
+        _btnClose = CreateButton("CLOSE", Color.White, false);
+        _btnClose.Dock = DockStyle.Right;
+        _btnClose.Width = 150;
+        _btnClose.Margin = new Padding(0, 8, 0, 0);
         _btnClose.Click += (s, e) => Close();
+        var footer = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = BgDark,
+            Margin = Padding.Empty
+        };
+        footer.Controls.Add(_btnClose);
+        body.Controls.Add(footer, 0, 5);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -613,35 +731,50 @@ public class UpdateManagerForm : Form
         return string.Compare(latest, current, StringComparison.OrdinalIgnoreCase) > 0;
     }
 
-    private Label CreateLabel(string text, int x, int y, Color color, bool bold = false)
+    private static Panel CreateCard()
     {
-        var lbl = new Label
+        var card = new Panel
         {
-            Text = text,
-            ForeColor = color,
-            Location = new Point(x, y),
-            AutoSize = true,
-            Font = bold ? new Font("Segoe UI", 10, FontStyle.Bold) : new Font("Segoe UI", 9.5f)
+            Dock = DockStyle.Fill,
+            BackColor = BgCard,
+            Margin = Padding.Empty
         };
-        Controls.Add(lbl);
-        return lbl;
+        card.Paint += (_, e) =>
+        {
+            using var pen = new Pen(BorderColor);
+            e.Graphics.DrawRectangle(
+                pen,
+                0,
+                0,
+                Math.Max(0, card.Width - 1),
+                Math.Max(0, card.Height - 1));
+        };
+        return card;
     }
 
-    private Button CreateButton(string text, int x, int y, int w, int h, Color bgColor)
+    private static Button CreateButton(string text, Color bgColor, bool filled)
     {
         var btn = new Button
         {
             Text = text,
-            Location = new Point(x, y),
-            Size = new Size(w, h),
             FlatStyle = FlatStyle.Flat,
             BackColor = bgColor,
-            ForeColor = bgColor == Gold || bgColor == GreenColor ? Color.Black : Color.White,
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            Cursor = Cursors.Hand
+            ForeColor = filled ? Color.White : Navy,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            Cursor = Cursors.Hand,
+            TextAlign = ContentAlignment.MiddleCenter,
+            UseVisualStyleBackColor = false
         };
-        btn.FlatAppearance.BorderSize = 0;
-        Controls.Add(btn);
+        btn.FlatAppearance.BorderSize = 1;
+        btn.FlatAppearance.BorderColor = filled
+            ? (bgColor == Gold ? OrangeDark : GreenColor)
+            : Blue;
+        btn.FlatAppearance.MouseOverBackColor = filled
+            ? (bgColor == Gold ? Color.FromArgb(224, 118, 22) : Color.FromArgb(35, 135, 73))
+            : Color.FromArgb(235, 243, 252);
+        btn.FlatAppearance.MouseDownBackColor = filled
+            ? (bgColor == Gold ? OrangeDark : Color.FromArgb(28, 112, 61))
+            : Color.FromArgb(222, 235, 249);
         return btn;
     }
 }

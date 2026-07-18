@@ -156,6 +156,9 @@ try {
   $upgradeExe = Join-Path $updaterOutTemp "Upgrade.exe"
   if (!(Test-Path $upgradeExe)) { throw "Updater publish did not produce Upgrade.exe." }
   Copy-Item $upgradeExe (Join-Path $outTemp "Upgrade.exe") -Force
+  $updaterPayloadDirectory = Join-Path $outTemp "UpdaterPayload"
+  New-Item -ItemType Directory -Force -Path $updaterPayloadDirectory | Out-Null
+  Copy-Item $upgradeExe (Join-Path $updaterPayloadDirectory "Upgrade.exe") -Force
 
   # The updater reads this file when comparing the installed build to a GitHub release tag.
   $appVersion = (Get-Item $expectedExe).VersionInfo.ProductVersion

@@ -23,7 +23,15 @@ internal static class AppUpdateStartupService
     private const string GitHubLatestReleaseApi =
         "https://api.github.com/repos/paul-hbledgerpro/HISABKITABWORKS/releases/latest";
     private const string PreferredAssetPrefix = "HISAB_KITAB_Update_win-x64";
+    private const string UpdaterPayloadDirectoryName = "UpdaterPayload";
     private const int MaximumDeferrals = 3;
+    private static readonly string[] UpdaterRuntimeFiles =
+    {
+        "Upgrade.exe",
+        "Upgrade.dll",
+        "Upgrade.deps.json",
+        "Upgrade.runtimeconfig.json"
+    };
     private static readonly byte[] StateEntropy =
         Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-APP-UPDATE-DEFERRALS-V1");
     private static readonly SemaphoreSlim Gate = new(1, 1);
@@ -180,8 +188,14 @@ internal static class AppUpdateStartupService
         AvailableAppUpdate update,
         bool required)
     {
-        var updaterPath = Path.Combine(AppContext.BaseDirectory, "Upgrade.exe");
-        if (!File.Exists(updaterPath))
+        var updaterSourceDirectory = Path.Combine(
+            AppContext.BaseDirectory,
+            UpdaterPayloadDirectoryName);
+        if (!File.Exists(Path.Combine(updaterSourceDirectory, "Upgrade.exe")))
+            updaterSourceDirectory = AppContext.BaseDirectory;
+
+        var installedUpdaterPath = Path.Combine(updaterSourceDirectory, "Upgrade.exe");
+        if (!File.Exists(installedUpdaterPath))
         {
             MessageBox.Show(
                 owner,
@@ -193,11 +207,13 @@ internal static class AppUpdateStartupService
             return Task.CompletedTask;
         }
 
+        var updaterWorkingDirectory = PrepareUpdaterWorkingCopy(updaterSourceDirectory);
+        var updaterPath = Path.Combine(updaterWorkingDirectory, "Upgrade.exe");
         var appExe = Application.ExecutablePath;
         var startInfo = new ProcessStartInfo
         {
             FileName = updaterPath,
-            WorkingDirectory = AppContext.BaseDirectory,
+            WorkingDirectory = updaterWorkingDirectory,
             UseShellExecute = true,
             Verb = "runas"
         };
@@ -227,6 +243,41 @@ internal static class AppUpdateStartupService
             }
         }));
         return Task.CompletedTask;
+    }
+
+    private static string PrepareUpdaterWorkingCopy(string sourceDirectory)
+    {
+        var updaterRoot = Path.Combine(
+            Path.GetTempPath(),
+            "HISAB_KITAB_UPDATER");
+        Directory.CreateDirectory(updaterRoot);
+        var workingDirectory = Path.Combine(
+            updaterRoot,
+            $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workingDirectory);
+
+        var copiedFiles = 0;
+        foreach (var fileName in UpdaterRuntimeFiles)
+        {
+            var source = Path.Combine(sourceDirectory, fileName);
+            if (!File.Exists(source))
+                continue;
+
+            File.Copy(
+                source,
+                Path.Combine(workingDirectory, fileName),
+                overwrite: true);
+            copiedFiles++;
+        }
+
+        if (copiedFiles == 0 ||
+            !File.Exists(Path.Combine(workingDirectory, "Upgrade.exe")))
+        {
+            throw new InvalidOperationException(
+                "The updater runtime could not be prepared.");
+        }
+
+        return workingDirectory;
     }
 
     private static AppUpdateDeferralState LoadState(string updateVersion)

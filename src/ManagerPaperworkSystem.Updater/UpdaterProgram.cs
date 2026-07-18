@@ -194,8 +194,9 @@ internal static class Program
 
         if (failed > 0)
         {
-            MessageBox.Show($"Update partially applied: {copied} updated, {failed} failed.\n\n" +
-                string.Join("\n", failedFiles.Take(5)), "Update", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            throw new IOException(
+                $"The update could not replace {failed} file(s).\n\n" +
+                string.Join("\n", failedFiles.Take(5)));
         }
     }
 
