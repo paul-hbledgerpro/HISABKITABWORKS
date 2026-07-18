@@ -212,8 +212,9 @@ internal sealed class LoginForm : Form
         };
         Shown += async (_, _) =>
         {
-            await Task.CompletedTask;
-            _username.Focus();
+            await AppUpdateStartupService.CheckAtStartupAsync(this);
+            if (!IsDisposed && Visible)
+                _username.Focus();
         };
     }
 

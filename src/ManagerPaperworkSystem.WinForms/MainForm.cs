@@ -77,7 +77,6 @@ internal sealed partial class MainForm : Form
         {
             await LoadStoresAsync();
             ShowModule("Dashboard");
-            BeginInvoke(new Action(async () => await AppUpdateStartupService.CheckAtStartupAsync(this)));
         };
     }
 
