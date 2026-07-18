@@ -20,6 +20,7 @@ internal sealed class ReportViewerForm : Form
     private Button? _emailButton;
     private string? _previewPath;
     private bool _isGenerating;
+    private bool _embeddedPreviewAvailable;
 
     public ReportViewerForm(
         string title,
@@ -160,7 +161,17 @@ internal sealed class ReportViewerForm : Form
         try
         {
             _status.Text = "Loading report preview...";
-            await _pdfView.EnsureCoreWebView2Async();
+            var userDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Hisab Kitab",
+                "WebView2",
+                "ReportViewer");
+            Directory.CreateDirectory(userDataFolder);
+
+            var environment = await CoreWebView2Environment.CreateAsync(
+                browserExecutableFolder: null,
+                userDataFolder: userDataFolder);
+            await _pdfView.EnsureCoreWebView2Async(environment);
             _pdfView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _pdfView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _pdfView.CoreWebView2.Settings.HiddenPdfToolbarItems =
@@ -171,17 +182,22 @@ internal sealed class ReportViewerForm : Form
             _pdfView.Visible = true;
             _pdfView.BringToFront();
             _loadingMessage.Visible = false;
+            _embeddedPreviewAvailable = true;
             _status.Text = "Report ready";
         }
         catch (Exception ex)
         {
+            _embeddedPreviewAvailable = false;
             _pdfView.Visible = false;
             _loadingMessage.Visible = true;
-            _loadingMessage.Text = "The embedded PDF viewer is unavailable.\nUse Open Externally to view this report.";
-            _status.Text = "External viewer available";
-            MessageBox.Show(this,
-                $"The report was generated, but Windows could not start the embedded PDF viewer.\n\n{AppBootstrap.RedactSensitiveText(ex.Message)}",
-                "Report Viewer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _loadingMessage.Text =
+                "The report is ready.\n\n" +
+                "Embedded preview is unavailable on this PC, but you can still Email, Save, Print, or Open the PDF.";
+            _status.Text = _emailPdfAsync is null
+                ? "Report ready · Use Save, Print, or Open"
+                : "Report ready · Email is available";
+            Debug.WriteLine(
+                $"Embedded report preview unavailable: {AppBootstrap.RedactSensitiveText(ex.Message)}");
         }
     }
 
@@ -249,7 +265,7 @@ internal sealed class ReportViewerForm : Form
 
         try
         {
-            if (_pdfView.CoreWebView2 is not null)
+            if (_embeddedPreviewAvailable && _pdfView.CoreWebView2 is not null)
             {
                 _pdfView.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.System);
                 return;
