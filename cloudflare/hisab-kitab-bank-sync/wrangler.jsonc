@@ -17,6 +17,24 @@
     "CLIENT_NAME": "HISAB KITAB WORKS",
     "TRANSACTION_DAYS": "90"
   },
+  "env": {
+    "production": {
+      "name": "hisab-kitab-bank-sync-production",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "hisab-kitab-bank-sync-production",
+          "database_id": "a062aa14-3d1f-4596-a1d4-5ff9cbeef8e0",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "vars": {
+        "PLAID_ENV": "production",
+        "CLIENT_NAME": "HISAB KITAB WORKS",
+        "TRANSACTION_DAYS": "90"
+      }
+    }
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
