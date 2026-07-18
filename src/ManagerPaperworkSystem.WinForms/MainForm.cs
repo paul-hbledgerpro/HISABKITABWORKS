@@ -5270,11 +5270,13 @@ CREATE TABLE [dbo].[BankConnections] (
     [LastError] NVARCHAR(500) NOT NULL DEFAULT '',
     [UpdatedUtc] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
 );
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankConnections_Store_Connection' AND object_id = OBJECT_ID('dbo.BankConnections'))
-    CREATE UNIQUE INDEX UX_BankConnections_Store_Connection ON dbo.BankConnections(StoreId, ConnectionId);
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransactions_Store_External' AND object_id = OBJECT_ID('dbo.BankStatementTransactions'))
-    CREATE UNIQUE INDEX UX_BankStatementTransactions_Store_External ON dbo.BankStatementTransactions(StoreId, ExternalTransactionId) WHERE ExternalTransactionId IS NOT NULL;
 ");
+            await ExecuteBankSchemaCommandAsync(conn, @"
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankConnections_Store_Connection' AND object_id = OBJECT_ID('dbo.BankConnections'))
+    CREATE UNIQUE INDEX UX_BankConnections_Store_Connection ON dbo.BankConnections(StoreId, ConnectionId);");
+            await ExecuteBankSchemaCommandAsync(conn, @"
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransactions_Store_External' AND object_id = OBJECT_ID('dbo.BankStatementTransactions'))
+    EXEC(N'CREATE UNIQUE INDEX UX_BankStatementTransactions_Store_External ON dbo.BankStatementTransactions(StoreId, ExternalTransactionId) WHERE ExternalTransactionId IS NOT NULL');");
             return;
         }
 

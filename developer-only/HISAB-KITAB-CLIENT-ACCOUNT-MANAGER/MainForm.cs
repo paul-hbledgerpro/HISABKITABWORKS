@@ -32,7 +32,7 @@ internal sealed class MainForm : Form
     private readonly TextBox _subscription = DeveloperTheme.TextBox();
     private readonly DataGridView _grid = new() { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
     private readonly Label _selectedLicense = DeveloperTheme.Label("SELECT AN EXISTING ACCOUNT TO UPDATE ITS SERVICES", true, DeveloperTheme.Muted);
-    private readonly Label _editorMode = DeveloperTheme.Label("NEW CLIENT ACCOUNT", true, DeveloperTheme.Green);
+    private readonly Label _editorMode = DeveloperTheme.Label("SELECT A CLIENT FROM THE DIRECTORY", true, DeveloperTheme.Muted);
     private readonly Label _taxRuleStatus = DeveloperTheme.Label("Select a payroll processing state.", false, DeveloperTheme.Muted);
     private readonly Label _status = DeveloperTheme.Label("Connect to create or update a client account.", false, DeveloperTheme.Muted);
     private ClientAccountService? _service;
@@ -64,7 +64,7 @@ internal sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 105)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.Controls.Add(BuildHeader(), 0, 0); root.Controls.Add(BuildConnection(), 0, 1);
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(0, 12, 0, 0) };
-        body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 610)); body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 650)); body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         body.Controls.Add(BuildEditor(), 0, 0); body.Controls.Add(BuildDirectory(), 1, 0); root.Controls.Add(body, 0, 2);
         _status.BackColor = Color.White; _status.Padding = new Padding(12, 0, 0, 0); root.Controls.Add(_status, 0, 3); return root;
     }
@@ -95,27 +95,21 @@ internal sealed class MainForm : Form
     private Control BuildEditor()
     {
         var outer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(20, 14, 20, 14), ColumnCount = 1, RowCount = 6 };
-        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
 
-        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.White };
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1, BackColor = Color.White };
         var headingText = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.White };
         headingText.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
         headingText.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
-        var title = DeveloperTheme.Label("CLIENT ACCOUNT & PURCHASED SERVICES", true, DeveloperTheme.Orange); title.Font = DeveloperTheme.Bold(14);
+        var title = DeveloperTheme.Label("SELECTED CLIENT ACCOUNT", true, DeveloperTheme.Orange); title.Font = DeveloperTheme.Bold(14);
         headingText.Controls.Add(title, 0, 0);
         headingText.Controls.Add(_editorMode, 0, 1);
-        var newAccount = DeveloperTheme.Button("NEW CLIENT ACCOUNT", true);
-        newAccount.Margin = new Padding(5, 2, 0, 4);
-        newAccount.Click += (_, _) => Clear();
         heading.Controls.Add(headingText, 0, 0);
-        heading.Controls.Add(newAccount, 1, 0);
         outer.Controls.Add(heading, 0, 0);
 
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.White, Padding = new Padding(0, 0, 8, 0) };
@@ -159,12 +153,13 @@ internal sealed class MainForm : Form
         var heading = DeveloperTheme.Label("CLIENT DIRECTORY", true, DeveloperTheme.Orange); heading.Font = DeveloperTheme.Bold(14); panel.Controls.Add(heading,0,0);
         _selectedLicense.BackColor = DeveloperTheme.PaleBlue; _selectedLicense.Padding = new Padding(10, 0, 10, 0); _selectedLicense.AutoEllipsis = true;
         panel.Controls.Add(_selectedLicense, 0, 1); panel.Controls.Add(_grid,0,2);
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Padding = new Padding(0,8,0,0) };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,24)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,38)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,38));
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(0,8,0,0) };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,24)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,16)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,30)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,30));
+        var newClient = DeveloperTheme.Button("NEW CLIENT", true); newClient.Click += (_,_) => OpenNewClientAccount();
         var refresh = DeveloperTheme.Button("REFRESH"); refresh.Click += (_,_) => RefreshAccounts();
         var billing = DeveloperTheme.Button("ACCOUNT PAYMENTS & INVOICES", true); billing.Click += (_,_) => OpenAccountBilling();
         var license = DeveloperTheme.Button("OPEN LICENSE GENERATOR"); license.Click += (_,_) => OpenLicenseGenerator();
-        actions.Controls.Add(refresh,0,0); actions.Controls.Add(billing,1,0); actions.Controls.Add(license,2,0); panel.Controls.Add(actions,0,3); return panel;
+        actions.Controls.Add(newClient,0,0); actions.Controls.Add(refresh,1,0); actions.Controls.Add(billing,2,0); actions.Controls.Add(license,3,0); panel.Controls.Add(actions,0,3); return panel;
     }
 
     private static void AddField(TableLayoutPanel form, int row, string label, Control control, int column, int span = 1)
@@ -225,7 +220,9 @@ internal sealed class MainForm : Form
 
     private void SaveAccount()
     {
-        if(_service is null){SetStatus("Connect first.",true);return;} try { var saved=_service.Save(ReadForm()); _customerId=saved.CustomerId; _licenseId=saved.LicenseId; _subscription.Text=saved.SubscriptionKey; RefreshAccounts(); SetStatus($"Client account saved. Subscription key {saved.SubscriptionKey} is ready for the License Generator.",false); } catch(Exception ex){SetStatus(ex.Message,true);}
+        if(_service is null){SetStatus("Connect first.",true);return;}
+        if(_customerId <= 0){SetStatus("Select an existing client, or use NEW CLIENT to open the new-account window.",true);return;}
+        try { var saved=_service.Save(ReadForm()); _customerId=saved.CustomerId; _licenseId=saved.LicenseId; _subscription.Text=saved.SubscriptionKey; RefreshAccounts(); SelectAccount(saved.CustomerId); SetStatus($"Client account saved. Subscription key {saved.SubscriptionKey} is ready for the License Generator.",false); } catch(Exception ex){SetStatus(ex.Message,true);}
     }
     private void UpdateServicesOnly()
     {
@@ -244,7 +241,37 @@ internal sealed class MainForm : Form
     private string Services() => string.Join(',',new[]{"Accounting",_payroll.Checked?"Payroll":"",_scheduling.Checked?"Scheduling":""}.Where(x=>x.Length>0));
     private string SelectedPayrollState() => (_payrollState.SelectedItem?.ToString() ?? "").Trim().ToUpperInvariant();
     private static bool Has(ClientAccount item,string service)=>item.EnabledServices.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Contains(service,StringComparer.OrdinalIgnoreCase);
-    private void Clear(){_customerId=0;_licenseId=0;_grid.ClearSelection();foreach(var box in new[]{_business,_owner,_email,_phone,_guid,_zip,_address,_subscription,_addressState})box.Clear();_payrollState.SelectedIndex=-1;_database.Text="";_pcs.Value=1;_businesses.Value=1;_monthlyFee.Value=0;_expires.Value=DateTime.Today.AddMonths(1);_payroll.Checked=false;_scheduling.Checked=false;_active.Checked=true;_editorMode.Text="NEW CLIENT ACCOUNT";_editorMode.ForeColor=DeveloperTheme.Green;_selectedLicense.Text="NEW CLIENT ACCOUNT — ENTER DETAILS, SELECT SERVICES, THEN SAVE";_selectedLicense.ForeColor=DeveloperTheme.Muted;UpdatePayrollTaxStatus();SetStatus("New client account form is ready.",false);}
+    private void Clear(){_customerId=0;_licenseId=0;_grid.ClearSelection();foreach(var box in new[]{_business,_owner,_email,_phone,_guid,_zip,_address,_subscription,_addressState})box.Clear();_payrollState.SelectedIndex=-1;_database.Text="";_pcs.Value=1;_businesses.Value=1;_monthlyFee.Value=0;_expires.Value=DateTime.Today.AddMonths(1);_payroll.Checked=false;_scheduling.Checked=false;_active.Checked=true;_editorMode.Text="SELECT A CLIENT FROM THE DIRECTORY";_editorMode.ForeColor=DeveloperTheme.Muted;_selectedLicense.Text="SELECT AN EXISTING ACCOUNT TO EDIT, OR CLICK NEW CLIENT";_selectedLicense.ForeColor=DeveloperTheme.Muted;UpdatePayrollTaxStatus();SetStatus("Connect, then select a client or click NEW CLIENT.",false);}
+
+    private void OpenNewClientAccount()
+    {
+        if (_service is null)
+        {
+            SetStatus("Connect to the licensing database before creating a new client.", true);
+            return;
+        }
+
+        using var dialog = new NewClientAccountForm(_service, _database.Items.Cast<object>().Select(x => x?.ToString() ?? ""));
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.SavedAccount is null)
+            return;
+
+        RefreshAccounts();
+        SelectAccount(dialog.SavedAccount.CustomerId);
+        SetStatus($"New client account created. Subscription key {dialog.SavedAccount.SubscriptionKey} is ready for the License Generator.", false);
+    }
+
+    private void SelectAccount(int customerId)
+    {
+        foreach (DataGridViewRow row in _grid.Rows)
+        {
+            if (row.Cells[nameof(ClientAccount.CustomerId)].Value is int id && id == customerId)
+            {
+                row.Selected = true;
+                _grid.CurrentCell = row.Cells.Cast<DataGridViewCell>().First(cell => cell.Visible);
+                return;
+            }
+        }
+    }
 
     private void UpdatePayrollTaxStatus()
     {
