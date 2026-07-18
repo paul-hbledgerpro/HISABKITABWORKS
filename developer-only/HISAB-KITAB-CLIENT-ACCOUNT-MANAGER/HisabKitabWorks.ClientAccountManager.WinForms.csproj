@@ -26,5 +26,8 @@
     <Content Include="Assets\InvoiceDivider.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\..\src\ManagerPaperworkSystem.WinForms\TaxRules\us-payroll-2026.json" Link="TaxRules\us-payroll-2026.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>

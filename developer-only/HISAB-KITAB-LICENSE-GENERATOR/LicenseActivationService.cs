@@ -568,6 +568,18 @@ END", connection);
             throw new InvalidOperationException(
                 $"This client has {businesses.Count} approved businesses. Increase the business limit before generating the key.");
 
+        var primaryBusiness = businesses.FirstOrDefault(x => x.IsPrimary) ?? businesses[0];
+        var primaryParts = primaryBusiness.StoreGuid.Trim().ToUpperInvariant().Split('_');
+        var primaryState = StateFromStoreGuid(primaryBusiness.StoreGuid);
+        var primaryType = primaryParts.Length == 4 ? primaryParts[2] : "";
+        var primaryZip = primaryParts.Length == 4 ? primaryParts[3] : "";
+        var assignedPayrollState = string.IsNullOrWhiteSpace(subscription.PayrollState)
+            ? primaryState
+            : subscription.PayrollState.Trim().ToUpperInvariant();
+        if (assignedPayrollState.Length != 2 || !assignedPayrollState.All(char.IsLetter))
+            throw new InvalidOperationException(
+                "The client account must have a valid developer-assigned two-letter Payroll Processing State.");
+
         var licensedBusinesses = businesses.Select(business =>
         {
             var encrypted = EncryptConnection(business.DatabaseName, request.DevicePublicKey);
@@ -578,7 +590,7 @@ END", connection);
                 Address = business.StoreAddress,
                 StoreGuid = business.StoreGuid,
                 DatabaseName = business.DatabaseName,
-                PayrollState = StateFromStoreGuid(business.StoreGuid),
+                PayrollState = assignedPayrollState,
                 IsPrimary = business.IsPrimary,
                 EncryptedConnectionKey = encrypted.EncryptedKey,
                 EncryptedConnection = encrypted.Cipher,
@@ -587,17 +599,6 @@ END", connection);
             };
         }).ToList();
         var primary = licensedBusinesses.FirstOrDefault(x => x.IsPrimary) ?? licensedBusinesses[0];
-
-        var primaryParts = subscription.DatabaseName.Split('_');
-        var primaryState = primaryParts.Length == 4 ? primaryParts[0] : "";
-        var primaryType = primaryParts.Length == 4 ? primaryParts[2] : "";
-        var primaryZip = primaryParts.Length == 4 ? primaryParts[3] : "";
-        var assignedPayrollState = string.IsNullOrWhiteSpace(subscription.PayrollState)
-            ? primaryState
-            : subscription.PayrollState.Trim().ToUpperInvariant();
-        if (!string.Equals(assignedPayrollState, primaryState, StringComparison.Ordinal))
-            throw new InvalidOperationException(
-                $"The developer-assigned Payroll State ({assignedPayrollState}) does not match the primary Store GUID state ({primaryState}). Correct the client account before issuing its license.");
 
         return new DeviceLicensePayloadV2
         {

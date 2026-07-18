@@ -409,10 +409,8 @@ ORDER BY Id;", connection);
             throw new InvalidOperationException("Business, owner, Store GUID, ZIP and database are required.");
         if (value.StoreZip.Length != 5 || !value.StoreZip.All(char.IsDigit)) throw new InvalidOperationException("Store ZIP must be five digits.");
         if (!value.EnabledServices.Split(',').Contains("Accounting", StringComparer.OrdinalIgnoreCase)) throw new InvalidOperationException("Core Accounting must remain enabled.");
-        var state = ValidatePayrollState(value.PayrollState);
-        var guidState = StateFromStoreGuid(value.StoreGuid);
-        if (!string.Equals(state, guidState, StringComparison.Ordinal))
-            throw new InvalidOperationException($"Payroll State must match the Store GUID state ({guidState}).");
+        _ = ValidatePayrollState(value.PayrollState);
+        _ = StateFromStoreGuid(value.StoreGuid);
     }
 
     private static void EnsureOwnershipAvailable(SqlConnection connection, SqlTransaction tx, ClientAccount input)
