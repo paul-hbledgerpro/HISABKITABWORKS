@@ -50,7 +50,6 @@ internal sealed class LoginForm : Form
         _error.ForeColor = WinTheme.Red;
         _error.AutoSize = false;
         _error.TextAlign = ContentAlignment.MiddleLeft;
-        _error.SetBounds(78, 454, 700, 50);
 
         var root = new LoginBackgroundPanel
         {
@@ -97,64 +96,164 @@ internal sealed class LoginForm : Form
         root.Controls.Add(divider);
         divider.BringToFront();
 
-        var right = new LoginRightPanel { Dock = DockStyle.Fill, Padding = new Padding(115, 92, 115, 72) };
+        var right = new LoginRightPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true
+        };
         root.Controls.Add(right);
         right.BringToFront();
 
-        var titleIcon = IconLabel("\uE77B", 0, 82, 64, 64, 44);
+        var loginCard = new LoginCardPanel
+        {
+            BackColor = Color.White,
+            Padding = new Padding(38, 30, 38, 28)
+        };
+        right.Controls.Add(loginCard);
+
+        void PositionLoginCard()
+        {
+            const int preferredWidth = 760;
+            const int preferredHeight = 690;
+            const int minimumMargin = 24;
+            var availableWidth = Math.Max(1, right.ClientSize.Width);
+            var availableHeight = Math.Max(1, right.ClientSize.Height);
+            var width = Math.Min(preferredWidth, Math.Max(420, availableWidth - (minimumMargin * 2)));
+            var height = Math.Min(preferredHeight, Math.Max(630, availableHeight - (minimumMargin * 2)));
+            var leftPosition = Math.Max(minimumMargin, (availableWidth - width) / 2);
+            var topPosition = Math.Max(minimumMargin, (availableHeight - height) / 2);
+            loginCard.SetBounds(leftPosition, topPosition, width, height);
+        }
+
+        right.Layout += (_, _) => PositionLoginCard();
+
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            ColumnCount = 1,
+            RowCount = 12,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 12));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 15));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        loginCard.Controls.Add(content);
+
+        var heading = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            ColumnCount = 2,
+            RowCount = 3,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 58));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 43));
+        heading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var titleIcon = new LoginIconBadge
+        {
+            Text = "\uE77B",
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 4, 12, 4),
+            ForeColor = Color.White,
+            BackColor = WinTheme.Blue,
+            Font = WinTheme.IconFont(22),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+        heading.Controls.Add(titleIcon, 0, 0);
+        heading.SetRowSpan(titleIcon, 3);
+
+        var eyebrow = new Label
+        {
+            Text = "SECURE BUSINESS ACCESS",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Blue,
+            Font = WinTheme.BoldFont(9),
+            BackColor = Color.Transparent,
+            TextAlign = ContentAlignment.BottomLeft,
+            Margin = Padding.Empty
+        };
         var title = new Label
         {
-            Text = "User Login",
-            Left = 76,
-            Top = 86,
-            Width = 460,
-            Height = 52,
+            Text = "Welcome back",
+            Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,
-            Font = WinTheme.HeaderFont(30),
+            Font = WinTheme.HeaderFont(27),
             BackColor = Color.Transparent,
-            TextAlign = ContentAlignment.MiddleLeft
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = Padding.Empty
         };
         var subtitle = new Label
         {
-            Text = "Please enter your credentials to continue",
-            Left = 78,
-            Top = 140,
-            Width = 560,
-            Height = 32,
-            ForeColor = WinTheme.Copper,
-            Font = WinTheme.BodyFont(15),
+            Text = "Sign in to continue to your HISAB KITAB workspace.",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BodyFont(11),
             BackColor = Color.Transparent,
-            TextAlign = ContentAlignment.MiddleLeft
+            TextAlign = ContentAlignment.TopLeft,
+            AutoEllipsis = true,
+            Margin = Padding.Empty
         };
-        right.Controls.Add(titleIcon);
-        right.Controls.Add(title);
-        right.Controls.Add(subtitle);
+        heading.Controls.Add(eyebrow, 1, 0);
+        heading.Controls.Add(title, 1, 1);
+        heading.Controls.Add(subtitle, 1, 2);
+        content.Controls.Add(heading, 0, 0);
 
-        _storeLabel = FormLabel("Store", 78, 224);
-        right.Controls.Add(_storeLabel);
+        var identityLabelHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            Margin = Padding.Empty
+        };
+        content.Controls.Add(identityLabelHost, 0, 2);
+
+        _storeLabel = FormLabel("Store");
+        identityLabelHost.Controls.Add(_storeLabel);
         StyleLoginCombo(_storePicker);
-        _storeShell = InputShell(78, 254, 700, 60, "\uE8D1", _storePicker);
-        right.Controls.Add(_storeShell);
+        _storeShell = InputShell("\uE8D1", _storePicker);
 
-        _usernameLabel = FormLabel("Username", 78, 224);
-        right.Controls.Add(_usernameLabel);
+        _usernameLabel = FormLabel("Username");
+        identityLabelHost.Controls.Add(_usernameLabel);
         StyleLoginBox(_username);
         SetPlaceholder(_username, "Enter username", false);
-        _usernameShell = InputShell(78, 254, 700, 60, "\uE77B", _username);
-        right.Controls.Add(_usernameShell);
+        _usernameShell = InputShell("\uE77B", _username);
 
-        _passwordLabel = FormLabel("Password", 78, 354);
-        right.Controls.Add(_passwordLabel);
+        var identityInputHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            Margin = Padding.Empty
+        };
+        identityInputHost.Controls.Add(_storeShell);
+        identityInputHost.Controls.Add(_usernameShell);
+        content.Controls.Add(identityInputHost, 0, 3);
+
+        _passwordLabel = FormLabel("Password");
+        content.Controls.Add(_passwordLabel, 0, 5);
         StyleLoginBox(_password);
         SetPlaceholder(_password, "Enter password", true);
-        _passwordShell = InputShell(78, 384, 700, 60, "\uE72E", _password);
+        _passwordShell = InputShell("\uE72E", _password);
         var eye = new Button
         {
             Text = "\uE890",
-            Left = 648,
-            Top = 11,
-            Width = 42,
-            Height = 38,
+            Width = 48,
+            Height = 42,
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.Transparent,
             ForeColor = WinTheme.Muted,
@@ -169,26 +268,75 @@ internal sealed class LoginForm : Form
             eye.Text = _password.UseSystemPasswordChar ? "\uE890" : "\uE8F4";
         };
         _passwordShell.Controls.Add(eye);
-        right.Controls.Add(_passwordShell);
+        _passwordShell.Layout += (_, _) =>
+        {
+            eye.SetBounds(Math.Max(0, _passwordShell.ClientSize.Width - 56), 9, 48, 42);
+            _password.Width = Math.Max(80, _passwordShell.ClientSize.Width - 132);
+        };
+        content.Controls.Add(_passwordShell, 0, 6);
 
-        right.Controls.Add(_error);
+        _error.Dock = DockStyle.Fill;
+        _error.Margin = new Padding(2, 4, 2, 0);
+        content.Controls.Add(_error, 0, 7);
 
-        _login.Text = "\uE8AC  Sign In";
-        _reset.Text = "\uE72E  Reset Password";
-        _cancel.Text = "\uE8BB  Exit";
-        _back.Text = "\uE72B  Back";
+        _login.Text = "SIGN IN";
+        _reset.Text = "RESET PASSWORD";
+        _cancel.Text = "EXIT";
+        _back.Text = "BACK";
         StylePrimaryLoginButton(_login);
         StyleOutlineLoginButton(_reset);
         StyleOutlineLoginButton(_cancel);
         StyleOutlineLoginButton(_back);
-        _login.SetBounds(78, 520, 700, 76);
-        _reset.SetBounds(78, 620, 330, 62);
-        _cancel.SetBounds(430, 620, 348, 62);
-        _back.SetBounds(78, 700, 700, 58);
-        right.Controls.Add(_login);
-        right.Controls.Add(_reset);
-        right.Controls.Add(_cancel);
-        right.Controls.Add(_back);
+        _login.Dock = DockStyle.Fill;
+        _login.Margin = Padding.Empty;
+        content.Controls.Add(_login, 0, 8);
+
+        var secondaryActions = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        secondaryActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        secondaryActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        secondaryActions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _reset.Dock = DockStyle.Fill;
+        _back.Dock = DockStyle.Fill;
+        _cancel.Dock = DockStyle.Fill;
+        _reset.Margin = new Padding(0, 0, 7, 0);
+        _back.Margin = new Padding(0, 0, 7, 0);
+        _cancel.Margin = new Padding(7, 0, 0, 0);
+        var firstSecondaryAction = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            Margin = new Padding(0, 0, 7, 0)
+        };
+        _reset.Margin = Padding.Empty;
+        _back.Margin = Padding.Empty;
+        firstSecondaryAction.Controls.Add(_reset);
+        firstSecondaryAction.Controls.Add(_back);
+        secondaryActions.Controls.Add(firstSecondaryAction, 0, 0);
+        secondaryActions.Controls.Add(_cancel, 1, 0);
+        content.Controls.Add(secondaryActions, 0, 10);
+
+        var trustMessage = new Label
+        {
+            Text = "SECURE ACCESS  •  Your credentials are protected",
+            Dock = DockStyle.Bottom,
+            Height = 34,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BodyFont(9),
+            BackColor = Color.Transparent,
+            TextAlign = ContentAlignment.BottomCenter,
+            AutoEllipsis = true,
+            Margin = Padding.Empty
+        };
+        content.Controls.Add(trustMessage, 0, 11);
+        PositionLoginCard();
         ShowCredentialStep();
 
         _login.Click += async (_, _) => await LoginAsync();
@@ -218,18 +366,17 @@ internal sealed class LoginForm : Form
         };
     }
 
-    private static Label FormLabel(string text, int x, int y)
+    private static Label FormLabel(string text)
         => new()
         {
             Text = text,
-            Left = x,
-            Top = y,
-            Width = 700,
-            Height = 24,
+            Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,
-            Font = WinTheme.BoldFont(13),
+            Font = WinTheme.BoldFont(11),
             BackColor = Color.Transparent,
-            TextAlign = ContentAlignment.MiddleLeft
+            TextAlign = ContentAlignment.BottomLeft,
+            Margin = new Padding(2, 0, 0, 2),
+            AutoEllipsis = true
         };
 
     private static void StyleLoginBox(TextBox box)
@@ -290,19 +437,24 @@ internal sealed class LoginForm : Form
             TextAlign = ContentAlignment.MiddleCenter
         };
 
-    private static Panel InputShell(int x, int y, int width, int height, string glyph, Control input)
+    private static Panel InputShell(string glyph, Control input)
     {
         var shell = new BorderedLoginPanel
         {
-            Left = x,
-            Top = y,
-            Width = width,
-            Height = height,
-            BackColor = Color.White
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            Margin = Padding.Empty
         };
-        shell.Controls.Add(IconLabel(glyph, 18, 11, 34, 38, 20));
-        input.SetBounds(66, input is ComboBox ? 15 : 18, width - 92, 32);
+        var icon = IconLabel(glyph, 16, 10, 36, 40, 20);
+        icon.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+        shell.Controls.Add(icon);
+        input.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
         shell.Controls.Add(input);
+        shell.Layout += (_, _) =>
+        {
+            var top = input is ComboBox ? 13 : 17;
+            input.SetBounds(64, top, Math.Max(80, shell.ClientSize.Width - 84), 34);
+        };
         return shell;
     }
 
@@ -320,7 +472,7 @@ internal sealed class LoginForm : Form
         _passwordShell!.Visible = true;
         _reset.Visible = true;
         _back.Visible = false;
-        _login.Text = "\uE8AC  Sign In";
+        _login.Text = "SIGN IN";
         _error.ForeColor = WinTheme.Red;
         _error.Text = "";
         _username.Focus();
@@ -344,7 +496,7 @@ internal sealed class LoginForm : Form
         _storeShell!.Visible = true;
         _reset.Visible = false;
         _back.Visible = true;
-        _login.Text = "\uE8AC  Continue";
+        _login.Text = "CONTINUE";
 
         _error.ForeColor = WinTheme.Copper;
         _error.Text = $"Select the store for {CurrentUsername()} and click Continue.";
@@ -392,8 +544,8 @@ internal sealed class LoginForm : Form
         _login.Enabled = false;
         var selectingStore = _storeShell?.Visible == true;
         _login.Text = selectingStore
-            ? "\uE8AC  Opening..."
-            : "\uE8AC  Checking...";
+            ? "OPENING..."
+            : "CHECKING...";
         Cursor = Cursors.WaitCursor;
         try
         {
@@ -454,8 +606,8 @@ internal sealed class LoginForm : Form
             Cursor = Cursors.Default;
             _login.Enabled = true;
             _login.Text = _storeShell?.Visible == true
-                ? "\uE8AC  Continue"
-                : "\uE8AC  Sign In";
+                ? "CONTINUE"
+                : "SIGN IN";
         }
     }
 
@@ -968,6 +1120,48 @@ internal sealed class LoginRightPanel : Panel
 
         using var brush = new LinearGradientBrush(bounds, Color.White, Color.FromArgb(248, 251, 255), 20f);
         e.Graphics.FillRectangle(brush, bounds);
+    }
+}
+
+internal sealed class LoginCardPanel : Panel
+{
+    public LoginCardPanel()
+    {
+        DoubleBuffered = true;
+        ResizeRedraw = true;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        using var border = new Pen(WinTheme.Border);
+        e.Graphics.DrawRectangle(border, 0, 0, Math.Max(0, Width - 1), Math.Max(0, Height - 1));
+        using var accent = new SolidBrush(WinTheme.Copper);
+        e.Graphics.FillRectangle(accent, 0, 0, Width, 5);
+    }
+}
+
+internal sealed class LoginIconBadge : Label
+{
+    public LoginIconBadge()
+    {
+        DoubleBuffered = true;
+        ResizeRedraw = true;
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var bounds = new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
+        const int radius = 12;
+        using var path = new GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, radius, radius, 180, 90);
+        path.AddArc(bounds.Right - radius, bounds.Top, radius, radius, 270, 90);
+        path.AddArc(bounds.Right - radius, bounds.Bottom - radius, radius, radius, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - radius, radius, radius, 90, 90);
+        path.CloseFigure();
+        using var brush = new SolidBrush(BackColor);
+        e.Graphics.FillPath(brush, path);
     }
 }
 
