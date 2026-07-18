@@ -438,6 +438,7 @@ internal sealed partial class MainForm : Form
                 _storeConnections.CurrentStoreId = selected.Id;
                 await EnsureCurrentStoreDatabaseReadyAsync(selected.Name);
                 _currentStoreId = await ResolveDataStoreIdAsync(selected.Name);
+                LicenseRuntime.ConfigurePayrollStateForConnection(CurrentStoreConnectionString());
                 _session.LastStoreId = selected.Id;
                 _session.StoreName = selected.Name;
                 _status.Text = $"Store: {_session.StoreName}    |    User: {_session.DisplayName} ({_session.Role})";
@@ -488,6 +489,7 @@ internal sealed partial class MainForm : Form
         _storeConnections.CurrentStoreId = store.Id;
         await EnsureCurrentStoreDatabaseReadyAsync(store.Name);
         _currentStoreId = await ResolveDataStoreIdAsync(store.Name);
+        LicenseRuntime.ConfigurePayrollStateForConnection(CurrentStoreConnectionString());
         _session.LastStoreId = store.Id;
         _session.StoreName = store.Name;
         _status.Text = $"Store: {store.Name}    |    User: {_session.DisplayName} ({_session.Role})";
@@ -1847,7 +1849,7 @@ internal sealed partial class MainForm : Form
         closingBalance = MockSummaryValue(stats, "Closing Balance", WinTheme.Green, 210);
         currentBalance = MockSummaryValue(stats, "Carry Forward", WinTheme.Copper, 210);
         var cashOnHandInitialized = false;
-        root.HandleCreated += async (_, _) =>
+        async Task initializeCashOnHandAsync()
         {
             if (cashOnHandInitialized)
                 return;
@@ -1869,7 +1871,18 @@ internal sealed partial class MainForm : Form
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
             }
-        };
+        }
+
+        // BuildCashOnHand is called while the main form is already visible.
+        // Queue its first load on the form's UI message loop so it runs after
+        // the completed module has been attached to _content. Depending on a
+        // child HandleCreated event was unreliable at some Windows DPI/layout
+        // timings and left the grid empty until another action refreshed it.
+        BeginInvoke(new Action(async () =>
+        {
+            if (!root.IsDisposed)
+                await initializeCashOnHandAsync();
+        }));
         return ModuleShell("\uEAFD", "Cash On Hand", "Track cash added, payouts, and carry forward balance.", root);
     }
 

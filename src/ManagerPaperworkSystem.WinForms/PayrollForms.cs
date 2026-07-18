@@ -146,6 +146,7 @@ internal sealed class EmployeeManagerForm : Form
     private readonly CheckBox _stateExempt = new() { Text = "State withholding exempt", AutoSize = true };
     private readonly DateTimePicker _hireDate = new() { Width = 230, Format = DateTimePickerFormat.Short };
     private readonly TextBox _workState = PayrollUi.TextBox();
+    private readonly string _licensedPayrollState;
     private int? _employeeId;
 
     public EmployeeManagerForm(Func<AppDbContext> createDb, int storeId, string user)
@@ -153,6 +154,11 @@ internal sealed class EmployeeManagerForm : Form
         _createDb = createDb;
         _storeId = storeId;
         _user = user;
+        _licensedPayrollState = LicenseRuntime.PayrollState;
+        _workState.ReadOnly = true;
+        _workState.TabStop = false;
+        _workState.BackColor = WinTheme.Panel2;
+        _workState.Text = _licensedPayrollState;
         PayrollUi.Prepare(this, "Employees & Payroll Onboarding - HISAB KITAB", new Size(1480, 900));
         ConfigureEmployeeGrid();
 
@@ -198,7 +204,8 @@ internal sealed class EmployeeManagerForm : Form
             PayrollUi.Field("PHONE", _phone), PayrollUi.Field("EMAIL", _email, 330),
             PayrollUi.Field("SOCIAL SECURITY NUMBER", _ssn), PayrollUi.Field("HIRE DATE", _hireDate),
             PayrollUi.Field("PAY TYPE", _payType), PayrollUi.Field("PAY RATE (HOURLY OR ANNUAL)", _payRate),
-            PayrollUi.Field("PAY FREQUENCY", _frequency), PayrollUi.Field("WORK STATE", _workState, 150),
+            PayrollUi.Field("WORK STATE (LICENSE LOCKED)", _workState, 220),
+            PayrollUi.Field("PAY FREQUENCY", _frequency),
             PayrollUi.Field("OVERTIME", _overtime, 220)
         });
         root.Controls.Add(fields, 0, 0);
@@ -303,7 +310,7 @@ internal sealed class EmployeeManagerForm : Form
         _number.Text = e.EmployeeNumber; _first.Text = e.FirstName; _middle.Text = e.MiddleInitial; _last.Text = e.LastName;
         _address.Text = e.Address; _city.Text = e.City; _state.Text = e.State; _zip.Text = e.Zip; _phone.Text = e.Phone; _email.Text = e.Email;
         _ssn.Text = e.MaskedSsn; _payRate.Value = Clamp(_payRate, e.PayRate); _payType.SelectedItem = e.PayType; _frequency.SelectedItem = e.PayFrequency;
-        _overtime.Checked = e.IsOvertimeEligible; _workState.Text = e.WorkState; _hireDate.Value = e.HireDate.ToDateTime(TimeOnly.MinValue);
+        _overtime.Checked = e.IsOvertimeEligible; _workState.Text = _licensedPayrollState; _hireDate.Value = e.HireDate.ToDateTime(TimeOnly.MinValue);
         _filingStatus.SelectedItem = e.FederalFilingStatus; _multipleJobs.Checked = e.FederalMultipleJobs; _federalExempt.Checked = e.FederalExempt;
         _dependents.Value = Clamp(_dependents, e.FederalDependentsCredit); _otherIncome.Value = Clamp(_otherIncome, e.FederalOtherIncome);
         _deductions.Value = Clamp(_deductions, e.FederalDeductions); _extraFederal.Value = Clamp(_extraFederal, e.FederalExtraWithholding);
@@ -322,7 +329,8 @@ internal sealed class EmployeeManagerForm : Form
     {
         _employeeId = null;
         foreach (var box in new[] { _number, _first, _middle, _last, _address, _city, _state, _zip, _phone, _email, _ssn }) box.Clear();
-        _state.Text = "IL"; _workState.Text = "IL"; _residenceState.Text = "IL"; _stateFilingStatus.Text = "Single"; _payRate.Value = 0; _payType.SelectedItem = EmployeePayType.Hourly; _frequency.SelectedItem = PayFrequency.Biweekly;
+        var defaultState = string.IsNullOrWhiteSpace(_licensedPayrollState) ? "IL" : _licensedPayrollState;
+        _state.Text = defaultState; _workState.Text = _licensedPayrollState; _residenceState.Text = defaultState; _stateFilingStatus.Text = "Single"; _payRate.Value = 0; _payType.SelectedItem = EmployeePayType.Hourly; _frequency.SelectedItem = PayFrequency.Biweekly;
         _overtime.Checked = true; _filingStatus.SelectedItem = FederalFilingStatus.SingleOrMarriedFilingSeparately; _multipleJobs.Checked = false; _federalExempt.Checked = false;
         _stateExempt.Checked = false;
         _dependents.Value = _otherIncome.Value = _deductions.Value = _extraFederal.Value = _ilLine1.Value = _ilLine2.Value = _ilExtra.Value = _stateDeductions.Value = _stateCredits.Value = 0;
@@ -341,8 +349,13 @@ internal sealed class EmployeeManagerForm : Form
     {
         if (string.IsNullOrWhiteSpace(_number.Text) || string.IsNullOrWhiteSpace(_first.Text) || string.IsNullOrWhiteSpace(_last.Text))
         { MessageBox.Show(this, "Employee number, first name, and last name are required.", "Employee", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-        var workState = (string.IsNullOrWhiteSpace(_workState.Text) ? _state.Text : _workState.Text).Trim().ToUpperInvariant();
+        var workState = _licensedPayrollState.Trim().ToUpperInvariant();
         var residenceState = (string.IsNullOrWhiteSpace(_residenceState.Text) ? _state.Text : _residenceState.Text).Trim().ToUpperInvariant();
+        if (!IsStateCode(workState))
+        {
+            MessageBox.Show(this, "Payroll State is not assigned in this PC license. Ask the software provider to set the business state in Client Account Manager and renew this PC license.", "Payroll License Update Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
         if (!IsStateCode(workState) || !IsStateCode(residenceState))
         {
             MessageBox.Show(this, "Work State and Residence State must be valid two-letter U.S. state codes.", "Employee", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1280,11 +1293,26 @@ internal sealed class PayrollRunForm : Form
         }
         await using var db = _createDb();
         var employees = await db.Employees.AsNoTracking().Where(x => employeeIds.Contains(x.Id) && x.StoreId == _storeId).ToDictionaryAsync(x => x.Id);
+        var payrollState = LicenseRuntime.PayrollState;
+        if (payrollState.Length != 2)
+        {
+            MessageBox.Show(
+                this,
+                "Payroll State is not assigned in this PC license. The software provider must set the business state in Client Account Manager and renew this PC license.",
+                "Payroll License Update Required",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return false;
+        }
         foreach (var employee in employees.Values)
         {
+            // The business jurisdiction is a signed developer entitlement.
+            // Never trust an older employee-row WorkState value to select a
+            // different state's tax table.
+            employee.WorkState = payrollState;
             try
             {
-                _ = PayrollTaxCalculator.GetStateRule(_taxPackage.RuleSet, employee.WorkState, payDate);
+                _ = PayrollTaxCalculator.GetStateRule(_taxPackage.RuleSet, payrollState, payDate);
             }
             catch (Exception ex)
             {
@@ -1314,7 +1342,7 @@ internal sealed class PayrollRunForm : Form
                 _taxPackage.RuleSet);
             row.RegularPay = calculation.RegularPay; row.OvertimePay = calculation.OvertimePay; row.HolidayPay = calculation.HolidayPay;
             row.Gross = calculation.GrossPay; row.Federal = calculation.FederalWithholding; row.SocialSecurity = calculation.SocialSecurity; row.Medicare = calculation.Medicare; row.State = calculation.StateWithholding; row.Net = calculation.NetPay;
-            row.WorkState = employee.WorkState.Trim().ToUpperInvariant();
+            row.WorkState = payrollState;
             row.StateTaxRuleId = calculation.StateRuleId;
             row.StateTaxRuleVersion = calculation.StateRuleVersion;
         }

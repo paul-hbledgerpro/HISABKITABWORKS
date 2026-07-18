@@ -236,7 +236,7 @@ ORDER BY c.BusinessName", connection);
         connection.Open();
         using var command = new SqlCommand(@"
 SELECT TOP 1 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
-       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId=c.Id
 WHERE l.AssignedDatabases=@storeGuid AND l.IsActive=1
@@ -254,7 +254,7 @@ ORDER BY l.Id DESC", connection);
         connection.Open();
         using var command = new SqlCommand(@"
 SELECT TOP 1 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
-       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId=c.Id
 WHERE l.LicenseKey=@subscriptionKey AND l.IsActive=1
@@ -281,7 +281,7 @@ ORDER BY l.Id DESC", connection);
 
         using (var recheck = new SqlCommand(@"
 SELECT TOP 1 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
-       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId=c.Id
 WHERE l.AssignedDatabases=@storeGuid AND l.IsActive=1
@@ -317,11 +317,11 @@ VALUES (@business, @owner, '', '', @notes, @storeGuid, @storeZip)", connection, 
         using (var license = new SqlCommand(@"
 INSERT dbo.Licenses
     (CustomerId, LicenseKey, MaxStores, MaxUsers, MaxDevices, MonthlyFee,
-     IsActive, ActivatedDate, ExpiresDate, AssignedDatabases)
+     IsActive, ActivatedDate, ExpiresDate, AssignedDatabases, PayrollState)
 OUTPUT INSERTED.Id
 VALUES
     (@customerId, @key, @maxStores, @maxUsers, @maxDevices, 0.00,
-     1, SYSUTCDATETIME(), @expires, @database)", connection, transaction))
+     1, SYSUTCDATETIME(), @expires, @database, @payrollState)", connection, transaction))
         {
             license.Parameters.AddWithValue("@customerId", customerId);
             license.Parameters.AddWithValue("@key", subscriptionKey);
@@ -330,6 +330,7 @@ VALUES
             license.Parameters.AddWithValue("@maxDevices", Math.Max(1, maxDevices));
             license.Parameters.AddWithValue("@expires", expiresUtc);
             license.Parameters.AddWithValue("@database", storeGuid);
+            license.Parameters.AddWithValue("@payrollState", StateFromStoreGuid(storeGuid));
             licenseId = Convert.ToInt32(license.ExecuteScalar());
         }
 
@@ -349,7 +350,8 @@ VALUES
         transaction.Commit();
         return new ClientSubscription(
             customerId, licenseId, businessName, subscriptionKey, storeGuid,
-            Math.Max(1, maxBusinesses), DefaultMaxUsers, Math.Max(1, maxDevices), expiresUtc, "Accounting");
+            Math.Max(1, maxBusinesses), DefaultMaxUsers, Math.Max(1, maxDevices), expiresUtc,
+            "Accounting", StateFromStoreGuid(storeGuid));
     }
 
     private void SaveCustomerActivationMetadata(int customerId, string storeGuid, string storeZip)
@@ -576,6 +578,7 @@ END", connection);
                 Address = business.StoreAddress,
                 StoreGuid = business.StoreGuid,
                 DatabaseName = business.DatabaseName,
+                PayrollState = StateFromStoreGuid(business.StoreGuid),
                 IsPrimary = business.IsPrimary,
                 EncryptedConnectionKey = encrypted.EncryptedKey,
                 EncryptedConnection = encrypted.Cipher,
@@ -589,6 +592,12 @@ END", connection);
         var primaryState = primaryParts.Length == 4 ? primaryParts[0] : "";
         var primaryType = primaryParts.Length == 4 ? primaryParts[2] : "";
         var primaryZip = primaryParts.Length == 4 ? primaryParts[3] : "";
+        var assignedPayrollState = string.IsNullOrWhiteSpace(subscription.PayrollState)
+            ? primaryState
+            : subscription.PayrollState.Trim().ToUpperInvariant();
+        if (!string.Equals(assignedPayrollState, primaryState, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"The developer-assigned Payroll State ({assignedPayrollState}) does not match the primary Store GUID state ({primaryState}). Correct the client account before issuing its license.");
 
         return new DeviceLicensePayloadV2
         {
@@ -611,6 +620,7 @@ END", connection);
             MaxStores = maxBusinesses,
             MaxUsers = subscription.MaxUsers,
             EnabledServices = subscription.EnabledServices,
+            PayrollState = assignedPayrollState,
             IssuedUtc = DateTime.UtcNow.ToString("O"),
             ExpiresUtc = expiresUtc.ToString("O"),
             EncryptedConnectionKey = primary.EncryptedConnectionKey,
@@ -850,7 +860,8 @@ VALUES
             reader.IsDBNull(6) ? DefaultMaxUsers : reader.GetInt32(6),
             reader.IsDBNull(7) ? 1 : reader.GetInt32(7),
             reader.GetDateTime(8),
-            reader.IsDBNull(9) ? "Accounting" : reader.GetString(9));
+            reader.IsDBNull(9) ? "Accounting" : reader.GetString(9),
+            reader.IsDBNull(10) ? "" : reader.GetString(10));
 
     private static string GenerateUniqueSubscriptionKey(SqlConnection connection, SqlTransaction transaction)
     {
@@ -872,10 +883,17 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     ALTER TABLE dbo.Licenses ADD MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1);
 IF COL_LENGTH('dbo.Licenses', 'EnabledServices') IS NULL
     ALTER TABLE dbo.Licenses ADD EnabledServices NVARCHAR(200) NOT NULL CONSTRAINT DF_Licenses_EnabledServices DEFAULT('Accounting');
+IF COL_LENGTH('dbo.Licenses', 'PayrollState') IS NULL
+    ALTER TABLE dbo.Licenses ADD PayrollState NVARCHAR(2) NOT NULL CONSTRAINT DF_Licenses_PayrollState DEFAULT('');
 IF COL_LENGTH('dbo.Customers', 'StoreGuid') IS NULL
     ALTER TABLE dbo.Customers ADD StoreGuid NVARCHAR(128) NULL;
 IF COL_LENGTH('dbo.Customers', 'StoreZip') IS NULL
     ALTER TABLE dbo.Customers ADD StoreZip NVARCHAR(20) NULL;
+EXEC(N'
+UPDATE dbo.Licenses
+SET PayrollState=UPPER(LEFT(AssignedDatabases,2))
+WHERE (PayrollState IS NULL OR LEN(LTRIM(RTRIM(PayrollState)))=0)
+  AND AssignedDatabases LIKE ''[A-Za-z][A-Za-z][_]%'';');
 
 IF OBJECT_ID('dbo.LicenseDevices', 'U') IS NULL
 BEGIN
@@ -959,6 +977,14 @@ IF COL_LENGTH('dbo.DeviceLicenseIssueHistory', 'ReplacedDeviceId') IS NULL
         string StoreGuid,
         bool IsPrimary);
     private sealed record EncryptedConnection(string EncryptedKey, string Cipher, string Nonce, string Tag);
+
+    private static string StateFromStoreGuid(string storeGuid)
+    {
+        var parts = (storeGuid ?? "").Trim().ToUpperInvariant().Split('_');
+        if (parts.Length != 4 || parts[0].Length != 2)
+            throw new InvalidOperationException("Store GUID must begin with its two-letter payroll state.");
+        return parts[0];
+    }
 }
 
 internal sealed record ClientSubscription(
@@ -971,7 +997,8 @@ internal sealed record ClientSubscription(
     int MaxUsers,
     int MaxDevices,
     DateTime ExpiresDate,
-    string EnabledServices);
+    string EnabledServices,
+    string PayrollState);
 
 internal sealed record RegisteredLicensePc(
     int Id,

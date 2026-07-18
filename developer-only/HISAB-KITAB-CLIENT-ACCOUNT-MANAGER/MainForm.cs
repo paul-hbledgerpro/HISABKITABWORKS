@@ -16,6 +16,7 @@ internal sealed class MainForm : Form
     private readonly TextBox _phone = DeveloperTheme.TextBox();
     private readonly TextBox _guid = DeveloperTheme.TextBox();
     private readonly TextBox _zip = DeveloperTheme.TextBox();
+    private readonly ComboBox _payrollState = new() { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Font = DeveloperTheme.Body(10.5f) };
     private readonly TextBox _address = DeveloperTheme.TextBox();
     private readonly ComboBox _database = new() { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown, Font = DeveloperTheme.Body(10.5f) };
     private readonly NumericUpDown _pcs = DeveloperTheme.Number();
@@ -34,6 +35,12 @@ internal sealed class MainForm : Form
     private readonly BindingList<ClientAccount> _accounts = new();
     private int _customerId;
     private int _licenseId;
+    private static readonly string[] UsStateCodes =
+    [
+        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY",
+        "LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND",
+        "OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC"
+    ];
 
     public MainForm()
     {
@@ -42,6 +49,7 @@ internal sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen; Size = new Size(1450, 930); MinimumSize = new Size(1180, 760);
         AutoScaleMode = AutoScaleMode.Dpi; WindowState = FormWindowState.Normal;
         _server.Text = "hbstoreledger-server.database.windows.net"; _guid.CharacterCasing = CharacterCasing.Upper; _zip.MaxLength = 5; _subscription.ReadOnly = true;
+        _payrollState.Items.AddRange(UsStateCodes.Cast<object>().ToArray());
         ConfigureGrid(); Controls.Add(BuildLayout()); WireEvents();
     }
 
@@ -92,14 +100,17 @@ internal sealed class MainForm : Form
         var heading = DeveloperTheme.Label("CLIENT ACCOUNT & PURCHASED SERVICES", true, DeveloperTheme.Orange); heading.Font = DeveloperTheme.Bold(14); outer.Controls.Add(heading, 0, 0);
 
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.White, Padding = new Padding(0, 0, 8, 0) };
-        var form = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 9, BackColor = Color.White };
+        var form = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 10, BackColor = Color.White };
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (var i = 0; i < 9; i++) form.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        for (var i = 0; i < 10; i++) form.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         AddField(form, 0, "CLIENT / BUSINESS NAME *", _business, 0, 2); AddField(form, 1, "OWNER NAME *", _owner, 0, 2);
         AddField(form, 2, "EMAIL", _email, 0); AddField(form, 2, "PHONE", _phone, 1);
-        AddField(form, 3, "PRIMARY STORE GUID *", _guid, 0, 2); AddField(form, 4, "STORE ZIP *", _zip, 0); AddField(form, 4, "MONTHLY CHARGE", _monthlyFee, 1);
+        AddField(form, 3, "PRIMARY STORE GUID *", _guid, 0, 2);
+        AddField(form, 4, "STORE ZIP *", _zip, 0); AddField(form, 4, "PAYROLL STATE (LICENSE LOCKED) *", _payrollState, 1);
         AddField(form, 5, "STORE ADDRESS", _address, 0, 2); AddField(form, 6, "SQL BUSINESS DATABASE *", _database, 0, 2);
-        AddField(form, 7, "PAID PC SEATS", _pcs, 0); AddField(form, 7, "BUSINESS SLOTS", _businesses, 1); AddField(form, 8, "SUBSCRIPTION EXPIRES", _expires, 0); AddField(form, 8, "SUBSCRIPTION KEY", _subscription, 1);
+        AddField(form, 7, "PAID PC SEATS", _pcs, 0); AddField(form, 7, "BUSINESS SLOTS", _businesses, 1);
+        AddField(form, 8, "MONTHLY CHARGE", _monthlyFee, 0); AddField(form, 8, "SUBSCRIPTION EXPIRES", _expires, 1);
+        AddField(form, 9, "SUBSCRIPTION KEY", _subscription, 0, 2);
         scroll.Controls.Add(form); outer.Controls.Add(scroll, 0, 1);
 
         outer.Controls.Add(DeveloperTheme.Label("PURCHASED SERVICES", true, DeveloperTheme.Orange), 0, 2);
@@ -140,7 +151,19 @@ internal sealed class MainForm : Form
         box.Controls.Add(DeveloperTheme.Label(label,true),0,0); box.Controls.Add(control,0,1); form.Controls.Add(box,column,row); if(span>1) form.SetColumnSpan(box,span);
     }
 
-    private void WireEvents() { _connect.Click += (_,_) => Connect(); _grid.SelectionChanged += (_,_) => LoadSelected(); foreach (var field in new[] {_server,_username,_password}) field.TextChanged += (_,_) => { _service=null; _connection.Text="●  Connection changed"; _connection.ForeColor=DeveloperTheme.Muted; }; }
+    private void WireEvents()
+    {
+        _connect.Click += (_,_) => Connect();
+        _grid.SelectionChanged += (_,_) => LoadSelected();
+        _guid.TextChanged += (_, _) =>
+        {
+            var state = StateFromStoreGuid(_guid.Text);
+            if (state is not null)
+                _payrollState.SelectedItem = state;
+        };
+        foreach (var field in new[] {_server,_username,_password})
+            field.TextChanged += (_,_) => { _service=null; _connection.Text="●  Connection changed"; _connection.ForeColor=DeveloperTheme.Muted; };
+    }
     private void ConfigureGrid()
     {
         _grid.EnableHeadersVisualStyles=false; _grid.ColumnHeadersDefaultCellStyle.BackColor=DeveloperTheme.Blue; _grid.ColumnHeadersDefaultCellStyle.ForeColor=Color.White; _grid.ColumnHeadersDefaultCellStyle.Font=DeveloperTheme.Bold(); _grid.DefaultCellStyle.Font=DeveloperTheme.Body(9.5f); _grid.RowTemplate.Height=32; _grid.AutoGenerateColumns=false;
@@ -168,8 +191,8 @@ internal sealed class MainForm : Form
     private void LoadSelected()
     {
         if(_grid.CurrentRow?.Cells[nameof(ClientAccount.CustomerId)].Value is not int id) return; var item=_accounts.FirstOrDefault(x=>x.CustomerId==id); if(item is null)return;
-        _customerId=item.CustomerId; _licenseId=item.LicenseId; _business.Text=item.BusinessName; _owner.Text=item.OwnerName; _email.Text=item.Email; _phone.Text=item.Phone; _guid.Text=item.StoreGuid; _zip.Text=item.StoreZip; _address.Text=item.StoreAddress; _database.Text=item.DatabaseName; _pcs.Value=item.MaxDevices; _businesses.Value=item.MaxBusinesses; _monthlyFee.Value=item.MonthlyFee; _expires.Value=item.ExpiresDate; _subscription.Text=item.SubscriptionKey; _payroll.Checked=Has(item,"Payroll"); _scheduling.Checked=Has(item,"Scheduling"); _active.Checked=item.IsActive;
-        _selectedLicense.Text=$"SELECTED: {item.StoreGuid}   •   SERVICES: {item.EnabledServices}";
+        _customerId=item.CustomerId; _licenseId=item.LicenseId; _business.Text=item.BusinessName; _owner.Text=item.OwnerName; _email.Text=item.Email; _phone.Text=item.Phone; _guid.Text=item.StoreGuid; _zip.Text=item.StoreZip; _payrollState.SelectedItem=string.IsNullOrWhiteSpace(item.PayrollState)?StateFromStoreGuid(item.StoreGuid):item.PayrollState; _address.Text=item.StoreAddress; _database.Text=item.DatabaseName; _pcs.Value=item.MaxDevices; _businesses.Value=item.MaxBusinesses; _monthlyFee.Value=item.MonthlyFee; _expires.Value=item.ExpiresDate; _subscription.Text=item.SubscriptionKey; _payroll.Checked=Has(item,"Payroll"); _scheduling.Checked=Has(item,"Scheduling"); _active.Checked=item.IsActive;
+        _selectedLicense.Text=$"SELECTED: {item.StoreGuid}   •   PAYROLL STATE: {item.PayrollState}   •   SERVICES: {item.EnabledServices}";
         _selectedLicense.ForeColor=Has(item,"Payroll") || Has(item,"Scheduling") ? DeveloperTheme.Green : DeveloperTheme.OrangeDark;
     }
 
@@ -183,17 +206,26 @@ internal sealed class MainForm : Form
         if (_customerId <= 0 || _licenseId <= 0) { SetStatus("Select the existing client account in Client Directory first.", true); return; }
         try
         {
-            _service.UpdateServices(_customerId, _licenseId, Services());
+            _service.UpdateServices(_customerId, _licenseId, Services(), SelectedPayrollState());
             var client = _business.Text.Trim();
             RefreshAccounts();
             SetStatus($"Purchased services updated for {client}. Open the License Generator and renew the same PC license.", false);
         }
         catch (Exception ex) { SetStatus(ex.Message, true); }
     }
-    private ClientAccount ReadForm() => new(_customerId,_licenseId,_business.Text.Trim(),_owner.Text.Trim(),_email.Text.Trim(),_phone.Text.Trim(),_guid.Text.Trim(),_zip.Text.Trim(),_address.Text.Trim(),_database.Text.Trim(),_subscription.Text.Trim(),(int)_pcs.Value,(int)_businesses.Value,_monthlyFee.Value,_expires.Value.Date,Services(),_active.Checked);
+    private ClientAccount ReadForm() => new(_customerId,_licenseId,_business.Text.Trim(),_owner.Text.Trim(),_email.Text.Trim(),_phone.Text.Trim(),_guid.Text.Trim(),_zip.Text.Trim(),_address.Text.Trim(),_database.Text.Trim(),_subscription.Text.Trim(),(int)_pcs.Value,(int)_businesses.Value,_monthlyFee.Value,_expires.Value.Date,Services(),_active.Checked,SelectedPayrollState());
     private string Services() => string.Join(',',new[]{"Accounting",_payroll.Checked?"Payroll":"",_scheduling.Checked?"Scheduling":""}.Where(x=>x.Length>0));
+    private string SelectedPayrollState() => (_payrollState.SelectedItem?.ToString() ?? "").Trim().ToUpperInvariant();
     private static bool Has(ClientAccount item,string service)=>item.EnabledServices.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Contains(service,StringComparer.OrdinalIgnoreCase);
-    private void Clear(){_customerId=0;_licenseId=0;foreach(var box in new[]{_business,_owner,_email,_phone,_guid,_zip,_address,_subscription})box.Clear();_database.Text="";_pcs.Value=1;_businesses.Value=1;_monthlyFee.Value=0;_expires.Value=DateTime.Today.AddMonths(1);_payroll.Checked=false;_scheduling.Checked=false;_active.Checked=true;_selectedLicense.Text="NEW CLIENT ACCOUNT — NOT YET SAVED";_selectedLicense.ForeColor=DeveloperTheme.Muted;SetStatus("New client account.",false);}
+    private void Clear(){_customerId=0;_licenseId=0;foreach(var box in new[]{_business,_owner,_email,_phone,_guid,_zip,_address,_subscription})box.Clear();_payrollState.SelectedIndex=-1;_database.Text="";_pcs.Value=1;_businesses.Value=1;_monthlyFee.Value=0;_expires.Value=DateTime.Today.AddMonths(1);_payroll.Checked=false;_scheduling.Checked=false;_active.Checked=true;_selectedLicense.Text="NEW CLIENT ACCOUNT — NOT YET SAVED";_selectedLicense.ForeColor=DeveloperTheme.Muted;SetStatus("New client account.",false);}
+
+    private static string? StateFromStoreGuid(string value)
+    {
+        var parts = (value ?? "").Trim().ToUpperInvariant().Split('_');
+        return parts.Length == 4 && UsStateCodes.Contains(parts[0], StringComparer.Ordinal)
+            ? parts[0]
+            : null;
+    }
     private void CopyKey(){if(string.IsNullOrWhiteSpace(_subscription.Text)){SetStatus("Save the client account first.",true);return;}Clipboard.SetText(_subscription.Text);SetStatus("Subscription key copied.",false);}
     private void OpenAccountBilling()
     {

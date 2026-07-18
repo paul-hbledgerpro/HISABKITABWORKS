@@ -28,11 +28,20 @@ internal sealed partial class MainForm
         AddPayrollAction(actions, "ENTER EMPLOYEE HOURS", () => { using var form = new EmployeeHoursForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); }, true);
         AddPayrollAction(actions, "RUN PAYROLL", () => { using var form = new PayrollRunForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Payroll"); }, true);
         AddPayrollAction(actions, "PAYROLL HISTORY", () => { using var form = new PayrollHistoryForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); }, false);
-        AddPayrollAction(actions, "TAX RULES", () => { using var form = new TaxRuleStatusForm(); form.ShowDialog(this); }, false);
         if (LicenseRuntime.HasService("Scheduling"))
             AddPayrollAction(actions, "SCHEDULING", () => ShowModule("Scheduling"), false);
+        actions.Controls.Add(new Label
+        {
+            Text = $"PAYROLL STATE: {LicenseRuntime.PayrollState}  •  DEVELOPER ASSIGNED",
+            AutoSize = true,
+            ForeColor = WinTheme.Blue,
+            Padding = new Padding(16, 12, 0, 0),
+            Font = WinTheme.BoldFont(9.5f)
+        });
         body.Controls.Add(actions, 0, 1);
 
+        // Tax-rule packages remain automatic and read-only on the customer PC.
+        // The signed license decides which state can be used.
         _ = Task.Run(async () => await TaxRulePackageService.CheckForUpdatesAsync(false));
 
         var grid = WinTheme.Grid();

@@ -7,7 +7,8 @@ namespace HisabKitabWorks.ClientAccountManager.WinForms;
 internal sealed record ClientAccount(
     int CustomerId, int LicenseId, string BusinessName, string OwnerName, string Email, string Phone,
     string StoreGuid, string StoreZip, string StoreAddress, string DatabaseName, string SubscriptionKey,
-    int MaxDevices, int MaxBusinesses, decimal MonthlyFee, DateTime ExpiresDate, string EnabledServices, bool IsActive);
+    int MaxDevices, int MaxBusinesses, decimal MonthlyFee, DateTime ExpiresDate, string EnabledServices,
+    bool IsActive, string PayrollState);
 
 internal sealed record ServicePrice(string ServiceName, bool Enabled, decimal MonthlyRate);
 
@@ -45,10 +46,17 @@ IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     ALTER TABLE dbo.Licenses ADD MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1);
 IF COL_LENGTH('dbo.Licenses', 'EnabledServices') IS NULL
     ALTER TABLE dbo.Licenses ADD EnabledServices NVARCHAR(200) NOT NULL CONSTRAINT DF_Licenses_EnabledServices DEFAULT('Accounting');
+IF COL_LENGTH('dbo.Licenses', 'PayrollState') IS NULL
+    ALTER TABLE dbo.Licenses ADD PayrollState NVARCHAR(2) NOT NULL CONSTRAINT DF_Licenses_PayrollState DEFAULT('');
 IF COL_LENGTH('dbo.Customers', 'StoreGuid') IS NULL
     ALTER TABLE dbo.Customers ADD StoreGuid NVARCHAR(128) NULL;
 IF COL_LENGTH('dbo.Customers', 'StoreZip') IS NULL
     ALTER TABLE dbo.Customers ADD StoreZip NVARCHAR(20) NULL;
+EXEC(N'
+UPDATE dbo.Licenses
+SET PayrollState=UPPER(LEFT(AssignedDatabases,2))
+WHERE (PayrollState IS NULL OR LEN(LTRIM(RTRIM(PayrollState)))=0)
+  AND AssignedDatabases LIKE ''[A-Za-z][A-Za-z][_]%'';');
 
 IF OBJECT_ID('dbo.AccountServicePrices', 'U') IS NULL
 BEGIN
@@ -132,7 +140,8 @@ END;", connection);
 SELECT c.Id, l.Id, c.BusinessName, c.OwnerName, c.Email, c.Phone,
        ISNULL(c.StoreGuid,''), ISNULL(c.StoreZip,''), ISNULL(cb.StoreAddress,''),
        ISNULL(cb.DatabaseName, l.AssignedDatabases), l.LicenseKey,
-       l.MaxDevices, l.MaxStores, l.MonthlyFee, l.ExpiresDate, l.EnabledServices, l.IsActive
+       l.MaxDevices, l.MaxStores, l.MonthlyFee, l.ExpiresDate, l.EnabledServices, l.IsActive,
+       ISNULL(l.PayrollState,'')
 FROM dbo.Customers c
 CROSS APPLY (SELECT TOP 1 * FROM dbo.Licenses x WHERE x.CustomerId=c.Id ORDER BY x.Id DESC) l
 OUTER APPLY (SELECT TOP 1 * FROM dbo.CustomerBusinesses b WHERE b.CustomerId=c.Id ORDER BY b.IsPrimary DESC, b.Id) cb
@@ -158,8 +167,8 @@ OUTPUT INSERTED.Id VALUES (@business,@owner,@email,@phone,'Created in Client Acc
             AddCustomerParameters(customer, input); customerId = Convert.ToInt32(customer.ExecuteScalar());
             key = UniqueKey(connection, tx);
             using var license = new SqlCommand(@"
-INSERT dbo.Licenses (CustomerId,LicenseKey,MaxStores,MaxUsers,MaxDevices,MonthlyFee,IsActive,ActivatedDate,ExpiresDate,AssignedDatabases,EnabledServices)
-OUTPUT INSERTED.Id VALUES (@customer,@key,@stores,999,@devices,@fee,1,SYSUTCDATETIME(),@expires,@guid,@services)", connection, tx);
+INSERT dbo.Licenses (CustomerId,LicenseKey,MaxStores,MaxUsers,MaxDevices,MonthlyFee,IsActive,ActivatedDate,ExpiresDate,AssignedDatabases,EnabledServices,PayrollState)
+OUTPUT INSERTED.Id VALUES (@customer,@key,@stores,999,@devices,@fee,1,SYSUTCDATETIME(),@expires,@guid,@services,@payrollState)", connection, tx);
             AddLicenseParameters(license, input, customerId, key); licenseId = Convert.ToInt32(license.ExecuteScalar());
             using var business = new SqlCommand(@"
 INSERT dbo.CustomerBusinesses (CustomerId,BusinessName,StoreAddress,DatabaseName,StoreGuid,IsPrimary,IsActive,CreatedUtc)
@@ -172,7 +181,7 @@ VALUES (@customer,@business,@address,@database,@guid,1,1,SYSUTCDATETIME())", con
 UPDATE dbo.Customers SET BusinessName=@business,OwnerName=@owner,Email=@email,Phone=@phone,StoreGuid=@guid,StoreZip=@zip WHERE Id=@customer", connection, tx);
             AddCustomerParameters(customer, input); customer.Parameters.AddWithValue("@customer", customerId); customer.ExecuteNonQuery();
             using var license = new SqlCommand(@"
-UPDATE dbo.Licenses SET MaxStores=@stores,MaxDevices=@devices,MonthlyFee=@fee,ExpiresDate=@expires,AssignedDatabases=@guid,EnabledServices=@services,IsActive=@active WHERE Id=@license AND CustomerId=@customer", connection, tx);
+UPDATE dbo.Licenses SET MaxStores=@stores,MaxDevices=@devices,MonthlyFee=@fee,ExpiresDate=@expires,AssignedDatabases=@guid,EnabledServices=@services,PayrollState=@payrollState,IsActive=@active WHERE Id=@license AND CustomerId=@customer", connection, tx);
             AddLicenseParameters(license, input, customerId, key); license.Parameters.AddWithValue("@license", licenseId); license.Parameters.AddWithValue("@active", input.IsActive); license.ExecuteNonQuery();
             using var business = new SqlCommand(@"
 IF EXISTS (SELECT 1 FROM dbo.CustomerBusinesses WHERE CustomerId=@customer AND IsPrimary=1)
@@ -185,7 +194,7 @@ ELSE
         return input with { CustomerId = customerId, LicenseId = licenseId, SubscriptionKey = key };
     }
 
-    public void UpdateServices(int customerId, int licenseId, string enabledServices)
+    public void UpdateServices(int customerId, int licenseId, string enabledServices, string payrollState)
     {
         if (customerId <= 0 || licenseId <= 0)
             throw new InvalidOperationException("Select an existing client account first.");
@@ -196,9 +205,10 @@ ELSE
         using var connection = Open();
         using var command = new SqlCommand(@"
 UPDATE dbo.Licenses
-SET EnabledServices=@services
+SET EnabledServices=@services, PayrollState=@payrollState
 WHERE Id=@license AND CustomerId=@customer;", connection);
         command.Parameters.AddWithValue("@services", enabledServices);
+        command.Parameters.AddWithValue("@payrollState", ValidatePayrollState(payrollState));
         command.Parameters.AddWithValue("@license", licenseId);
         command.Parameters.AddWithValue("@customer", customerId);
         if (command.ExecuteNonQuery() != 1)
@@ -399,6 +409,10 @@ ORDER BY Id;", connection);
             throw new InvalidOperationException("Business, owner, Store GUID, ZIP and database are required.");
         if (value.StoreZip.Length != 5 || !value.StoreZip.All(char.IsDigit)) throw new InvalidOperationException("Store ZIP must be five digits.");
         if (!value.EnabledServices.Split(',').Contains("Accounting", StringComparer.OrdinalIgnoreCase)) throw new InvalidOperationException("Core Accounting must remain enabled.");
+        var state = ValidatePayrollState(value.PayrollState);
+        var guidState = StateFromStoreGuid(value.StoreGuid);
+        if (!string.Equals(state, guidState, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Payroll State must match the Store GUID state ({guidState}).");
     }
 
     private static void EnsureOwnershipAvailable(SqlConnection connection, SqlTransaction tx, ClientAccount input)
@@ -424,6 +438,7 @@ WHERE c.Id<>@customer AND (c.StoreGuid=@guid OR b.StoreGuid=@guid OR b.DatabaseN
         command.Parameters.AddWithValue("@stores", value.MaxBusinesses); command.Parameters.AddWithValue("@devices", value.MaxDevices);
         command.Parameters.AddWithValue("@fee", value.MonthlyFee); command.Parameters.AddWithValue("@expires", value.ExpiresDate);
         command.Parameters.AddWithValue("@guid", value.StoreGuid.Trim().ToUpperInvariant()); command.Parameters.AddWithValue("@services", value.EnabledServices);
+        command.Parameters.AddWithValue("@payrollState", ValidatePayrollState(value.PayrollState));
     }
 
     private static void AddBusinessParameters(SqlCommand command, ClientAccount value, int customerId)
@@ -433,7 +448,30 @@ WHERE c.Id<>@customer AND (c.StoreGuid=@guid OR b.StoreGuid=@guid OR b.DatabaseN
         command.Parameters.AddWithValue("@guid", value.StoreGuid.Trim().ToUpperInvariant());
     }
 
-    private static ClientAccount Read(SqlDataReader r) => new(r.GetInt32(0), r.GetInt32(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5), r.GetString(6), r.GetString(7), r.GetString(8), r.GetString(9), r.GetString(10), r.GetInt32(11), r.GetInt32(12), r.GetDecimal(13), r.GetDateTime(14), r.GetString(15), r.GetBoolean(16));
+    private static ClientAccount Read(SqlDataReader r) => new(r.GetInt32(0), r.GetInt32(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5), r.GetString(6), r.GetString(7), r.GetString(8), r.GetString(9), r.GetString(10), r.GetInt32(11), r.GetInt32(12), r.GetDecimal(13), r.GetDateTime(14), r.GetString(15), r.GetBoolean(16), r.IsDBNull(17) ? "" : r.GetString(17));
+
+    private static string ValidatePayrollState(string value)
+    {
+        var state = (value ?? "").Trim().ToUpperInvariant();
+        if (!UsStateCodes.Contains(state))
+            throw new InvalidOperationException("Select a valid U.S. payroll state in the Developer Account Manager.");
+        return state;
+    }
+
+    private static string StateFromStoreGuid(string storeGuid)
+    {
+        var parts = (storeGuid ?? "").Trim().ToUpperInvariant().Split('_');
+        if (parts.Length != 4 || !UsStateCodes.Contains(parts[0]))
+            throw new InvalidOperationException("Store GUID must begin with a valid two-letter U.S. state code.");
+        return parts[0];
+    }
+
+    private static readonly HashSet<string> UsStateCodes = new(
+    [
+        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY",
+        "LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND",
+        "OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC"
+    ], StringComparer.Ordinal);
     private static AccountInvoice ReadInvoice(SqlDataReader r) => new(r.GetInt32(0), r.GetInt32(1), r.GetInt32(2), r.GetString(3), r.GetDateTime(4), r.GetDateTime(5), r.GetDateTime(6), r.GetDateTime(7), r.GetDecimal(8), r.GetDecimal(9), r.GetString(10), r.GetString(11), r.GetDateTime(12));
     private static string UniqueKey(SqlConnection connection, SqlTransaction tx)
     {

@@ -58,6 +58,7 @@ internal sealed class DeviceLicensePayloadV2
     public int MaxStores { get; set; }
     public int MaxUsers { get; set; }
     public string EnabledServices { get; set; } = "Accounting";
+    public string PayrollState { get; set; } = "";
     public string IssuedUtc { get; set; } = "";
     public string ExpiresUtc { get; set; } = "";
     public string EncryptedConnectionKey { get; set; } = "";
@@ -84,6 +85,7 @@ internal sealed class LicensedBusinessPayloadV1
     public string Address { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
+    public string PayrollState { get; set; } = "";
     public bool IsPrimary { get; set; }
     public string EncryptedConnectionKey { get; set; } = "";
     public string EncryptedConnection { get; set; } = "";

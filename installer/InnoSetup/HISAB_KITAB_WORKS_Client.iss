@@ -1,5 +1,5 @@
 #define MyAppName "HISAB KITAB WORKS"
-#define MyAppVersion "1.0.84"
+#define MyAppVersion "1.0.85"
 #define MyAppPublisher "Hisab Kitab Works"
 #define MyAppExeName "HISAB KITAB.exe"
 #define MySourceDir "..\publish\client-win-x64"
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\HISAB KITAB WORKS
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
-OutputBaseFilename=HISAB_KITAB_WORKS_Client_Setup_1.0.84
+OutputBaseFilename=HISAB_KITAB_WORKS_Client_Setup_1.0.85
 SetupIconFile=..\..\src\ManagerPaperworkSystem.UI\Assets\HisabKitab.ico
 Compression=lzma2
 SolidCompression=yes
@@ -26,7 +26,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=1.0.84.0
+VersionInfoVersion=1.0.85.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Installer
 VersionInfoProductName={#MyAppName}

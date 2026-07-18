@@ -271,7 +271,7 @@ internal sealed partial class MainForm : Form
             _saveLicense.Enabled = true;
             _maxDevices.Value = Math.Clamp(issued.MaxDevices, 1, 999);
             _maxBusinesses.Value = Math.Clamp(issued.MaxBusinesses, 1, 999);
-            _resultSummary.Text = $"{issued.DisplayLicenseKey}  •  {issued.ResultMessage}  •  Services: {issued.Payload.EnabledServices}  •  PC seats: {issued.MaxDevices}";
+            _resultSummary.Text = $"{issued.DisplayLicenseKey}  •  {issued.ResultMessage}  •  Payroll state: {issued.Payload.PayrollState}  •  Services: {issued.Payload.EnabledServices}  •  PC seats: {issued.MaxDevices}";
             _resultSummary.ForeColor = AdminTheme.Green;
             LoadPcGrid(issued.Devices);
             SetStatus("License key generated. Copy and paste it into the customer's License Activation window, or save the license file.", false);

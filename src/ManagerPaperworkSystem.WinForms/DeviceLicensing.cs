@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.SqlClient;
 using Microsoft.Win32;
 
 namespace ManagerPaperworkSystem.WinForms;
@@ -19,6 +20,7 @@ internal static class LicenseRuntime
 {
     public static bool IsReadOnly { get; set; }
     public static DeviceLicensePayloadV2? CurrentLicense { get; set; }
+    private static string _activePayrollState = "";
 
     public static bool HasService(string service)
     {
@@ -27,6 +29,54 @@ internal static class LicenseRuntime
         var enabled = CurrentLicense?.EnabledServices ?? "";
         return enabled.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(value => string.Equals(value, service, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static string PayrollState
+        => NormalizeState(_activePayrollState)
+           ?? NormalizeState(CurrentLicense?.PayrollState)
+           ?? NormalizeState(CurrentLicense?.StoreState)
+           ?? StateFromStoreGuid(CurrentLicense?.StoreGuid)
+           ?? "";
+
+    public static void ConfigurePayrollStateForConnection(string? connectionString)
+    {
+        _activePayrollState = "";
+        if (CurrentLicense is null)
+            return;
+
+        string databaseName = "";
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(connectionString))
+                databaseName = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+        }
+        catch
+        {
+            // Non-SQL connections use the primary signed payroll state.
+        }
+
+        var business = CurrentLicense.Businesses.FirstOrDefault(candidate =>
+            string.Equals(candidate.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase));
+        _activePayrollState = NormalizeState(business?.PayrollState)
+                              ?? StateFromStoreGuid(business?.StoreGuid)
+                              ?? NormalizeState(CurrentLicense.PayrollState)
+                              ?? NormalizeState(CurrentLicense.StoreState)
+                              ?? StateFromStoreGuid(CurrentLicense.StoreGuid)
+                              ?? "";
+    }
+
+    private static string? NormalizeState(string? state)
+    {
+        var normalized = (state ?? "").Trim().ToUpperInvariant();
+        return normalized.Length == 2 && normalized.All(character => character is >= 'A' and <= 'Z')
+            ? normalized
+            : null;
+    }
+
+    private static string? StateFromStoreGuid(string? storeGuid)
+    {
+        var parts = (storeGuid ?? "").Trim().ToUpperInvariant().Split('_');
+        return parts.Length == 4 ? NormalizeState(parts[0]) : null;
     }
 }
 
@@ -615,6 +665,7 @@ internal sealed class DeviceLicensePayloadV2
     public int MaxStores { get; set; }
     public int MaxUsers { get; set; }
     public string EnabledServices { get; set; } = "Accounting";
+    public string PayrollState { get; set; } = "";
     public string IssuedUtc { get; set; } = "";
     public string ExpiresUtc { get; set; } = "";
     public string EncryptedConnectionKey { get; set; } = "";
@@ -631,6 +682,7 @@ internal sealed class LicensedBusinessPayloadV1
     public string Address { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
+    public string PayrollState { get; set; } = "";
     public bool IsPrimary { get; set; }
     public string EncryptedConnectionKey { get; set; } = "";
     public string EncryptedConnection { get; set; } = "";
