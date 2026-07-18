@@ -41,6 +41,7 @@ internal sealed partial class MainForm : Form
     private bool _loadingStores;
     private string _currentModule = "Dashboard";
     private bool _syncingShiftDrops;
+    private Func<Task>? _pendingModuleActivation;
 
     public MainForm(IServiceProvider services, IDbContextFactory<AppDbContext> dbFactory, ISettingsService settingsService, IReportService reportService, IAppPaths paths, SessionState session, ActiveConnectionInfo connectionInfo, InvoiceImportService invoiceImportService, PosReportImportService posImporter, CheckPrintService checkPrintService)
     {
@@ -300,6 +301,7 @@ internal sealed partial class MainForm : Form
     private void ShowModule(string module)
     {
         _currentModule = module;
+        _pendingModuleActivation = null;
         foreach (var kvp in _navButtons)
         {
             var active = kvp.Key == module;
@@ -334,9 +336,20 @@ internal sealed partial class MainForm : Form
             if (LicenseRuntime.IsReadOnly)
                 ApplyReadOnlyMode(control);
             _content.Controls.Add(control);
+            var activation = _pendingModuleActivation;
+            _pendingModuleActivation = null;
+            if (activation is not null)
+            {
+                _content.BeginInvoke(new Action(async () =>
+                {
+                    if (_currentModule == module && !control.IsDisposed && control.Parent == _content)
+                        await activation();
+                }));
+            }
         }
         catch (Exception ex)
         {
+            _pendingModuleActivation = null;
             _content.Controls.Add(BuildModuleError(module, ex));
         }
         finally
@@ -1873,16 +1886,10 @@ internal sealed partial class MainForm : Form
             }
         }
 
-        // BuildCashOnHand is called while the main form is already visible.
-        // Queue its first load on the form's UI message loop so it runs after
-        // the completed module has been attached to _content. Depending on a
-        // child HandleCreated event was unreliable at some Windows DPI/layout
-        // timings and left the grid empty until another action refreshed it.
-        BeginInvoke(new Action(async () =>
-        {
-            if (!root.IsDisposed)
-                await initializeCashOnHandAsync();
-        }));
+        // ShowModule runs this only after the completed section is attached to
+        // the visible content panel. This avoids the old builder/handle timing
+        // race that left Cash On Hand empty until Refresh was clicked.
+        _pendingModuleActivation = initializeCashOnHandAsync;
         return ModuleShell("\uEAFD", "Cash On Hand", "Track cash added, payouts, and carry forward balance.", root);
     }
 
@@ -2072,7 +2079,7 @@ internal sealed partial class MainForm : Form
         toolbarLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         toolbarLayout.Controls.Add(new Label
         {
-            Text = "PRIORITY WORKFLOWS\r\nYour six most-used areas, live totals, and direct actions in one place.",
+            Text = "PRIORITY WORKFLOWS\r\nEight essential areas, live totals, trend graphs, and direct actions in one place.",
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,
             Font = WinTheme.BoldFont(11),
@@ -2097,14 +2104,13 @@ internal sealed partial class MainForm : Form
         var grid = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 3,
+            ColumnCount = 4,
             RowCount = 2,
             BackColor = WinTheme.Bg,
             Margin = Padding.Empty
         };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.334f));
+        for (var i = 0; i < 4; i++)
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
 
@@ -2113,7 +2119,8 @@ internal sealed partial class MainForm : Form
             "CASH DROP RECEIVED", snapshot.TodayCashDrop.ToString("C2"), WinTheme.Blue,
             "SHIFTS ENTERED", snapshot.TodayShiftCount.ToString("N0"),
             "NET SALES", snapshot.TodayNetSales.ToString("C2"),
-            "OPEN SHIFT LOG", () => { ShowModule("Shift Cash Drop"); return Task.CompletedTask; });
+            "OPEN SHIFT LOG", () => { ShowModule("Shift Cash Drop"); return Task.CompletedTask; },
+            trend: snapshot.SalesTrend, trendCaption: "7-DAY NET SALES");
         grid.Controls.Add(shiftCard.Card, 0, 0);
 
         var cashCard = BuildOperationsCommandCard(
@@ -2121,16 +2128,42 @@ internal sealed partial class MainForm : Form
             "AVAILABLE BALANCE", snapshot.CashBalance.ToString("C2"), snapshot.CashBalance >= 0 ? WinTheme.Green : WinTheme.Red,
             "ADDED THIS MONTH", snapshot.MonthCashAdded.ToString("C2"),
             "PAYOUTS THIS MONTH", snapshot.MonthCashPayouts.ToString("C2"),
-            "OPEN CASH ON HAND", () => { ShowModule("Cash On Hand"); return Task.CompletedTask; });
+            "OPEN CASH ON HAND", () => { ShowModule("Cash On Hand"); return Task.CompletedTask; },
+            trend: snapshot.CashTrend, trendCaption: "7-DAY CASH MOVEMENT");
         grid.Controls.Add(cashCard.Card, 1, 0);
+
+        var bankCard = BuildOperationsCommandCard(
+            "\uE825", "Bank Statement", "Live sync, imports, and reconciliation", "THIS MONTH",
+            "NET MOVEMENT", "Loading...", WinTheme.Blue,
+            "TRANSACTIONS", "\u2014",
+            "LATEST ACTIVITY", "\u2014",
+            "OPEN BANK STATEMENT", () => { ShowModule("Bank Statement"); return Task.CompletedTask; },
+            "IMPORT STATEMENT", async () => await ImportBankStatementAsync(now.Month, now.Year, () =>
+            {
+                ShowModule("Operations Hub");
+                return Task.CompletedTask;
+            }),
+            trend: Array.Empty<decimal>(), trendCaption: "DAILY BANK MOVEMENT");
+        grid.Controls.Add(bankCard.Card, 2, 0);
+
+        var profitCard = BuildOperationsCommandCard(
+            "\uE9D9", "Profit & Loss", "Current-month business performance", "THIS MONTH",
+            "NET PROFIT", snapshot.MonthNetProfit.ToString("C2"), snapshot.MonthNetProfit >= 0 ? WinTheme.Green : WinTheme.Red,
+            "NET SALES", snapshot.MonthNetSales.ToString("C2"),
+            "TOTAL OUTFLOW", snapshot.MonthOutflow.ToString("C2"),
+            "OPEN PROFIT & LOSS", () => { ShowModule("Profit & Loss"); return Task.CompletedTask; },
+            "CREATE PDF", GenerateProfitLossPdfAsync,
+            snapshot.ProfitTrend, "7-DAY OPERATING RESULT");
+        grid.Controls.Add(profitCard.Card, 3, 0);
 
         var checksCard = BuildOperationsCommandCard(
             "\uE8A1", "Check Payout", "Vendor checks and clearing status", "ACTION",
             "UNCLEARED AMOUNT", snapshot.UnclearedCheckAmount.ToString("C2"), snapshot.UnclearedCheckCount > 0 ? WinTheme.Copper : WinTheme.Green,
             "UNCLEARED CHECKS", snapshot.UnclearedCheckCount.ToString("N0"),
             "PAID THIS MONTH", snapshot.MonthCheckPayouts.ToString("C2"),
-            "OPEN CHECK PAYOUT", () => { ShowModule("Check Payout"); return Task.CompletedTask; });
-        grid.Controls.Add(checksCard.Card, 2, 0);
+            "OPEN CHECK PAYOUT", () => { ShowModule("Check Payout"); return Task.CompletedTask; },
+            trend: snapshot.CheckTrend, trendCaption: "7-DAY CHECK PAYOUTS");
+        grid.Controls.Add(checksCard.Card, 0, 1);
 
         var purchasesCard = BuildOperationsCommandCard(
             "\uE7BF", "Purchases", "Vendor invoices and inventory spending", "THIS MONTH",
@@ -2142,30 +2175,27 @@ internal sealed partial class MainForm : Form
             {
                 ShowModule("Operations Hub");
                 return Task.CompletedTask;
-            }));
-        grid.Controls.Add(purchasesCard.Card, 0, 1);
+            }),
+            snapshot.PurchaseTrend, "7-DAY PURCHASES");
+        grid.Controls.Add(purchasesCard.Card, 1, 1);
 
-        var bankCard = BuildOperationsCommandCard(
-            "\uE825", "Bank Statement", "Import, categorize, and reconcile activity", "THIS MONTH",
-            "NET MOVEMENT", "Loading...", WinTheme.Blue,
-            "TRANSACTIONS", "\u2014",
-            "LATEST ACTIVITY", "\u2014",
-            "OPEN BANK STATEMENT", () => { ShowModule("Bank Statement"); return Task.CompletedTask; },
-            "IMPORT STATEMENT", async () => await ImportBankStatementAsync(now.Month, now.Year, () =>
-            {
-                ShowModule("Operations Hub");
-                return Task.CompletedTask;
-            }));
-        grid.Controls.Add(bankCard.Card, 1, 1);
+        var costsCard = BuildOperationsCommandCard(
+            "\uE71B", "Product Costs", "Tracked supplier and item cost movement", "LIVE",
+            "PRODUCTS TRACKED", snapshot.ProductCount.ToString("N0"), WinTheme.Blue,
+            "CHANGED IN 30 DAYS", snapshot.RecentProductChanges.ToString("N0"),
+            "AVERAGE UNIT COST", snapshot.AverageUnitCost.ToString("C2"),
+            "OPEN PRODUCT COSTS", () => { ShowModule("Product Costs"); return Task.CompletedTask; },
+            trend: snapshot.ProductCostTrend, trendCaption: "RECENT UNIT COST TREND");
+        grid.Controls.Add(costsCard.Card, 2, 1);
 
-        var profitCard = BuildOperationsCommandCard(
-            "\uE9D9", "Profit & Loss", "Current-month business performance", "THIS MONTH",
-            "NET PROFIT", snapshot.MonthNetProfit.ToString("C2"), snapshot.MonthNetProfit >= 0 ? WinTheme.Green : WinTheme.Red,
-            "NET SALES", snapshot.MonthNetSales.ToString("C2"),
-            "TOTAL OUTFLOW", snapshot.MonthOutflow.ToString("C2"),
-            "OPEN PROFIT & LOSS", () => { ShowModule("Profit & Loss"); return Task.CompletedTask; },
-            "CREATE PDF", GenerateProfitLossPdfAsync);
-        grid.Controls.Add(profitCard.Card, 2, 1);
+        var alertsCard = BuildOperationsCommandCard(
+            "\uE7BA", "Price Alerts", "Supplier cost changes requiring review", "ALERTS",
+            "UNREAD ALERTS", snapshot.UnreadPriceAlerts.ToString("N0"), snapshot.UnreadPriceAlerts > 0 ? WinTheme.Red : WinTheme.Green,
+            "HIGH PRIORITY", snapshot.HighPriorityAlerts.ToString("N0"),
+            "TOTAL ALERTS", snapshot.TotalPriceAlerts.ToString("N0"),
+            "OPEN PRICE ALERTS", () => { ShowModule("Price Alerts"); return Task.CompletedTask; },
+            trend: snapshot.PriceAlertTrend, trendCaption: "7-DAY ALERT ACTIVITY");
+        grid.Controls.Add(alertsCard.Card, 3, 1);
 
         root.Controls.Add(grid, 0, 1);
         root.HandleCreated += async (_, _) =>
@@ -2180,6 +2210,14 @@ internal sealed partial class MainForm : Form
                 bankCard.MetricValue.ForeColor = rows.Sum(x => x.Credit - x.Debit) >= 0 ? WinTheme.Green : WinTheme.Red;
                 bankCard.LeftFactValue.Text = rows.Count.ToString("N0");
                 bankCard.RightFactValue.Text = rows.Count == 0 ? "No activity" : rows.Max(x => x.Date).ToString("M/d/yyyy");
+                bankCard.Trend.SetValues(
+                    Enumerable.Range(0, 7)
+                        .Select(offset =>
+                        {
+                            var day = DateOnly.FromDateTime(now.AddDays(offset - 6));
+                            return rows.Where(x => DateOnly.FromDateTime(x.Date) == day).Sum(x => x.Credit - x.Debit);
+                        })
+                        .ToArray());
             }
             catch
             {
@@ -2220,6 +2258,12 @@ internal sealed partial class MainForm : Form
             var monthCash = cash.Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).ToList();
             var monthChecks = checks.Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).ToList();
             var monthPurchases = purchases.Where(x => x.InvoiceDate.Month == now.Month && x.InvoiceDate.Year == now.Year).ToList();
+            var productCosts = db.ProductCosts.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId)
+                .ToList();
+            var priceAlerts = db.PriceAlerts.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId)
+                .ToList();
 
             decimal payroll = 0;
             try
@@ -2242,6 +2286,42 @@ internal sealed partial class MainForm : Form
             var operatingExpenses = monthCash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount)
                                     + monthChecks.Sum(x => x.CheckAmount)
                                     + payroll;
+            var trendDays = Enumerable.Range(0, 7)
+                .Select(offset => DateOnly.FromDateTime(now.AddDays(offset - 6)))
+                .ToArray();
+            var salesTrend = trendDays
+                .Select(day => shifts.Where(x => x.Date == day).Sum(x => x.NetSales))
+                .ToArray();
+            var cashTrend = trendDays
+                .Select(day => cash.Where(x => x.Date == day).Sum(x => x.CashAdded - x.PayoutAmount))
+                .ToArray();
+            var checkTrend = trendDays
+                .Select(day => checks.Where(x => x.Date == day).Sum(x => x.CheckAmount))
+                .ToArray();
+            var purchaseTrend = trendDays
+                .Select(day => purchases.Where(x => x.InvoiceDate == day).Sum(x => x.Total))
+                .ToArray();
+            var profitTrend = trendDays
+                .Select(day =>
+                    shifts.Where(x => x.Date == day).Sum(x => x.NetSales)
+                    - purchases.Where(x => x.InvoiceDate == day).Sum(x => x.Total)
+                    - cash.Where(x => x.Date == day && x.IsPayout).Sum(x => x.PayoutAmount)
+                    - checks.Where(x => x.Date == day).Sum(x => x.CheckAmount))
+                .ToArray();
+            var productCostTrend = productCosts
+                .OrderByDescending(x => x.UpdatedUtc)
+                .Take(7)
+                .OrderBy(x => x.UpdatedUtc)
+                .Select(x => x.LastUnitCost)
+                .ToArray();
+            var alertTrend = trendDays
+                .Select(day => (decimal)priceAlerts.Count(x => DateOnly.FromDateTime(x.CreatedUtc.ToLocalTime()) == day))
+                .ToArray();
+            var highPriorityAlerts = priceAlerts.Count(x =>
+                !x.IsRead
+                && Math.Abs(x.OldUnitCost == 0
+                    ? 0
+                    : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m) >= 10m);
 
             return new OperationsHubSnapshot(
                 todayShifts.Sum(x => x.CashDropReceived),
@@ -2258,7 +2338,20 @@ internal sealed partial class MainForm : Form
                 monthPurchases.Count == 0 ? "No entries" : monthPurchases.Max(x => x.InvoiceDate).ToString("M/d/yyyy"),
                 netSales,
                 purchaseTotal + operatingExpenses,
-                netSales - purchaseTotal - operatingExpenses);
+                netSales - purchaseTotal - operatingExpenses,
+                productCosts.Count,
+                productCosts.Count(x => x.UpdatedUtc >= DateTime.UtcNow.AddDays(-30)),
+                productCosts.Count == 0 ? 0 : productCosts.Average(x => x.LastUnitCost),
+                priceAlerts.Count,
+                priceAlerts.Count(x => !x.IsRead),
+                highPriorityAlerts,
+                salesTrend,
+                cashTrend,
+                checkTrend,
+                purchaseTrend,
+                profitTrend,
+                productCostTrend,
+                alertTrend);
         }
         catch
         {
@@ -2281,7 +2374,9 @@ internal sealed partial class MainForm : Form
         string primaryText,
         Func<Task> primaryAction,
         string? secondaryText = null,
-        Func<Task>? secondaryAction = null)
+        Func<Task>? secondaryAction = null,
+        IReadOnlyList<decimal>? trend = null,
+        string trendCaption = "RECENT ACTIVITY")
     {
         var card = WinTheme.BorderedPanel(0);
         card.Dock = DockStyle.Fill;
@@ -2292,14 +2387,15 @@ internal sealed partial class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             BackColor = Color.White,
-            Padding = new Padding(18, 12, 14, 10)
+            Padding = new Padding(14, 10, 12, 9)
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
 
         var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Color.White };
         heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));
@@ -2360,6 +2456,13 @@ internal sealed partial class MainForm : Form
         metricPanel.Controls.Add(metricValue, 0, 1);
         layout.Controls.Add(metricPanel, 0, 1);
 
+        var trendControl = new OperationsSparkline(trend ?? Array.Empty<decimal>(), metricColor, trendCaption)
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 1, 0, 3)
+        };
+        layout.Controls.Add(trendControl, 0, 2);
+
         var facts = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -2375,7 +2478,7 @@ internal sealed partial class MainForm : Form
         var right = BuildOperationsFact(rightFactCaption, rightFact);
         facts.Controls.Add(left.Panel, 0, 0);
         facts.Controls.Add(right.Panel, 1, 0);
-        layout.Controls.Add(facts, 0, 2);
+        layout.Controls.Add(facts, 0, 3);
 
         var actions = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 1, BackColor = Color.White, Margin = Padding.Empty };
         actions.ColumnCount = secondaryAction is null ? 1 : 2;
@@ -2402,11 +2505,11 @@ internal sealed partial class MainForm : Form
             ConfigureOperationsAction(secondary, title, secondaryAction);
             actions.Controls.Add(secondary, 1, 0);
         }
-        layout.Controls.Add(actions, 0, 3);
+        layout.Controls.Add(actions, 0, 4);
 
         card.Controls.Add(layout);
         card.Controls.Add(stripe);
-        return new OperationsCommandCard(card, metricValue, left.Value, right.Value);
+        return new OperationsCommandCard(card, metricValue, left.Value, right.Value, trendControl);
     }
 
     private static (Control Panel, Label Value) BuildOperationsFact(string caption, string value)
@@ -2457,7 +2560,12 @@ internal sealed partial class MainForm : Form
         };
     }
 
-    private sealed record OperationsCommandCard(Control Card, Label MetricValue, Label LeftFactValue, Label RightFactValue);
+    private sealed record OperationsCommandCard(
+        Control Card,
+        Label MetricValue,
+        Label LeftFactValue,
+        Label RightFactValue,
+        OperationsSparkline Trend);
 
     private sealed record OperationsHubSnapshot(
         decimal TodayCashDrop,
@@ -2474,10 +2582,27 @@ internal sealed partial class MainForm : Form
         string LatestPurchaseDate,
         decimal MonthNetSales,
         decimal MonthOutflow,
-        decimal MonthNetProfit)
+        decimal MonthNetProfit,
+        int ProductCount,
+        int RecentProductChanges,
+        decimal AverageUnitCost,
+        int TotalPriceAlerts,
+        int UnreadPriceAlerts,
+        int HighPriorityAlerts,
+        IReadOnlyList<decimal> SalesTrend,
+        IReadOnlyList<decimal> CashTrend,
+        IReadOnlyList<decimal> CheckTrend,
+        IReadOnlyList<decimal> PurchaseTrend,
+        IReadOnlyList<decimal> ProfitTrend,
+        IReadOnlyList<decimal> ProductCostTrend,
+        IReadOnlyList<decimal> PriceAlertTrend)
     {
         public static OperationsHubSnapshot Empty { get; } = new(
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "No entries", 0, 0, 0);
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "No entries", 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+            Array.Empty<decimal>(), Array.Empty<decimal>(), Array.Empty<decimal>(),
+            Array.Empty<decimal>(), Array.Empty<decimal>(), Array.Empty<decimal>(),
+            Array.Empty<decimal>());
     }
 
     private static IReadOnlyList<string[]> SafeHubRows(Func<IReadOnlyList<string[]>> load)
@@ -3541,6 +3666,49 @@ internal sealed partial class MainForm : Form
         AddMockField(filters, "Category", category, 2, 1, 90);
         AddMockField(filters, "Matched", matched, 3, 1, 85);
 
+        var liveBankPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 1,
+            BackColor = Color.FromArgb(242, 248, 255),
+            Margin = new Padding(4, 5, 4, 2),
+            Padding = new Padding(8, 4, 8, 4)
+        };
+        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
+        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        liveBankPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135));
+        var liveBankTitle = new Label
+        {
+            Text = "LIVE BANK",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = WinTheme.Blue,
+            Font = WinTheme.BoldFont(9.5f)
+        };
+        var liveBankStatus = new Label
+        {
+            Text = "Not connected — statement upload remains available",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BodyFont(9f),
+            AutoEllipsis = true
+        };
+        var connectBank = WinTheme.Button("Connect Bank", true);
+        connectBank.Dock = DockStyle.Fill;
+        connectBank.Margin = new Padding(4, 0, 4, 0);
+        var syncBank = WinTheme.Button("Sync Now");
+        syncBank.Dock = DockStyle.Fill;
+        syncBank.Margin = new Padding(4, 0, 0, 0);
+        liveBankPanel.Controls.Add(liveBankTitle, 0, 0);
+        liveBankPanel.Controls.Add(liveBankStatus, 1, 0);
+        liveBankPanel.Controls.Add(connectBank, 2, 0);
+        liveBankPanel.Controls.Add(syncBank, 3, 0);
+        filters.Controls.Add(liveBankPanel, 0, 2);
+        filters.SetColumnSpan(liveBankPanel, 4);
+
         var statGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = WinTheme.Bg };
         statGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         statGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -3575,7 +3743,19 @@ internal sealed partial class MainForm : Form
             await EnsureBankStatementTablesAsync();
             var rows = await LoadBankStatementRowsAsync(m, y);
             grid.DataSource = rows
-                .Select(x => new { x.Id, Select = false, x.Date, Account = "Checking Account", x.Description, x.Debit, x.Credit, x.Category, Matched = string.IsNullOrWhiteSpace(x.CheckNumber) ? "No" : "Yes", Check = x.CheckNumber })
+                .Select(x => new
+                {
+                    x.Id,
+                    Select = false,
+                    x.Date,
+                    Source = x.Source,
+                    x.Description,
+                    x.Debit,
+                    x.Credit,
+                    x.Category,
+                    Matched = string.IsNullOrWhiteSpace(x.CheckNumber) ? "No" : "Yes",
+                    Check = x.CheckNumber
+                })
                 .ToList();
             HideId(grid);
             var debitTotal = rows.Sum(x => x.Debit);
@@ -3597,6 +3777,80 @@ internal sealed partial class MainForm : Form
             catch (Exception ex)
             {
                 MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "Bank Statement", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        async Task refreshLiveBankStatusAsync()
+        {
+            try
+            {
+                var local = await LoadLiveBankStatusAsync();
+                if (local is null)
+                {
+                    liveBankStatus.Text = "Not connected — statement upload remains available";
+                    liveBankStatus.ForeColor = WinTheme.Muted;
+                    return;
+                }
+
+                var accountLabel = string.Join(" • ", new[]
+                {
+                    local.InstitutionName,
+                    local.AccountName,
+                    string.IsNullOrWhiteSpace(local.AccountMask) ? "" : $"••{local.AccountMask}"
+                }.Where(x => !string.IsNullOrWhiteSpace(x)));
+                var syncedText = local.LastSyncedUtc is null
+                    ? "Awaiting first sync"
+                    : $"Last sync {local.LastSyncedUtc.Value.ToLocalTime():MMM d, h:mm tt}";
+                liveBankStatus.Text = $"{accountLabel}  |  {local.Status}  |  {syncedText}";
+                liveBankStatus.ForeColor = string.Equals(local.Status, "Active", StringComparison.OrdinalIgnoreCase)
+                    ? WinTheme.Green
+                    : WinTheme.Copper;
+            }
+            catch (Exception ex)
+            {
+                liveBankStatus.Text = $"Live Bank status unavailable: {AppBootstrap.RedactSensitiveText(ex.Message)}";
+                liveBankStatus.ForeColor = WinTheme.Red;
+            }
+        }
+
+        async Task syncLiveBankAsync(bool showSuccess)
+        {
+            using var client = new LiveBankSyncClient();
+            if (!client.IsConfigured)
+            {
+                MessageBox.Show(this,
+                    "Live Bank Sync is built into this screen, but your developer bank-sync service has not been configured yet.\n\n"
+                    + "Statement upload remains fully available. After a supported bank provider is connected to the secure service, this button will synchronize new transactions without storing bank credentials in HISAB KITAB.",
+                    "Live Bank Setup Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            syncBank.Enabled = false;
+            liveBankStatus.Text = "Synchronizing connected bank transactions…";
+            liveBankStatus.ForeColor = WinTheme.Blue;
+            try
+            {
+                var result = await client.SyncAsync();
+                await SaveLiveBankSyncAsync(result);
+                await refreshAsync();
+                await refreshLiveBankStatusAsync();
+                if (showSuccess)
+                {
+                    MessageBox.Show(this,
+                        $"Bank sync complete.\n\nNew: {result.Added.Count}\nUpdated: {result.Modified.Count}\nRemoved: {result.RemovedTransactionIds.Count}",
+                        "Live Bank Sync", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                liveBankStatus.Text = "Live Bank sync needs attention";
+                liveBankStatus.ForeColor = WinTheme.Red;
+                MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "Live Bank Sync",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                syncBank.Enabled = true;
             }
         }
 
@@ -3686,10 +3940,44 @@ internal sealed partial class MainForm : Form
         {
             await importAndSelectPeriodAsync();
         };
+        connectBank.Click += async (_, _) =>
+        {
+            using var client = new LiveBankSyncClient();
+            if (!client.IsConfigured)
+            {
+                MessageBox.Show(this,
+                    "The secure developer bank-sync service must be configured before a real bank can be connected.\n\n"
+                    + "This design keeps bank-provider secrets and customer access tokens out of the installed desktop application. The existing Upload Statement option remains available.",
+                    "Live Bank Setup Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                var hostedLink = await client.CreateHostedLinkAsync();
+                Process.Start(new ProcessStartInfo(hostedLink.AbsoluteUri) { UseShellExecute = true });
+                MessageBox.Show(this,
+                    "Complete the secure bank connection in your browser. Then return here and click Sync Now.",
+                    "Connect Bank", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "Connect Bank",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        };
+        syncBank.Click += async (_, _) => await syncLiveBankAsync(showSuccess: true);
         month.SelectedIndexChanged += async (_, _) => await safeRefreshAsync();
         year.SelectedIndexChanged += async (_, _) => await safeRefreshAsync();
-        _ = safeRefreshAsync();
-        return ModuleShell("\uE825", "Bank Statement", "Import statements, categorize transactions, and reconcile checks.", root);
+        _pendingModuleActivation = async () =>
+        {
+            await safeRefreshAsync();
+            await refreshLiveBankStatusAsync();
+            using var client = new LiveBankSyncClient();
+            if (client.IsConfigured)
+                await syncLiveBankAsync(showSuccess: false);
+        };
+        return ModuleShell("\uE825", "Bank Statement", "Live bank sync, statement imports, categorization, and reconciliation.", root);
     }
 
     private static void SelectBankStatementPeriod(ComboBox monthCombo, ComboBox yearCombo, int month, int year)
@@ -4893,8 +5181,24 @@ CREATE TABLE [dbo].[BankStatementTransactions] (
     [Debit] DECIMAL(18,2) NOT NULL DEFAULT 0,
     [CheckNumber] NVARCHAR(20) NULL,
     [Category] NVARCHAR(50) NOT NULL DEFAULT 'Other',
+    [ExternalTransactionId] NVARCHAR(200) NULL,
+    [Source] NVARCHAR(30) NOT NULL DEFAULT 'Statement Import',
     [ImportedUtc] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
     [CreatedByName] NVARCHAR(100) NOT NULL DEFAULT ''
+);
+IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BankConnections')
+CREATE TABLE [dbo].[BankConnections] (
+    [Id] INT IDENTITY(1,1) PRIMARY KEY,
+    [StoreId] INT NOT NULL,
+    [ConnectionId] NVARCHAR(200) NOT NULL,
+    [Provider] NVARCHAR(50) NOT NULL DEFAULT '',
+    [InstitutionName] NVARCHAR(200) NOT NULL DEFAULT '',
+    [AccountName] NVARCHAR(200) NOT NULL DEFAULT '',
+    [AccountMask] NVARCHAR(20) NOT NULL DEFAULT '',
+    [Status] NVARCHAR(40) NOT NULL DEFAULT '',
+    [LastSyncedUtc] DATETIME2 NULL,
+    [LastError] NVARCHAR(500) NOT NULL DEFAULT '',
+    [UpdatedUtc] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
 );";
         }
         else
@@ -4908,8 +5212,24 @@ CREATE TABLE [dbo].[BankStatementTransactions] (
     Debit REAL NOT NULL DEFAULT 0,
     CheckNumber TEXT,
     Category TEXT NOT NULL DEFAULT 'Other',
+    ExternalTransactionId TEXT,
+    Source TEXT NOT NULL DEFAULT 'Statement Import',
     ImportedUtc TEXT NOT NULL DEFAULT (datetime('now')),
     CreatedByName TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS BankConnections (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    StoreId INTEGER NOT NULL,
+    ConnectionId TEXT NOT NULL,
+    Provider TEXT NOT NULL DEFAULT '',
+    InstitutionName TEXT NOT NULL DEFAULT '',
+    AccountName TEXT NOT NULL DEFAULT '',
+    AccountMask TEXT NOT NULL DEFAULT '',
+    Status TEXT NOT NULL DEFAULT '',
+    LastSyncedUtc TEXT,
+    LastError TEXT NOT NULL DEFAULT '',
+    UpdatedUtc TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(StoreId, ConnectionId)
 );";
         }
         await cmd.ExecuteNonQueryAsync();
@@ -4932,6 +5252,28 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'ImportedUtc') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [ImportedUtc] DATETIME2 NOT NULL CONSTRAINT DF_BankStatementTransactions_ImportedUtc DEFAULT GETUTCDATE();
 IF COL_LENGTH('dbo.BankStatementTransactions', 'CreatedByName') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [CreatedByName] NVARCHAR(100) NOT NULL CONSTRAINT DF_BankStatementTransactions_CreatedByName DEFAULT '';
+IF COL_LENGTH('dbo.BankStatementTransactions', 'ExternalTransactionId') IS NULL
+    ALTER TABLE [dbo].[BankStatementTransactions] ADD [ExternalTransactionId] NVARCHAR(200) NULL;
+IF COL_LENGTH('dbo.BankStatementTransactions', 'Source') IS NULL
+    ALTER TABLE [dbo].[BankStatementTransactions] ADD [Source] NVARCHAR(30) NOT NULL CONSTRAINT DF_BankStatementTransactions_Source DEFAULT 'Statement Import';
+IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BankConnections')
+CREATE TABLE [dbo].[BankConnections] (
+    [Id] INT IDENTITY(1,1) PRIMARY KEY,
+    [StoreId] INT NOT NULL,
+    [ConnectionId] NVARCHAR(200) NOT NULL,
+    [Provider] NVARCHAR(50) NOT NULL DEFAULT '',
+    [InstitutionName] NVARCHAR(200) NOT NULL DEFAULT '',
+    [AccountName] NVARCHAR(200) NOT NULL DEFAULT '',
+    [AccountMask] NVARCHAR(20) NOT NULL DEFAULT '',
+    [Status] NVARCHAR(40) NOT NULL DEFAULT '',
+    [LastSyncedUtc] DATETIME2 NULL,
+    [LastError] NVARCHAR(500) NOT NULL DEFAULT '',
+    [UpdatedUtc] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankConnections_Store_Connection' AND object_id = OBJECT_ID('dbo.BankConnections'))
+    CREATE UNIQUE INDEX UX_BankConnections_Store_Connection ON dbo.BankConnections(StoreId, ConnectionId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransactions_Store_External' AND object_id = OBJECT_ID('dbo.BankStatementTransactions'))
+    CREATE UNIQUE INDEX UX_BankStatementTransactions_Store_External ON dbo.BankStatementTransactions(StoreId, ExternalTransactionId) WHERE ExternalTransactionId IS NOT NULL;
 ");
             return;
         }
@@ -4960,6 +5302,24 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'CreatedByName') IS NULL
         await addColumn("Category", "Category TEXT NOT NULL DEFAULT 'Other'");
         await addColumn("ImportedUtc", "ImportedUtc TEXT", "UPDATE BankStatementTransactions SET ImportedUtc = datetime('now') WHERE ImportedUtc IS NULL");
         await addColumn("CreatedByName", "CreatedByName TEXT NOT NULL DEFAULT ''");
+        await addColumn("ExternalTransactionId", "ExternalTransactionId TEXT");
+        await addColumn("Source", "Source TEXT NOT NULL DEFAULT 'Statement Import'");
+        await ExecuteBankSchemaCommandAsync(conn, @"CREATE TABLE IF NOT EXISTS BankConnections (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    StoreId INTEGER NOT NULL,
+    ConnectionId TEXT NOT NULL,
+    Provider TEXT NOT NULL DEFAULT '',
+    InstitutionName TEXT NOT NULL DEFAULT '',
+    AccountName TEXT NOT NULL DEFAULT '',
+    AccountMask TEXT NOT NULL DEFAULT '',
+    Status TEXT NOT NULL DEFAULT '',
+    LastSyncedUtc TEXT,
+    LastError TEXT NOT NULL DEFAULT '',
+    UpdatedUtc TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(StoreId, ConnectionId)
+)");
+        await ExecuteBankSchemaCommandAsync(conn,
+            "CREATE UNIQUE INDEX IF NOT EXISTS UX_BankStatementTransactions_Store_External ON BankStatementTransactions(StoreId, ExternalTransactionId) WHERE ExternalTransactionId IS NOT NULL");
     }
 
     private static async Task ExecuteBankSchemaCommandAsync(DbConnection conn, string commandText)
@@ -5014,8 +5374,8 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'CreatedByName') IS NULL
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = conn is SqlConnection
-            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
-            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
+            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category, Source FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
+            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category, Source FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
         AddParam(cmd, "@sid", _currentStoreId);
         AddBankStatementDatePeriodParams(cmd, conn, month, year);
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -5031,9 +5391,127 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'CreatedByName') IS NULL
                 reader.IsDBNull(5) ? "" : reader[5]?.ToString() ?? "",
                 reader[6]?.ToString() ?? "Other",
                 parsedDate.Month > 0 ? parsedDate.Month : month,
-                parsedDate.Year > 1 ? parsedDate.Year : year));
+                parsedDate.Year > 1 ? parsedDate.Year : year,
+                reader.IsDBNull(7) ? "Statement Import" : reader[7]?.ToString() ?? "Statement Import"));
         }
         return rows;
+    }
+
+    private async Task<LocalBankConnectionStatus?> LoadLiveBankStatusAsync()
+    {
+        await EnsureBankStatementTablesAsync();
+        await using var conn = CreateBankConnection();
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = conn is SqlConnection
+            ? "SELECT TOP 1 InstitutionName, AccountName, AccountMask, Status, LastSyncedUtc, LastError FROM BankConnections WHERE StoreId=@sid ORDER BY UpdatedUtc DESC"
+            : "SELECT InstitutionName, AccountName, AccountMask, Status, LastSyncedUtc, LastError FROM BankConnections WHERE StoreId=@sid ORDER BY UpdatedUtc DESC LIMIT 1";
+        AddParam(cmd, "@sid", _currentStoreId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            return null;
+
+        DateTime? synced = null;
+        if (!reader.IsDBNull(4) && DateTime.TryParse(reader[4]?.ToString(), out var parsed))
+            synced = parsed;
+        return new LocalBankConnectionStatus(
+            reader[0]?.ToString() ?? "",
+            reader[1]?.ToString() ?? "",
+            reader[2]?.ToString() ?? "",
+            reader[3]?.ToString() ?? "",
+            synced,
+            reader[5]?.ToString() ?? "");
+    }
+
+    private async Task SaveLiveBankSyncAsync(LiveBankSyncResult result)
+    {
+        await EnsureBankStatementTablesAsync();
+        await using var conn = CreateBankConnection();
+        await conn.OpenAsync();
+
+        foreach (var connection in result.Connections)
+        {
+            await using var command = conn.CreateCommand();
+            if (conn is SqlConnection)
+            {
+                command.CommandText = @"UPDATE BankConnections SET Provider=@provider, InstitutionName=@institution,
+AccountName=@account, AccountMask=@mask, Status=@status, LastSyncedUtc=@synced, LastError=@error, UpdatedUtc=GETUTCDATE()
+WHERE StoreId=@sid AND ConnectionId=@connectionId;
+IF @@ROWCOUNT = 0
+INSERT INTO BankConnections (StoreId, ConnectionId, Provider, InstitutionName, AccountName, AccountMask, Status, LastSyncedUtc, LastError)
+VALUES (@sid, @connectionId, @provider, @institution, @account, @mask, @status, @synced, @error);";
+            }
+            else
+            {
+                command.CommandText = @"INSERT INTO BankConnections
+(StoreId, ConnectionId, Provider, InstitutionName, AccountName, AccountMask, Status, LastSyncedUtc, LastError, UpdatedUtc)
+VALUES (@sid, @connectionId, @provider, @institution, @account, @mask, @status, @synced, @error, datetime('now'))
+ON CONFLICT(StoreId, ConnectionId) DO UPDATE SET
+Provider=excluded.Provider, InstitutionName=excluded.InstitutionName, AccountName=excluded.AccountName,
+AccountMask=excluded.AccountMask, Status=excluded.Status, LastSyncedUtc=excluded.LastSyncedUtc,
+LastError=excluded.LastError, UpdatedUtc=datetime('now');";
+            }
+            AddParam(command, "@sid", _currentStoreId);
+            AddParam(command, "@connectionId", connection.ConnectionId);
+            AddParam(command, "@provider", connection.Provider);
+            AddParam(command, "@institution", connection.InstitutionName);
+            AddParam(command, "@account", connection.AccountName);
+            AddParam(command, "@mask", connection.AccountMask);
+            AddParam(command, "@status", connection.Status);
+            AddParam(command, "@synced", connection.LastSyncedUtc ?? result.SyncedUtc);
+            AddParam(command, "@error", connection.LastError);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        foreach (var externalId in result.RemovedTransactionIds.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct())
+        {
+            await using var command = conn.CreateCommand();
+            command.CommandText = "DELETE FROM BankStatementTransactions WHERE StoreId=@sid AND ExternalTransactionId=@externalId";
+            AddParam(command, "@sid", _currentStoreId);
+            AddParam(command, "@externalId", externalId);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        foreach (var transaction in result.Added.Concat(result.Modified)
+                     .Where(x => !string.IsNullOrWhiteSpace(x.ExternalTransactionId))
+                     .GroupBy(x => x.ExternalTransactionId, StringComparer.OrdinalIgnoreCase)
+                     .Select(x => x.Last()))
+        {
+            await using var command = conn.CreateCommand();
+            if (conn is SqlConnection)
+            {
+                command.CommandText = @"UPDATE BankStatementTransactions SET [Date]=@date, [Description]=@description,
+Credit=@credit, Debit=@debit, CheckNumber=@check, Category=@category, Source='Live Bank',
+ImportedUtc=GETUTCDATE(), CreatedByName=@by
+WHERE StoreId=@sid AND ExternalTransactionId=@externalId;
+IF @@ROWCOUNT = 0
+INSERT INTO BankStatementTransactions
+(StoreId, [Date], [Description], Credit, Debit, CheckNumber, Category, ExternalTransactionId, Source, CreatedByName)
+VALUES (@sid, @date, @description, @credit, @debit, @check, @category, @externalId, 'Live Bank', @by);";
+            }
+            else
+            {
+                command.CommandText = @"INSERT INTO BankStatementTransactions
+(StoreId, Date, Description, Credit, Debit, CheckNumber, Category, ExternalTransactionId, Source, ImportedUtc, CreatedByName)
+VALUES (@sid, @date, @description, @credit, @debit, @check, @category, @externalId, 'Live Bank', datetime('now'), @by)
+ON CONFLICT(StoreId, ExternalTransactionId) DO UPDATE SET
+Date=excluded.Date, Description=excluded.Description, Credit=excluded.Credit, Debit=excluded.Debit,
+CheckNumber=excluded.CheckNumber, Category=excluded.Category, Source='Live Bank',
+ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
+            }
+            AddParam(command, "@sid", _currentStoreId);
+            AddParam(command, "@externalId", transaction.ExternalTransactionId);
+            AddParam(command, "@date", conn is SqlConnection
+                ? transaction.Date.Date
+                : transaction.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            AddParam(command, "@description", SafeBankDescription(transaction.Description));
+            AddParam(command, "@credit", Math.Max(0, transaction.Credit));
+            AddParam(command, "@debit", Math.Max(0, transaction.Debit));
+            AddParam(command, "@check", string.IsNullOrWhiteSpace(transaction.CheckNumber) ? DBNull.Value : transaction.CheckNumber);
+            AddParam(command, "@category", string.IsNullOrWhiteSpace(transaction.Category) ? "Other" : transaction.Category);
+            AddParam(command, "@by", _session.DisplayName);
+            await command.ExecuteNonQueryAsync();
+        }
     }
 
     private async Task<(int Month, int Year)?> ImportBankStatementAsync(int month, int year, Func<Task> refreshAsync)
@@ -5064,7 +5542,7 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'CreatedByName') IS NULL
             return null;
 
         await EnsureBankStatementTablesAsync();
-        await ClearBankStatementMonthAsync(month, year);
+        await ClearBankStatementMonthAsync(month, year, importedOnly: true);
         await using var conn = CreateBankConnection();
         await conn.OpenAsync();
         var hasCreatedByName = await BankStatementColumnExistsAsync(conn, "CreatedByName");
@@ -5097,13 +5575,14 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'CreatedByName') IS NULL
         return (month, year);
     }
 
-    private async Task ClearBankStatementMonthAsync(int month, int year)
+    private async Task ClearBankStatementMonthAsync(int month, int year, bool importedOnly = false)
     {
         await EnsureBankStatementTablesAsync();
         await using var conn = CreateBankConnection();
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"DELETE FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)}";
+        cmd.CommandText = $"DELETE FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)}"
+                          + (importedOnly ? " AND (Source IS NULL OR Source <> 'Live Bank')" : "");
         AddParam(cmd, "@sid", _currentStoreId);
         AddBankStatementDatePeriodParams(cmd, conn, month, year);
         await cmd.ExecuteNonQueryAsync();
@@ -6296,6 +6775,96 @@ internal sealed record DashboardTransaction(
     decimal Amount,
     string Status);
 
+internal sealed class OperationsSparkline : Control
+{
+    private IReadOnlyList<decimal> _values;
+    private readonly Color _lineColor;
+    private readonly string _caption;
+
+    public OperationsSparkline(IReadOnlyList<decimal> values, Color lineColor, string caption)
+    {
+        _values = values;
+        _lineColor = lineColor;
+        _caption = caption;
+        DoubleBuffered = true;
+        BackColor = Color.FromArgb(247, 250, 253);
+        MinimumSize = new Size(100, 40);
+    }
+
+    public void SetValues(IReadOnlyList<decimal> values)
+    {
+        _values = values;
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var captionRect = new Rectangle(8, 2, Math.Max(20, Width - 16), 15);
+        TextRenderer.DrawText(
+            e.Graphics,
+            _caption,
+            WinTheme.BoldFont(7),
+            captionRect,
+            WinTheme.Muted,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        var graph = new Rectangle(8, 19, Math.Max(20, Width - 16), Math.Max(12, Height - 24));
+        using var baseline = new Pen(Color.FromArgb(218, 226, 234));
+        e.Graphics.DrawLine(baseline, graph.Left, graph.Bottom, graph.Right, graph.Bottom);
+        if (_values.Count == 0)
+        {
+            TextRenderer.DrawText(
+                e.Graphics,
+                "No activity",
+                WinTheme.BodyFont(7),
+                graph,
+                WinTheme.Muted,
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+            return;
+        }
+
+        var min = Math.Min(0m, _values.Min());
+        var max = Math.Max(0m, _values.Max());
+        if (max == min)
+            max = min + 1m;
+
+        var points = _values.Select((value, index) =>
+        {
+            var x = _values.Count == 1
+                ? graph.Left + graph.Width / 2f
+                : graph.Left + index * graph.Width / (float)(_values.Count - 1);
+            var y = graph.Bottom - (float)((value - min) / (max - min)) * graph.Height;
+            return new PointF(x, y);
+        }).ToArray();
+
+        if (min < 0 && max > 0)
+        {
+            var zeroY = graph.Bottom - (float)((0m - min) / (max - min)) * graph.Height;
+            using var zeroPen = new Pen(Color.FromArgb(202, 213, 223)) { DashStyle = DashStyle.Dot };
+            e.Graphics.DrawLine(zeroPen, graph.Left, zeroY, graph.Right, zeroY);
+        }
+
+        using var fill = new SolidBrush(Color.FromArgb(28, _lineColor));
+        using var line = new Pen(_lineColor, 2.2f);
+        if (points.Length == 1)
+        {
+            e.Graphics.FillEllipse(fill, points[0].X - 4, points[0].Y - 4, 8, 8);
+            e.Graphics.DrawEllipse(line, points[0].X - 3, points[0].Y - 3, 6, 6);
+            return;
+        }
+
+        using var areaPath = new GraphicsPath();
+        areaPath.AddLines(points);
+        areaPath.AddLine(points[^1].X, points[^1].Y, points[^1].X, graph.Bottom);
+        areaPath.AddLine(points[^1].X, graph.Bottom, points[0].X, graph.Bottom);
+        areaPath.CloseFigure();
+        e.Graphics.FillPath(fill, areaPath);
+        e.Graphics.DrawLines(line, points);
+    }
+}
+
 internal sealed class CheckPreviewPanel : Control
 {
     public string Payee { get; set; } = "Vendor";
@@ -6537,7 +7106,16 @@ internal sealed record BankStatementRow(
     string CheckNumber,
     string Category,
     int StatementMonth,
-    int StatementYear);
+    int StatementYear,
+    string Source = "Statement Import");
+
+internal sealed record LocalBankConnectionStatus(
+    string InstitutionName,
+    string AccountName,
+    string AccountMask,
+    string Status,
+    DateTime? LastSyncedUtc,
+    string LastError);
 
 internal static class EntryGridPageExtensions
 {

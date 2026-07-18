@@ -21,6 +21,7 @@ internal static class LicenseRuntime
     public static bool IsReadOnly { get; set; }
     public static DeviceLicensePayloadV2? CurrentLicense { get; set; }
     private static string _activePayrollState = "";
+    private static string _activeStoreGuid = "";
 
     public static bool HasService(string service)
     {
@@ -38,9 +39,15 @@ internal static class LicenseRuntime
            ?? StateFromStoreGuid(CurrentLicense?.StoreGuid)
            ?? "";
 
+    public static string ActiveStoreGuid
+        => string.IsNullOrWhiteSpace(_activeStoreGuid)
+            ? CurrentLicense?.StoreGuid ?? ""
+            : _activeStoreGuid;
+
     public static void ConfigurePayrollStateForConnection(string? connectionString)
     {
         _activePayrollState = "";
+        _activeStoreGuid = "";
         if (CurrentLicense is null)
             return;
 
@@ -57,6 +64,7 @@ internal static class LicenseRuntime
 
         var business = CurrentLicense.Businesses.FirstOrDefault(candidate =>
             string.Equals(candidate.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase));
+        _activeStoreGuid = business?.StoreGuid ?? CurrentLicense.StoreGuid;
         _activePayrollState = NormalizeState(business?.PayrollState)
                               ?? StateFromStoreGuid(business?.StoreGuid)
                               ?? NormalizeState(CurrentLicense.PayrollState)
