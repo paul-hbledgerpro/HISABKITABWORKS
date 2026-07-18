@@ -1950,8 +1950,32 @@ internal sealed partial class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 6) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
+        grid.AutoGenerateColumns = false;
         grid.ReadOnly = false;
         grid.EditMode = DataGridViewEditMode.EditOnEnter;
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", DataPropertyName = nameof(CheckPayoutGridRow.Id), Visible = false, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Date", DataPropertyName = nameof(CheckPayoutGridRow.Date), HeaderText = "Date", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Vendor", DataPropertyName = nameof(CheckPayoutGridRow.Vendor), HeaderText = "Vendor", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Description", DataPropertyName = nameof(CheckPayoutGridRow.Description), HeaderText = "Description", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Amount",
+            DataPropertyName = nameof(CheckPayoutGridRow.Amount),
+            HeaderText = "Amount",
+            ReadOnly = true,
+            DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Check", DataPropertyName = nameof(CheckPayoutGridRow.Check), HeaderText = "Check #", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Cleared",
+            DataPropertyName = nameof(CheckPayoutGridRow.Cleared),
+            HeaderText = "Cleared",
+            ReadOnly = false,
+            ThreeState = false,
+            TrueValue = true,
+            FalseValue = false
+        });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Check payout records for selected store"), 0, 3);
         Label unclearedTotal = null!;
@@ -1982,16 +2006,21 @@ internal sealed partial class MainForm : Form
             if (grid.IsCurrentCellDirty)
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
         };
+        grid.CellContentClick += (_, e) =>
+        {
+            if (e.RowIndex >= 0 &&
+                string.Equals(grid.Columns[e.ColumnIndex].Name, "Cleared", StringComparison.OrdinalIgnoreCase))
+                grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
         grid.CellValueChanged += async (_, e) =>
         {
             if (refreshingChecks || e.RowIndex < 0 ||
                 !string.Equals(grid.Columns[e.ColumnIndex].Name, "Cleared", StringComparison.OrdinalIgnoreCase))
                 return;
-            var id = SelectedId(grid);
-            if (id is null)
+            if (!int.TryParse(grid.Rows[e.RowIndex].Cells["Id"].Value?.ToString(), out var id))
                 return;
             using var db = CreateDb();
-            var row = await db.CheckPayouts.FirstOrDefaultAsync(x => x.Id == id.Value && x.StoreId == _currentStoreId);
+            var row = await db.CheckPayouts.FirstOrDefaultAsync(x => x.Id == id && x.StoreId == _currentStoreId);
             if (row is null)
                 return;
             row.Cleared = Convert.ToBoolean(grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value);
@@ -2004,7 +2033,16 @@ internal sealed partial class MainForm : Form
             using var db = CreateDb();
             var rows = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
             grid.DataSource = rows.OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
-                .Select(x => new { x.Id, x.Date, Vendor = x.VendorName, x.Description, Amount = x.CheckAmount, Check = x.CheckNumber, x.Cleared })
+                .Select(x => new CheckPayoutGridRow
+                {
+                    Id = x.Id,
+                    Date = x.Date,
+                    Vendor = x.VendorName,
+                    Description = x.Description,
+                    Amount = x.CheckAmount,
+                    Check = x.CheckNumber,
+                    Cleared = x.Cleared
+                })
                 .ToList();
             unclearedTotal.Text = rows.Where(x => !x.Cleared).Sum(x => x.CheckAmount).ToString("C2");
             clearedThisMonth.Text = rows.Where(x => x.Cleared && x.Date.Month == DateTime.Today.Month && x.Date.Year == DateTime.Today.Year).Sum(x => x.CheckAmount).ToString("C2");
@@ -3530,6 +3568,52 @@ internal sealed partial class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 8, 0, 8) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
+        grid.AutoGenerateColumns = false;
+        grid.ReadOnly = false;
+        grid.EditMode = DataGridViewEditMode.EditOnEnter;
+        grid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Select",
+            HeaderText = "Select",
+            ReadOnly = false,
+            ThreeState = false,
+            TrueValue = true,
+            FalseValue = false
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", DataPropertyName = nameof(BankStatementGridRow.Id), Visible = false, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Date", DataPropertyName = nameof(BankStatementGridRow.Date), HeaderText = "Date", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Source", DataPropertyName = nameof(BankStatementGridRow.Source), HeaderText = "Source", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Description", DataPropertyName = nameof(BankStatementGridRow.Description), HeaderText = "Description", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Debit",
+            DataPropertyName = nameof(BankStatementGridRow.Debit),
+            HeaderText = "Debit",
+            ReadOnly = true,
+            DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Credit",
+            DataPropertyName = nameof(BankStatementGridRow.Credit),
+            HeaderText = "Credit",
+            ReadOnly = true,
+            DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Category", DataPropertyName = nameof(BankStatementGridRow.Category), HeaderText = "Category", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "IncludeInProfitLoss",
+            DataPropertyName = nameof(BankStatementGridRow.IncludeInProfitLoss),
+            HeaderText = "P&L",
+            ReadOnly = false,
+            ThreeState = false,
+            TrueValue = true,
+            FalseValue = false
+        });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Matched", DataPropertyName = nameof(BankStatementGridRow.Matched), HeaderText = "Matched", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "MatchReference", DataPropertyName = nameof(BankStatementGridRow.MatchReference), HeaderText = "Match Reference", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Check", DataPropertyName = nameof(BankStatementGridRow.Check), HeaderText = "Check #", ReadOnly = true });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing purchases for selected store"), 0, 3);
         string? selectedPurchaseFilePath = null;
@@ -3793,6 +3877,12 @@ internal sealed partial class MainForm : Form
             if (grid.IsCurrentCellDirty)
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
         };
+        grid.CellContentClick += (_, e) =>
+        {
+            if (e.RowIndex >= 0 &&
+                grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)
+                grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
         grid.CellValueChanged += async (_, e) =>
         {
             if (refreshingBankRows || e.RowIndex < 0 ||
@@ -3815,7 +3905,6 @@ internal sealed partial class MainForm : Form
                 .Select(x => new BankStatementGridRow
                 {
                     Id = x.Id,
-                    Select = false,
                     IncludeInProfitLoss = x.IncludeInProfitLoss,
                     Date = x.Date,
                     Source = x.Source,
@@ -7415,7 +7504,6 @@ internal sealed record BankStatementRow(
 internal sealed class BankStatementGridRow
 {
     public int Id { get; set; }
-    public bool Select { get; set; }
     public bool IncludeInProfitLoss { get; set; }
     public DateTime Date { get; set; }
     public string Source { get; set; } = "";
@@ -7426,6 +7514,17 @@ internal sealed class BankStatementGridRow
     public bool Matched { get; set; }
     public string MatchReference { get; set; } = "";
     public string Check { get; set; } = "";
+}
+
+internal sealed class CheckPayoutGridRow
+{
+    public int Id { get; set; }
+    public DateOnly Date { get; set; }
+    public string Vendor { get; set; } = "";
+    public string Description { get; set; } = "";
+    public decimal Amount { get; set; }
+    public string Check { get; set; } = "";
+    public bool Cleared { get; set; }
 }
 
 internal sealed record LocalBankConnectionStatus(
