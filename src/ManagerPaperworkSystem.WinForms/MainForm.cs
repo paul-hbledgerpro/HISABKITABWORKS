@@ -3830,6 +3830,22 @@ internal sealed partial class MainForm : Form
             liveBankStatus.ForeColor = WinTheme.Blue;
             try
             {
+                var connections = await client.GetConnectionsAsync();
+                if (connections.Count == 0)
+                {
+                    liveBankStatus.Text = "Not connected — click Connect to link a bank";
+                    liveBankStatus.ForeColor = WinTheme.Muted;
+                    if (showSuccess)
+                    {
+                        MessageBox.Show(this,
+                            "No bank account is connected yet.\n\n"
+                            + "Click Connect, finish every step in the Plaid browser window, select the account to share, "
+                            + "and continue until the HISAB KITAB completion page appears.",
+                            "Connect a Bank First", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    return;
+                }
+
                 var result = await client.SyncAsync();
                 await SaveLiveBankSyncAsync(result);
                 await refreshAsync();
