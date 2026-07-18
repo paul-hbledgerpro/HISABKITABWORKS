@@ -96,7 +96,7 @@ foreach ($updaterFileName in @(
     Copy-Item -LiteralPath $updaterFile -Destination (Join-Path $clientPublish $updaterFileName) -Force
     Copy-Item -LiteralPath $updaterFile -Destination (Join-Path $updaterPayloadDirectory $updaterFileName) -Force
 }
-Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.81" -Encoding Ascii
+Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.82" -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
 Publish-DesktopApp $accountProject $accountPublish "HISAB KITAB WORKS Client Account Manager.exe"
@@ -115,10 +115,88 @@ foreach ($script in $scripts) {
     }
 }
 
+function New-ClientUpdatePackage([string]$Version) {
+    $updateZip = Join-Path $releaseDir "HISAB_KITAB_Update_win-x64_$Version.zip"
+    if (Test-Path -LiteralPath $updateZip) {
+        Remove-Item -LiteralPath $updateZip -Force
+    }
+
+    $entries = [Collections.Generic.List[object]]::new()
+    foreach ($name in @(
+        "HISAB KITAB.exe",
+        "HISAB KITAB.dll",
+        "HISAB KITAB.deps.json",
+        "HISAB KITAB.runtimeconfig.json",
+        "ManagerPaperworkSystem.Core.dll",
+        "ManagerPaperworkSystem.Data.dll",
+        "ManagerPaperworkSystem.Reports.dll",
+        "version.txt"
+    )) {
+        $entries.Add([pscustomobject]@{
+            Source = Join-Path $clientPublish $name
+            Entry = $name
+        })
+    }
+
+    foreach ($directoryName in @("UpdaterPayload", "Assets", "TaxRules")) {
+        $directory = Join-Path $clientPublish $directoryName
+        if (-not (Test-Path -LiteralPath $directory)) {
+            continue
+        }
+
+        foreach ($file in Get-ChildItem -LiteralPath $directory -File -Recurse) {
+            $relative = [IO.Path]::GetRelativePath($clientPublish, $file.FullName)
+            $entries.Add([pscustomobject]@{
+                Source = $file.FullName
+                Entry = $relative.Replace('\', '/')
+            })
+        }
+    }
+
+    foreach ($entry in $entries) {
+        if (-not (Test-Path -LiteralPath $entry.Source)) {
+            throw "Required automatic-update file is missing: $($entry.Source)"
+        }
+    }
+
+    $versionText = (Get-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Raw).Trim()
+    if ($versionText -ne $Version) {
+        throw "Automatic-update version mismatch. Expected $Version, found $versionText."
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $stream = [IO.File]::Open($updateZip, [IO.FileMode]::CreateNew)
+    try {
+        $archive = [IO.Compression.ZipArchive]::new(
+            $stream,
+            [IO.Compression.ZipArchiveMode]::Create,
+            $false)
+        try {
+            foreach ($entry in $entries) {
+                [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                    $archive,
+                    $entry.Source,
+                    $entry.Entry,
+                    [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+        }
+        finally {
+            $archive.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+
+    return $updateZip
+}
+
+$clientUpdateZip = New-ClientUpdatePackage "1.0.82"
+
 $expectedInstallers = @(
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.81.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.81.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.81.exe")
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.82.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.82.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.82.exe")
 )
 
 Write-Host ""
@@ -144,3 +222,8 @@ foreach ($installer in $expectedInstallers) {
     Write-Host ("  {0}  ({1:N1} MB)" -f $file.FullName, ($file.Length / 1MB)) -ForegroundColor Green
     Write-Host ("    SHA256: {0}" -f $hash) -ForegroundColor DarkGray
 }
+
+$updateFile = Get-Item -LiteralPath $clientUpdateZip
+$updateHash = (Get-FileHash -LiteralPath $clientUpdateZip -Algorithm SHA256).Hash
+Write-Host ("  {0}  ({1:N1} MB)" -f $updateFile.FullName, ($updateFile.Length / 1MB)) -ForegroundColor Green
+Write-Host ("    SHA256: {0}" -f $updateHash) -ForegroundColor DarkGray

@@ -7,9 +7,9 @@
     <Nullable>enable</Nullable>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
-    <Version>1.0.81</Version>
-    <AssemblyVersion>1.0.81.0</AssemblyVersion>
-    <FileVersion>1.0.81.0</FileVersion>
+    <Version>1.0.82</Version>
+    <AssemblyVersion>1.0.82.0</AssemblyVersion>
+    <FileVersion>1.0.82.0</FileVersion>
     <AssemblyName>HISAB KITAB WORKS License Generator</AssemblyName>
     <RootNamespace>HisabKitabWorks.LicenseGenerator.WinForms</RootNamespace>
     <Title>HISAB KITAB WORKS - Admin License Generator</Title>
