@@ -155,13 +155,12 @@ public static class SelectedOptionReportPdf
         });
     }
 
-    public static void GenerateProfitLoss(string storeName, string storeAddress, DateOnly from, DateOnly to, decimal grossSales, decimal salesTax, decimal purchases, decimal cashPayouts, decimal checkPayouts, decimal payroll, string outputPath)
+    public static void GenerateProfitLoss(string storeName, string storeAddress, DateOnly from, DateOnly to, ProfitLossData data, string outputPath)
     {
-        var netSales = grossSales;
-        var cogs = purchases;
-        var expenses = cashPayouts + checkPayouts + payroll;
-        var grossProfit = netSales - cogs;
-        var netProfit = grossProfit - expenses;
+        var netSales = data.GrossSales;
+        var cogs = data.Purchases;
+        var operatingExpenses = data.TotalExpenses - cogs;
+        var netProfit = data.NetProfitLoss;
 
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
         {
@@ -171,21 +170,24 @@ public static class SelectedOptionReportPdf
                 col.Spacing(8);
                 col.Item().Row(row =>
                 {
-                    Metric(row, "Net Sales", Money(netSales), "Selected period", Green);
+                    Metric(row, "Total Income", Money(data.TotalRevenue), "Sales + included bank income", Green);
                     Metric(row, "COGS", Money(cogs), "Purchases", Red);
-                    Metric(row, "Expenses", Money(expenses), "Payouts + payroll", Red);
+                    Metric(row, "Expenses", Money(operatingExpenses), "Excludes COGS", Red);
                     Metric(row, "Net Profit", Money(netProfit), "Owner view", netProfit < 0 ? Red : Green);
                 });
+                var bankExpenses = data.TotalBankExpenses - data.Payroll;
                 col.Item().Element(c => Table(c,
                     new[] { "Category", "Sales", "COGS", "Expense", "Net Profit", "Margin %" },
                     new List<string[]>
                     {
                         new[] { "Sales", Money(netSales), Money(0), Money(0), Money(netSales), "100.00%" },
+                        new[] { "Bank Income", Money(data.BankIncome), Money(0), Money(0), Money(data.BankIncome), Percent(data.TotalRevenue == 0 ? 0 : data.BankIncome / data.TotalRevenue) },
                         new[] { "Cost of Goods Sold", Money(0), Money(cogs), Money(0), Money(-cogs), Percent(netSales == 0 ? 0 : cogs / netSales) },
-                        new[] { "Cash Payouts", Money(0), Money(0), Money(cashPayouts), Money(-cashPayouts), Percent(netSales == 0 ? 0 : cashPayouts / netSales) },
-                        new[] { "Check Payouts", Money(0), Money(0), Money(checkPayouts), Money(-checkPayouts), Percent(netSales == 0 ? 0 : checkPayouts / netSales) },
-                        new[] { "Payroll", Money(0), Money(0), Money(payroll), Money(-payroll), Percent(netSales == 0 ? 0 : payroll / netSales) },
-                        new[] { "Total", Money(netSales), Money(cogs), Money(expenses), Money(netProfit), Percent(netSales == 0 ? 0 : netProfit / netSales) }
+                        new[] { "Cash Payouts", Money(0), Money(0), Money(data.CashPayouts), Money(-data.CashPayouts), Percent(data.TotalRevenue == 0 ? 0 : data.CashPayouts / data.TotalRevenue) },
+                        new[] { "Check Payouts", Money(0), Money(0), Money(data.CheckPayouts), Money(-data.CheckPayouts), Percent(data.TotalRevenue == 0 ? 0 : data.CheckPayouts / data.TotalRevenue) },
+                        new[] { "Payroll", Money(0), Money(0), Money(data.Payroll), Money(-data.Payroll), Percent(data.TotalRevenue == 0 ? 0 : data.Payroll / data.TotalRevenue) },
+                        new[] { "Other Bank Expenses", Money(0), Money(0), Money(bankExpenses), Money(-bankExpenses), Percent(data.TotalRevenue == 0 ? 0 : bankExpenses / data.TotalRevenue) },
+                        new[] { "Total", Money(data.TotalRevenue), Money(cogs), Money(operatingExpenses), Money(netProfit), Percent(data.TotalRevenue == 0 ? 0 : netProfit / data.TotalRevenue) }
                     },
                     new[] { 1.7f, 1f, 1f, 1f, 1f, .8f }));
             });

@@ -9,8 +9,8 @@ public class ProfitLossData
     // ── REVENUE ──
     public decimal GrossSales { get; set; }        // ShiftLogs.NetSales
     public decimal SalesTax { get; set; }           // ShiftLogs.Tax
-    public decimal BankDeposits { get; set; }       // BankStatementTransactions.Credit (category: Deposit/Income)
-    public decimal TotalRevenue => GrossSales + SalesTax + BankDeposits;
+    public decimal BankIncome { get; set; }         // Bank transactions explicitly included in P&L
+    public decimal TotalRevenue => GrossSales + BankIncome;
 
     // ── EXPENSES (Manual) ──
     public decimal Purchases { get; set; }          // PurchaseInvoices.Total
@@ -28,7 +28,7 @@ public class ProfitLossData
     public decimal OtherBankExpenses { get; set; }
 
     public bool HasBankStatementData =>
-        Utilities != 0 || Rent != 0 || Payroll != 0 || Insurance != 0 ||
+        BankIncome != 0 || Utilities != 0 || Rent != 0 || Payroll != 0 || Insurance != 0 ||
         BankFees != 0 || Taxes != 0 || LoanDebt != 0 || OtherBankExpenses != 0;
 
     // ── TOTALS ──

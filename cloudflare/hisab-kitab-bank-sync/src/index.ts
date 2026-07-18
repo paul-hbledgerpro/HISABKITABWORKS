@@ -1,5 +1,5 @@
 import { authenticateRequest } from "./auth";
-import { decryptSecret, encryptSecret, sha256Hex } from "./crypto";
+import { decryptSecret, encryptSecret, fromBase64, sha256Hex } from "./crypto";
 import {
   claimLinkSession,
   claimWebhook,
@@ -56,7 +56,7 @@ async function route(request: Request, env: WorkerEnv, ctx: ExecutionContext): P
 
   const bodyText = request.method === "GET" || request.method === "HEAD"
     ? ""
-    : await readLimitedText(request);
+    : await readLimitedText(request, url.pathname === "/api/reports/email" ? 12_000_000 : 256_000);
   const authenticated = await authenticateRequest(request, env, bodyText);
 
   if (request.method === "POST" && url.pathname === "/api/bank/link-session") {
@@ -68,8 +68,107 @@ async function route(request: Request, env: WorkerEnv, ctx: ExecutionContext): P
   if (request.method === "POST" && url.pathname === "/api/bank/transactions/sync") {
     return syncTransactions(env, authenticated.identity);
   }
+  if (request.method === "POST" && url.pathname === "/api/reports/email") {
+    return emailReport(env, authenticated, bodyText);
+  }
 
   return errorResponse("Route not found.", 404);
+}
+
+async function emailReport(
+  env: WorkerEnv,
+  authenticated: AuthenticatedRequest,
+  bodyText: string
+): Promise<Response> {
+  if (!env.EMAIL) {
+    throw new HttpError(
+      503,
+      "Report email is awaiting developer setup for the hisabkitabworks.com sending domain."
+    );
+  }
+
+  let payload: {
+    recipient?: string;
+    reportName?: string;
+    period?: string;
+    fileName?: string;
+    pdfBase64?: string;
+  };
+  try {
+    payload = JSON.parse(bodyText);
+  } catch {
+    throw new HttpError(400, "The report email request is invalid.");
+  }
+
+  const recipient = payload.recipient?.trim() ?? "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) || recipient.length > 254) {
+    throw new HttpError(400, "Enter a valid report recipient email address.");
+  }
+  const reportName = cleanText(payload.reportName, 120) || "Business Report";
+  const period = cleanText(payload.period, 100);
+  const fileName = safePdfFileName(payload.fileName || `${reportName}.pdf`);
+  let pdfBytes: Uint8Array<ArrayBuffer>;
+  try {
+    pdfBytes = fromBase64(payload.pdfBase64 ?? "");
+  } catch {
+    throw new HttpError(400, "The attached report PDF is invalid.");
+  }
+  if (pdfBytes.byteLength === 0 || pdfBytes.byteLength > 8_000_000) {
+    throw new HttpError(413, "The report PDF must be between 1 byte and 8 MB.");
+  }
+
+  const storeName = cleanText(authenticated.license.BusinessName, 160) || authenticated.identity.storeGuid;
+  const subject = `${storeName} — ${reportName}${period ? ` (${period})` : ""}`;
+  const safeStore = escapeHtml(storeName);
+  const safeReport = escapeHtml(reportName);
+  const safePeriod = escapeHtml(period);
+  let result: EmailSendResult;
+  try {
+    result = await env.EMAIL.send({
+      to: recipient,
+      from: { email: "donotreply@hisabkitabworks.com", name: "HISAB KITAB WORKS" },
+      subject,
+      html: `<div style="font-family:Segoe UI,Arial,sans-serif;color:#0c2f57">
+        <h2 style="color:#174f8f">HISAB KITAB WORKS</h2>
+        <p>Your <strong>${safeReport}</strong> for <strong>${safeStore}</strong>${safePeriod ? ` (${safePeriod})` : ""} is attached as a PDF.</p>
+        <p style="color:#64748b">This is an automated business report. Please do not reply to this email.</p>
+      </div>`,
+      text: `Your ${reportName} for ${storeName}${period ? ` (${period})` : ""} is attached as a PDF. This is an automated message.`,
+      attachments: [{
+        content: pdfBytes.buffer,
+        filename: fileName,
+        type: "application/pdf",
+        disposition: "attachment"
+      }]
+    });
+  } catch (error) {
+    const code = String((error as { code?: unknown }).code ?? "");
+    if (code.includes("SENDER") || code.includes("DOMAIN")) {
+      throw new HttpError(
+        503,
+        "Report email is awaiting verification of donotreply@hisabkitabworks.com in Cloudflare Email Sending."
+      );
+    }
+    throw error;
+  }
+  return json({ sent: true, messageId: result.messageId });
+}
+
+function cleanText(value: string | undefined, maxLength: number): string {
+  return (value ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, maxLength);
+}
+
+function safePdfFileName(value: string): string {
+  const cleaned = cleanText(value, 150).replace(/[^A-Za-z0-9._ -]+/g, "_");
+  return (cleaned || "HisabKitabReport.pdf").toLowerCase().endsWith(".pdf")
+    ? cleaned
+    : `${cleaned}.pdf`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character] ?? character);
 }
 
 async function createLinkSession(

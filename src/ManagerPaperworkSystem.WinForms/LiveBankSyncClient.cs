@@ -134,6 +134,30 @@ internal sealed class LiveBankSyncClient : IDisposable
                ?? throw new InvalidOperationException("Live bank service returned an empty response.");
     }
 
+    public async Task EmailReportAsync(
+        string recipient,
+        string reportName,
+        string period,
+        string fileName,
+        byte[] pdfBytes,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureConfigured();
+        if (pdfBytes.Length == 0 || pdfBytes.Length > 8_000_000)
+            throw new InvalidOperationException("The report PDF must be smaller than 8 MB.");
+        using var request = CreateJsonRequest(
+            HttpMethod.Post,
+            "/api/reports/email",
+            new ReportEmailRequest(
+                recipient.Trim(),
+                reportName.Trim(),
+                period.Trim(),
+                fileName,
+                Convert.ToBase64String(pdfBytes)));
+        using var response = await _http.SendAsync(request, cancellationToken);
+        _ = await ReadAsync<ReportEmailResponse>(response, cancellationToken);
+    }
+
     private void EnsureConfigured()
     {
         if (!IsConfigured)
@@ -170,6 +194,15 @@ internal sealed record LiveBankClientIdentity(
     string DeviceName);
 
 internal sealed record BankLinkSessionResponse(string LinkUrl);
+
+internal sealed record ReportEmailRequest(
+    string Recipient,
+    string ReportName,
+    string Period,
+    string FileName,
+    string PdfBase64);
+
+internal sealed record ReportEmailResponse(bool Sent, string MessageId);
 
 internal sealed record LiveBankConnection(
     string ConnectionId,

@@ -1942,6 +1942,8 @@ internal sealed partial class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 6) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
+        grid.ReadOnly = false;
+        grid.EditMode = DataGridViewEditMode.EditOnEnter;
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Check payout records for selected store"), 0, 3);
         Label unclearedTotal = null!;
@@ -1960,8 +1962,37 @@ internal sealed partial class MainForm : Form
         vendor.TextChanged += (_, _) => updatePreview();
         amount.TextChanged += (_, _) => updatePreview();
         check.TextChanged += (_, _) => updatePreview();
+        var refreshingChecks = false;
+        void configureCheckColumns()
+        {
+            foreach (DataGridViewColumn column in grid.Columns)
+                column.ReadOnly = !string.Equals(column.Name, "Cleared", StringComparison.OrdinalIgnoreCase);
+        }
+        grid.DataBindingComplete += (_, _) => configureCheckColumns();
+        grid.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (grid.IsCurrentCellDirty)
+                grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        grid.CellValueChanged += async (_, e) =>
+        {
+            if (refreshingChecks || e.RowIndex < 0 ||
+                !string.Equals(grid.Columns[e.ColumnIndex].Name, "Cleared", StringComparison.OrdinalIgnoreCase))
+                return;
+            var id = SelectedId(grid);
+            if (id is null)
+                return;
+            using var db = CreateDb();
+            var row = await db.CheckPayouts.FirstOrDefaultAsync(x => x.Id == id.Value && x.StoreId == _currentStoreId);
+            if (row is null)
+                return;
+            row.Cleared = Convert.ToBoolean(grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value);
+            await db.SaveChangesAsync();
+            refresh();
+        };
         void refresh()
         {
+            refreshingChecks = true;
             using var db = CreateDb();
             var rows = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
             grid.DataSource = rows.OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
@@ -1971,6 +2002,8 @@ internal sealed partial class MainForm : Form
             clearedThisMonth.Text = rows.Where(x => x.Cleared && x.Date.Month == DateTime.Today.Month && x.Date.Year == DateTime.Today.Year).Sum(x => x.CheckAmount).ToString("C2");
             nextCheck.Text = NextCheckNumber(rows);
             HideId(grid);
+            configureCheckColumns();
+            refreshingChecks = false;
         }
         var newCheck = MockActionButton("", "New Check", width: 155);
         newCheck.Click += (_, _) =>
@@ -3293,6 +3326,8 @@ internal sealed partial class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 8, 0, 8) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
+        grid.ReadOnly = false;
+        grid.EditMode = DataGridViewEditMode.EditOnEnter;
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing vendors and purposes for selected store"), 0, 3);
 
@@ -3736,31 +3771,60 @@ internal sealed partial class MainForm : Form
         var difference = MetricCard(totals, 2, 0, "Difference (Credits - Debits)", "$0.00", WinTheme.Copper);
         root.Controls.Add(BuildGridFooter("Showing bank statement transactions for selected store"), 0, 4);
 
+        var refreshingBankRows = false;
+        void configureBankColumns()
+        {
+            foreach (DataGridViewColumn column in grid.Columns)
+                column.ReadOnly = column.Name is not ("Select" or "IncludeInProfitLoss");
+            if (grid.Columns.Contains("IncludeInProfitLoss"))
+                grid.Columns["IncludeInProfitLoss"]!.HeaderText = "P&L";
+        }
+        grid.DataBindingComplete += (_, _) => configureBankColumns();
+        grid.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (grid.IsCurrentCellDirty)
+                grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        grid.CellValueChanged += async (_, e) =>
+        {
+            if (refreshingBankRows || e.RowIndex < 0 ||
+                !string.Equals(grid.Columns[e.ColumnIndex].Name, "IncludeInProfitLoss", StringComparison.OrdinalIgnoreCase))
+                return;
+            if (!int.TryParse(grid.Rows[e.RowIndex].Cells["Id"].Value?.ToString(), out var id))
+                return;
+            var include = Convert.ToBoolean(grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value);
+            await UpdateBankProfitLossInclusionAsync(id, include);
+        };
+
         async Task refreshAsync()
         {
+            refreshingBankRows = true;
             var m = month.SelectedItem is BankMonthItem mi ? mi.Value : DateTime.Today.Month;
             var y = year.SelectedItem is int yi ? yi : DateTime.Today.Year;
             await EnsureBankStatementTablesAsync();
             var rows = await LoadBankStatementRowsAsync(m, y);
             grid.DataSource = rows
-                .Select(x => new
+                .Select(x => new BankStatementGridRow
                 {
-                    x.Id,
+                    Id = x.Id,
                     Select = false,
-                    x.Date,
+                    IncludeInProfitLoss = x.IncludeInProfitLoss,
+                    Date = x.Date,
                     Source = x.Source,
-                    x.Description,
-                    x.Debit,
-                    x.Credit,
-                    x.Category,
-                    Matched = string.IsNullOrWhiteSpace(x.CheckNumber) ? "No" : "Yes",
+                    Description = x.Description,
+                    Debit = x.Debit,
+                    Credit = x.Credit,
+                    Category = x.Category,
+                    Matched = x.IsMatched,
+                    MatchReference = x.MatchReference,
                     Check = x.CheckNumber
                 })
                 .ToList();
             HideId(grid);
+            configureBankColumns();
             var debitTotal = rows.Sum(x => x.Debit);
             var creditTotal = rows.Sum(x => x.Credit);
-            var matchedRows = rows.Where(x => !string.IsNullOrWhiteSpace(x.CheckNumber)).ToList();
+            var matchedRows = rows.Where(x => x.IsMatched).ToList();
             var unmatchedRows = rows.Except(matchedRows).ToList();
             importedTotal.Text = MoneyText(rows.Sum(x => x.Credit + x.Debit));
             matchedTotal.Text = MoneyText(matchedRows.Sum(x => x.Credit + x.Debit));
@@ -3769,6 +3833,7 @@ internal sealed partial class MainForm : Form
             debits.Text = MoneyText(debitTotal);
             credits.Text = MoneyText(creditTotal);
             difference.Text = MoneyText(creditTotal - debitTotal);
+            refreshingBankRows = false;
         }
 
         async Task safeRefreshAsync()
@@ -3916,7 +3981,7 @@ internal sealed partial class MainForm : Form
         AddSectionButton(actions, "Import Statement", importAndSelectPeriodAsync, true, 205);
         AddSectionButton(actions, "Categorize Selected", async () =>
         {
-            var id = SelectedId(grid);
+            var id = SelectedBankTransactionId(grid);
             if (id is null)
             {
                 MessageBox.Show(this, "Select a transaction first.", "Bank Statement", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -3928,20 +3993,20 @@ internal sealed partial class MainForm : Form
         }, width: 220);
         AddSectionButton(actions, "Match Transaction", async () =>
         {
-            var id = SelectedId(grid);
+            var id = SelectedBankTransactionId(grid);
             if (id is null)
             {
                 MessageBox.Show(this, "Select a transaction first.", "Bank Statement", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            var checkNumber = PromptText("Match Transaction", "Enter matching check number or reference:", grid.CurrentRow?.Cells["Check"].Value?.ToString() ?? "");
-            if (checkNumber is null) return;
-            await UpdateBankTransactionAsync(id.Value, null, checkNumber);
+            var matchReference = PromptText("Match Transaction", "Enter the matching HISAB KITAB check, purchase, payout, or reference:", grid.CurrentRow?.Cells["MatchReference"].Value?.ToString() ?? "");
+            if (matchReference is null) return;
+            await MatchBankTransactionAsync(id.Value, matchReference);
             await refreshAsync();
         }, width: 210);
         AddSectionButton(actions, "Mark Reviewed", async () =>
         {
-            var id = SelectedId(grid);
+            var id = SelectedBankTransactionId(grid);
             if (id is null)
             {
                 MessageBox.Show(this, "Select a transaction first.", "Bank Statement", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -3953,7 +4018,7 @@ internal sealed partial class MainForm : Form
         AddSectionButton(actions, "Delete Selected", async () =>
         {
             if (!_session.IsAdmin) return;
-            var id = SelectedId(grid);
+            var id = SelectedBankTransactionId(grid);
             if (id is null) return;
             await using var conn = CreateBankConnection();
             await conn.OpenAsync();
@@ -4320,13 +4385,18 @@ internal sealed partial class MainForm : Form
         var payroll = db.PayrollEntries.AsNoTracking()
             .Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate.Month == month && x.PayrollRun.PayDate.Year == year)
             .Sum(x => (decimal?)x.GrossPay).GetValueOrDefault();
-        var revenue = shifts.Sum(x => x.NetSales);
-        var tax = shifts.Sum(x => x.Tax);
-        var cogs = purchases.Sum(x => x.Total);
+        var periodFrom = new DateOnly(year, month, 1);
+        var periodTo = DateOnly.FromDateTime(DateTime.Today);
+        var profitLoss = Task.Run(() => _reportService.GetProfitLossDataAsync(periodFrom, periodTo))
+            .GetAwaiter().GetResult();
+        var revenue = profitLoss.TotalRevenue;
+        var bankIncome = profitLoss.BankIncome;
+        var cogs = profitLoss.Purchases;
         var cashCheckExpenses = cash.Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount);
-        var payoutExpenses = cashCheckExpenses + payroll;
-        var expenses = cogs + payoutExpenses;
-        var net = revenue - expenses;
+        var bankExpenses = profitLoss.TotalBankExpenses - profitLoss.Payroll;
+        var payoutExpenses = profitLoss.TotalExpenses - cogs;
+        var expenses = profitLoss.TotalExpenses;
+        var net = profitLoss.NetProfitLoss;
         var margin = revenue == 0 ? 0 : (net / revenue) * 100m;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, BackColor = WinTheme.Bg, Padding = new Padding(2) };
@@ -4370,7 +4440,7 @@ internal sealed partial class MainForm : Form
         var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 6, RowCount = 1, BackColor = WinTheme.Bg };
         for (var i = 0; i < 6; i++) metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16.66f));
         root.Controls.Add(metrics, 0, 1);
-        MetricCard(metrics, 0, 0, "Net Sales", MoneyText(revenue), WinTheme.Green, "This month");
+        MetricCard(metrics, 0, 0, "Total Income", MoneyText(revenue), WinTheme.Green, bankIncome == 0 ? "Sales" : $"Includes {MoneyText(bankIncome)} bank");
         MetricCard(metrics, 1, 0, "Cost of Goods Sold", MoneyText(cogs), WinTheme.Red, "Purchases");
         MetricCard(metrics, 2, 0, "Gross Profit", MoneyText(revenue - cogs), WinTheme.Green, "");
         MetricCard(metrics, 3, 0, "Expenses", MoneyText(payoutExpenses), WinTheme.Red, "");
@@ -4384,7 +4454,7 @@ internal sealed partial class MainForm : Form
         var trend = MockBorderCard("Net Profit Trend", "\uE9D9", 38);
         var trendHost = (Panel)trend.Parent!;
         trendHost.Margin = new Padding(4, 6, 6, 6);
-        trend.Controls.Add(new Label { Text = "Net profit preview uses current month sales, purchases, payouts, and finalized gross payroll.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(11), TextAlign = ContentAlignment.MiddleCenter }, 0, 1);
+        trend.Controls.Add(new Label { Text = "Net profit uses sales plus bank transactions checked for P&L, less purchases, payouts, payroll, and included bank expenses.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(11), TextAlign = ContentAlignment.MiddleCenter }, 0, 1);
         visuals.Controls.Add(trendHost, 0, 0);
         var expense = MockBorderCard("Expenses by Category", "\uE8A7", 38);
         var expenseHost = (Panel)expense.Parent!;
@@ -4396,21 +4466,23 @@ internal sealed partial class MainForm : Form
                 new[] { "Purchases", MoneyText(cogs), expenses == 0 ? "0.00%" : PercentText(cogs / expenses * 100m) },
                 new[] { "Cash Payouts", MoneyText(cash.Sum(x => x.PayoutAmount)), expenses == 0 ? "0.00%" : PercentText(cash.Sum(x => x.PayoutAmount) / expenses * 100m) },
                 new[] { "Check Payouts", MoneyText(checks.Sum(x => x.CheckAmount)), expenses == 0 ? "0.00%" : PercentText(checks.Sum(x => x.CheckAmount) / expenses * 100m) },
-                new[] { "Payroll", MoneyText(payroll), expenses == 0 ? "0.00%" : PercentText(payroll / expenses * 100m) }
+                new[] { "Payroll", MoneyText(payroll), expenses == 0 ? "0.00%" : PercentText(payroll / expenses * 100m) },
+                new[] { "Bank Expenses", MoneyText(bankExpenses), expenses == 0 ? "0.00%" : PercentText(bankExpenses / expenses * 100m) }
             }), 0, 1);
         visuals.Controls.Add(expenseHost, 1, 0);
 
         var grid = WinTheme.Grid();
         grid.DataSource = new[]
         {
-            new { Category = "Sales", Sales = revenue, COGS = 0m, GrossProfit = revenue, Expense = 0m, NetProfit = revenue, Margin = revenue == 0 ? "0.00%" : "100.00%", Change = "" },
+            new { Category = "Sales + Bank Income", Sales = revenue, COGS = 0m, GrossProfit = revenue, Expense = 0m, NetProfit = revenue, Margin = revenue == 0 ? "0.00%" : "100.00%", Change = "" },
             new { Category = "Purchases", Sales = 0m, COGS = cogs, GrossProfit = -cogs, Expense = cogs, NetProfit = -cogs, Margin = "", Change = "" },
             new { Category = "Cash + Check Payouts", Sales = 0m, COGS = 0m, GrossProfit = 0m, Expense = cashCheckExpenses, NetProfit = -cashCheckExpenses, Margin = "", Change = "" },
             new { Category = "Payroll", Sales = 0m, COGS = 0m, GrossProfit = 0m, Expense = payroll, NetProfit = -payroll, Margin = "", Change = "" },
+            new { Category = "Bank Expenses", Sales = 0m, COGS = 0m, GrossProfit = 0m, Expense = bankExpenses, NetProfit = -bankExpenses, Margin = "", Change = "" },
             new { Category = "Total", Sales = revenue, COGS = cogs, GrossProfit = revenue - cogs, Expense = payoutExpenses, NetProfit = net, Margin = PercentText(margin), Change = "" }
         }.ToList();
         root.Controls.Add(grid, 0, 3);
-        root.Controls.Add(new Label { Text = "Calculated from shifts, purchases, cash payouts, check payouts, and finalized gross payroll.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(9), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0) }, 0, 4);
+        root.Controls.Add(new Label { Text = "Bank rows checked in the P&L column are included. Matched rows are excluded to prevent double-counting.", Dock = DockStyle.Fill, ForeColor = WinTheme.Muted, Font = WinTheme.BodyFont(9), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0) }, 0, 4);
         return ModuleShell("\uE9D9", "Profit & Loss", "Analyze sales, expenses, and net profit by period.", root);
     }
 
@@ -4482,6 +4554,11 @@ internal sealed partial class MainForm : Form
         print.Dock = DockStyle.Fill;
         print.Margin = new Padding(8, 6, 8, 6);
         gen.Controls.Add(print, 2, 3);
+        var emailReport = WinTheme.Button("Email Report");
+        emailReport.Dock = DockStyle.Fill;
+        emailReport.Margin = new Padding(8, 6, 8, 6);
+        gen.Controls.Add(emailReport, 0, 3);
+        gen.SetColumnSpan(emailReport, 2);
         var exportAll = WinTheme.Button("Export All Reports");
         exportAll.Dock = DockStyle.Fill;
         exportAll.Margin = new Padding(8, 6, 8, 6);
@@ -4654,6 +4731,11 @@ internal sealed partial class MainForm : Form
             await GenerateSelectedReportAsync(type.Text, DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo), printAfter: true);
             previewReport();
         };
+        emailReport.Click += async (_, _) =>
+        {
+            await OpenReportViewerAsync(type.Text, DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo));
+            previewReport();
+        };
         exportAll.Click += async (_, _) =>
         {
             await ExportAllReportsToFolderAsync(DateOnly.FromDateTime(reportFrom), DateOnly.FromDateTime(reportTo));
@@ -4790,9 +4872,29 @@ internal sealed partial class MainForm : Form
 
         using var viewer = new ReportViewerForm(
             $"{reportName} - {from:M/d/yyyy} to {to:M/d/yyyy}",
-            outputPath => SaveReportPdfAsync(reportName, from, to, outputPath));
+            outputPath => SaveReportPdfAsync(reportName, from, to, outputPath),
+            (outputPath, recipient) => EmailReportPdfAsync(reportName, from, to, outputPath, recipient));
         viewer.ShowDialog(this);
         return Task.CompletedTask;
+    }
+
+    private async Task EmailReportPdfAsync(
+        string reportName,
+        DateOnly from,
+        DateOnly to,
+        string pdfPath,
+        string recipient)
+    {
+        if (!File.Exists(pdfPath))
+            throw new InvalidOperationException("The report PDF could not be found.");
+        var bytes = await File.ReadAllBytesAsync(pdfPath);
+        using var client = new LiveBankSyncClient();
+        await client.EmailReportAsync(
+            recipient,
+            reportName,
+            $"{from:M/d/yyyy} to {to:M/d/yyyy}",
+            Path.GetFileName(pdfPath),
+            bytes);
     }
 
     private async Task SaveReportPdfAsync(string reportName, DateOnly from, DateOnly to, string outputPath)
@@ -5272,6 +5374,9 @@ CREATE TABLE [dbo].[BankStatementTransactions] (
     [Category] NVARCHAR(50) NOT NULL DEFAULT 'Other',
     [ExternalTransactionId] NVARCHAR(200) NULL,
     [Source] NVARCHAR(30) NOT NULL DEFAULT 'Statement Import',
+    [IsMatched] BIT NOT NULL DEFAULT 0,
+    [MatchReference] NVARCHAR(200) NOT NULL DEFAULT '',
+    [IncludeInProfitLoss] BIT NOT NULL DEFAULT 0,
     [ImportedUtc] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
     [CreatedByName] NVARCHAR(100) NOT NULL DEFAULT ''
 );
@@ -5303,6 +5408,9 @@ CREATE TABLE [dbo].[BankConnections] (
     Category TEXT NOT NULL DEFAULT 'Other',
     ExternalTransactionId TEXT,
     Source TEXT NOT NULL DEFAULT 'Statement Import',
+    IsMatched INTEGER NOT NULL DEFAULT 0,
+    MatchReference TEXT NOT NULL DEFAULT '',
+    IncludeInProfitLoss INTEGER NOT NULL DEFAULT 0,
     ImportedUtc TEXT NOT NULL DEFAULT (datetime('now')),
     CreatedByName TEXT NOT NULL DEFAULT ''
 );
@@ -5345,6 +5453,12 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'ExternalTransactionId') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [ExternalTransactionId] NVARCHAR(200) NULL;
 IF COL_LENGTH('dbo.BankStatementTransactions', 'Source') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [Source] NVARCHAR(30) NOT NULL CONSTRAINT DF_BankStatementTransactions_Source DEFAULT 'Statement Import';
+IF COL_LENGTH('dbo.BankStatementTransactions', 'IsMatched') IS NULL
+    ALTER TABLE [dbo].[BankStatementTransactions] ADD [IsMatched] BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IsMatched DEFAULT 0;
+IF COL_LENGTH('dbo.BankStatementTransactions', 'MatchReference') IS NULL
+    ALTER TABLE [dbo].[BankStatementTransactions] ADD [MatchReference] NVARCHAR(200) NOT NULL CONSTRAINT DF_BankStatementTransactions_MatchReference DEFAULT '';
+IF COL_LENGTH('dbo.BankStatementTransactions', 'IncludeInProfitLoss') IS NULL
+    ALTER TABLE [dbo].[BankStatementTransactions] ADD [IncludeInProfitLoss] BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IncludeInProfitLoss DEFAULT 0;
 IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BankConnections')
 CREATE TABLE [dbo].[BankConnections] (
     [Id] INT IDENTITY(1,1) PRIMARY KEY,
@@ -5395,6 +5509,9 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await addColumn("CreatedByName", "CreatedByName TEXT NOT NULL DEFAULT ''");
         await addColumn("ExternalTransactionId", "ExternalTransactionId TEXT");
         await addColumn("Source", "Source TEXT NOT NULL DEFAULT 'Statement Import'");
+        await addColumn("IsMatched", "IsMatched INTEGER NOT NULL DEFAULT 0");
+        await addColumn("MatchReference", "MatchReference TEXT NOT NULL DEFAULT ''");
+        await addColumn("IncludeInProfitLoss", "IncludeInProfitLoss INTEGER NOT NULL DEFAULT 0");
         await ExecuteBankSchemaCommandAsync(conn, @"CREATE TABLE IF NOT EXISTS BankConnections (
     Id INTEGER PRIMARY KEY AUTOINCREMENT,
     StoreId INTEGER NOT NULL,
@@ -5465,8 +5582,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = conn is SqlConnection
-            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category, Source FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
-            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category, Source FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
+            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
+            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
         AddParam(cmd, "@sid", _currentStoreId);
         AddBankStatementDatePeriodParams(cmd, conn, month, year);
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -5483,7 +5600,10 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
                 reader[6]?.ToString() ?? "Other",
                 parsedDate.Month > 0 ? parsedDate.Month : month,
                 parsedDate.Year > 1 ? parsedDate.Year : year,
-                reader.IsDBNull(7) ? "Statement Import" : reader[7]?.ToString() ?? "Statement Import"));
+                reader.IsDBNull(7) ? "Statement Import" : reader[7]?.ToString() ?? "Statement Import",
+                !reader.IsDBNull(8) && Convert.ToBoolean(reader[8]),
+                reader.IsDBNull(9) ? "" : reader[9]?.ToString() ?? "",
+                !reader.IsDBNull(10) && Convert.ToBoolean(reader[10])));
         }
         return rows;
     }
@@ -5521,6 +5641,37 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM BankConnections WHERE StoreId=@sid";
+        AddParam(cmd, "@sid", _currentStoreId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task UpdateBankProfitLossInclusionAsync(int id, bool include)
+    {
+        await EnsureBankStatementTablesAsync();
+        await using var conn = CreateBankConnection();
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE BankStatementTransactions SET IncludeInProfitLoss=@include WHERE Id=@id AND StoreId=@sid";
+        AddParam(cmd, "@include", include);
+        AddParam(cmd, "@id", id);
+        AddParam(cmd, "@sid", _currentStoreId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task MatchBankTransactionAsync(int id, string matchReference)
+    {
+        await EnsureBankStatementTablesAsync();
+        await using var conn = CreateBankConnection();
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        var matched = !string.IsNullOrWhiteSpace(matchReference);
+        cmd.CommandText = @"UPDATE BankStatementTransactions
+SET IsMatched=@matched, MatchReference=@reference,
+    IncludeInProfitLoss=CASE WHEN @matched=1 THEN 0 ELSE IncludeInProfitLoss END
+WHERE Id=@id AND StoreId=@sid";
+        AddParam(cmd, "@matched", matched);
+        AddParam(cmd, "@reference", matchReference.Trim());
+        AddParam(cmd, "@id", id);
         AddParam(cmd, "@sid", _currentStoreId);
         await cmd.ExecuteNonQueryAsync();
     }
@@ -5588,14 +5739,14 @@ ImportedUtc=GETUTCDATE(), CreatedByName=@by
 WHERE StoreId=@sid AND ExternalTransactionId=@externalId;
 IF @@ROWCOUNT = 0
 INSERT INTO BankStatementTransactions
-(StoreId, [Date], [Description], Credit, Debit, CheckNumber, Category, ExternalTransactionId, Source, CreatedByName)
-VALUES (@sid, @date, @description, @credit, @debit, @check, @category, @externalId, 'Live Bank', @by);";
+(StoreId, [Date], [Description], Credit, Debit, CheckNumber, Category, ExternalTransactionId, Source, CreatedByName, IncludeInProfitLoss)
+VALUES (@sid, @date, @description, @credit, @debit, @check, @category, @externalId, 'Live Bank', @by, @include);";
             }
             else
             {
                 command.CommandText = @"INSERT INTO BankStatementTransactions
-(StoreId, Date, Description, Credit, Debit, CheckNumber, Category, ExternalTransactionId, Source, ImportedUtc, CreatedByName)
-VALUES (@sid, @date, @description, @credit, @debit, @check, @category, @externalId, 'Live Bank', datetime('now'), @by)
+(StoreId, Date, Description, Credit, Debit, CheckNumber, Category, ExternalTransactionId, Source, ImportedUtc, CreatedByName, IncludeInProfitLoss)
+VALUES (@sid, @date, @description, @credit, @debit, @check, @category, @externalId, 'Live Bank', datetime('now'), @by, @include)
 ON CONFLICT(StoreId, ExternalTransactionId) DO UPDATE SET
 Date=excluded.Date, Description=excluded.Description, Credit=excluded.Credit, Debit=excluded.Debit,
 CheckNumber=excluded.CheckNumber, Category=excluded.Category, Source='Live Bank',
@@ -5612,6 +5763,7 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             AddParam(command, "@check", string.IsNullOrWhiteSpace(transaction.CheckNumber) ? DBNull.Value : transaction.CheckNumber);
             AddParam(command, "@category", string.IsNullOrWhiteSpace(transaction.Category) ? "Other" : transaction.Category);
             AddParam(command, "@by", _session.DisplayName);
+            AddParam(command, "@include", DefaultIncludeInProfitLoss(transaction.Category, transaction.Credit, transaction.Debit));
             await command.ExecuteNonQueryAsync();
         }
     }
@@ -5652,9 +5804,9 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
         {
             await using var cmd = conn.CreateCommand();
             var columns = conn is SqlConnection
-                ? new List<string> { "StoreId", "[Date]", "[Description]", "Credit", "Debit", "CheckNumber", "Category" }
-                : new List<string> { "StoreId", "Date", "Description", "Credit", "Debit", "CheckNumber", "Category" };
-            var values = new List<string> { "@sid", "@d", "@desc", "@cr", "@dr", "@chk", "@cat" };
+                ? new List<string> { "StoreId", "[Date]", "[Description]", "Credit", "Debit", "CheckNumber", "Category", "IncludeInProfitLoss" }
+                : new List<string> { "StoreId", "Date", "Description", "Credit", "Debit", "CheckNumber", "Category", "IncludeInProfitLoss" };
+            var values = new List<string> { "@sid", "@d", "@desc", "@cr", "@dr", "@chk", "@cat", "@include" };
             if (hasCreatedByName)
             {
                 columns.Add("CreatedByName");
@@ -5669,6 +5821,7 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             AddParam(cmd, "@dr", row.Debit);
             AddParam(cmd, "@chk", string.IsNullOrWhiteSpace(row.CheckNumber) ? DBNull.Value : row.CheckNumber);
             AddParam(cmd, "@cat", row.Category);
+            AddParam(cmd, "@include", DefaultIncludeInProfitLoss(row.Category, row.Credit, row.Debit));
             if (hasCreatedByName)
                 AddParam(cmd, "@by", _session.DisplayName);
             await cmd.ExecuteNonQueryAsync();
@@ -6215,6 +6368,27 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
         return "Other";
     }
 
+    private static bool DefaultIncludeInProfitLoss(string category, decimal credit, decimal debit)
+    {
+        var normalized = (category ?? "").Trim().ToLowerInvariant();
+        if (debit > 0)
+        {
+            return !normalized.Contains("transfer") &&
+                   !normalized.Contains("credit card payment") &&
+                   !normalized.Contains("loan principal") &&
+                   !normalized.Contains("cash withdrawal") &&
+                   !normalized.Contains("owner draw");
+        }
+
+        if (credit <= 0)
+            return false;
+        return normalized.Contains("income") ||
+               normalized.Contains("interest") ||
+               normalized.Contains("refund") ||
+               normalized.Contains("cashback") ||
+               normalized.Contains("reimbursement");
+    }
+
     private Control BuildSimpleList<T>(string title, Func<AppDbContext, IQueryable<T>> query, Func<string, T> create) where T : class
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, BackColor = WinTheme.Bg, Padding = new Padding(8) };
@@ -6671,6 +6845,22 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
         if (grid.CurrentRow is null || !grid.Columns.Contains("Id"))
             return null;
         return int.TryParse(grid.CurrentRow.Cells["Id"].Value?.ToString(), out var id) ? id : null;
+    }
+
+    private static int? SelectedBankTransactionId(DataGridView grid)
+    {
+        if (grid.Columns.Contains("Select"))
+        {
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                if (Convert.ToBoolean(row.Cells["Select"].Value))
+                {
+                    grid.CurrentCell = row.Cells["Select"];
+                    break;
+                }
+            }
+        }
+        return SelectedId(grid);
     }
 
     private static List<T> EffectiveRows<T>(
@@ -7209,7 +7399,26 @@ internal sealed record BankStatementRow(
     string Category,
     int StatementMonth,
     int StatementYear,
-    string Source = "Statement Import");
+    string Source = "Statement Import",
+    bool IsMatched = false,
+    string MatchReference = "",
+    bool IncludeInProfitLoss = false);
+
+internal sealed class BankStatementGridRow
+{
+    public int Id { get; set; }
+    public bool Select { get; set; }
+    public bool IncludeInProfitLoss { get; set; }
+    public DateTime Date { get; set; }
+    public string Source { get; set; } = "";
+    public string Description { get; set; } = "";
+    public decimal Debit { get; set; }
+    public decimal Credit { get; set; }
+    public string Category { get; set; } = "";
+    public bool Matched { get; set; }
+    public string MatchReference { get; set; } = "";
+    public string Check { get; set; } = "";
+}
 
 internal sealed record LocalBankConnectionStatus(
     string InstitutionName,

@@ -2,6 +2,7 @@ export type PlaidEnvironment = "sandbox" | "production";
 
 export type WorkerEnv = Cloudflare.Env & {
   DB: D1Database;
+  EMAIL?: SendEmail;
   PLAID_CLIENT_ID: string;
   PLAID_SECRET: string;
   TOKEN_ENCRYPTION_KEY: string;

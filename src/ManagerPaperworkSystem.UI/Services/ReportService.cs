@@ -240,24 +240,35 @@ public sealed class ReportService : IReportService
             var fromDate = from.ToDateTime(TimeOnly.MinValue);
             var toDate = to.ToDateTime(TimeOnly.MaxValue);
 
-            var bankTxns = await db.Database.SqlQueryRaw<BankTxnRow>(
-                @"SELECT ISNULL(Category, 'Other') AS Category, 
-                         ISNULL(SUM(Credit), 0) AS TotalCredit, 
-                         ISNULL(SUM(Debit), 0) AS TotalDebit
-                  FROM BankStatementTransactions 
-                  WHERE StoreId = {0} AND Date >= {1} AND Date <= {2}
-                  GROUP BY Category",
-                storeId, fromDate, toDate).ToListAsync(ct);
+            var bankQuery = db.Database.IsSqlServer()
+                ? db.Database.SqlQueryRaw<BankTxnRow>(
+                    @"SELECT ISNULL(Category, 'Other') AS Category,
+                             ISNULL(SUM(Credit), 0) AS TotalCredit,
+                             ISNULL(SUM(Debit), 0) AS TotalDebit
+                      FROM BankStatementTransactions
+                      WHERE StoreId = {0} AND [Date] >= {1} AND [Date] <= {2}
+                        AND ISNULL(IncludeInProfitLoss, 0) = 1
+                        AND ISNULL(IsMatched, 0) = 0
+                      GROUP BY Category",
+                    storeId, fromDate, toDate)
+                : db.Database.SqlQueryRaw<BankTxnRow>(
+                    @"SELECT COALESCE(Category, 'Other') AS Category,
+                             COALESCE(SUM(Credit), 0) AS TotalCredit,
+                             COALESCE(SUM(Debit), 0) AS TotalDebit
+                      FROM BankStatementTransactions
+                      WHERE StoreId = {0} AND Date >= {1} AND Date <= {2}
+                        AND COALESCE(IncludeInProfitLoss, 0) = 1
+                        AND COALESCE(IsMatched, 0) = 0
+                      GROUP BY Category",
+                    storeId, fromDate, toDate);
+            var bankTxns = await bankQuery.ToListAsync(ct);
 
             foreach (var txn in bankTxns)
             {
                 var cat = (txn.Category ?? "Other").Trim().ToLower();
 
                 if (txn.TotalCredit > 0)
-                {
-                    if (cat.Contains("deposit") || cat.Contains("income") || cat.Contains("transfer in"))
-                        data.BankDeposits += txn.TotalCredit;
-                }
+                    data.BankIncome += txn.TotalCredit;
 
                 if (txn.TotalDebit > 0)
                 {
@@ -293,9 +304,8 @@ public sealed class ReportService : IReportService
         var (storeId, storeName, storeAddress) = await GetCurrentStoreAsync(ct);
         var data = await GetProfitLossDataAsync(from, to, ct);
 
-        SelectedOptionReportPdf.GenerateProfitLoss(storeName, storeAddress, from, to,
-            data.GrossSales, data.SalesTax, data.Purchases,
-            data.CashPayouts, data.CheckPayouts, data.Payroll, outputPdfPath);
+        SelectedOptionReportPdf.GenerateProfitLoss(
+            storeName, storeAddress, from, to, data, outputPdfPath);
     }
 
     #endregion

@@ -547,8 +547,15 @@ public static class DatabaseSchemaService
                     [Category] NVARCHAR(200) NULL,
                     [CheckNumber] NVARCHAR(50) NULL,
                     [Reference] NVARCHAR(200) NULL,
+                    [IsMatched] BIT NOT NULL DEFAULT 0,
+                    [MatchReference] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [IncludeInProfitLoss] BIT NOT NULL DEFAULT 0,
                     [ImportedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
                 )");
+
+            await EnsureColumnAsync(conn, "BankStatementTransactions", "IsMatched", "BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IsMatched DEFAULT 0");
+            await EnsureColumnAsync(conn, "BankStatementTransactions", "MatchReference", "NVARCHAR(200) NOT NULL CONSTRAINT DF_BankStatementTransactions_MatchReference DEFAULT ''");
+            await EnsureColumnAsync(conn, "BankStatementTransactions", "IncludeInProfitLoss", "BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IncludeInProfitLoss DEFAULT 0");
 
             // Phase 3: Seed default data if tables are empty
             var sName = storeName ?? "Store 1";
