@@ -80,10 +80,10 @@ async function emailReport(
   authenticated: AuthenticatedRequest,
   bodyText: string
 ): Promise<Response> {
-  if (!env.EMAIL) {
+  if (!env.RESEND_API_KEY) {
     throw new HttpError(
       503,
-      "Report email is awaiting developer setup for the hisabkitabworks.com sending domain."
+      "Report email is awaiting secure delivery-service setup."
     );
   }
 
@@ -122,36 +122,88 @@ async function emailReport(
   const safeStore = escapeHtml(storeName);
   const safeReport = escapeHtml(reportName);
   const safePeriod = escapeHtml(period);
-  let result: EmailSendResult;
-  try {
-    result = await env.EMAIL.send({
-      to: recipient,
-      from: { email: "donotreply@hisabkitabworks.com", name: "HISAB KITAB WORKS" },
-      subject,
-      html: `<div style="font-family:Segoe UI,Arial,sans-serif;color:#0c2f57">
+  const result = await sendReportViaResend(env, {
+    recipient,
+    subject,
+    html: `<div style="font-family:Segoe UI,Arial,sans-serif;color:#0c2f57">
         <h2 style="color:#174f8f">HISAB KITAB WORKS</h2>
         <p>Your <strong>${safeReport}</strong> for <strong>${safeStore}</strong>${safePeriod ? ` (${safePeriod})` : ""} is attached as a PDF.</p>
         <p style="color:#64748b">This is an automated business report. Please do not reply to this email.</p>
       </div>`,
-      text: `Your ${reportName} for ${storeName}${period ? ` (${period})` : ""} is attached as a PDF. This is an automated message.`,
+    text: `Your ${reportName} for ${storeName}${period ? ` (${period})` : ""} is attached as a PDF. This is an automated message.`,
+    fileName,
+    pdfBase64: payload.pdfBase64 ?? ""
+  });
+  return json({ sent: true, messageId: result.id });
+}
+
+type ResendReportRequest = {
+  recipient: string;
+  subject: string;
+  html: string;
+  text: string;
+  fileName: string;
+  pdfBase64: string;
+};
+
+type ResendResponse = {
+  id?: string;
+  name?: string;
+  message?: string;
+};
+
+async function sendReportViaResend(
+  env: WorkerEnv,
+  report: ResendReportRequest
+): Promise<{ id: string }> {
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: "HISAB KITAB WORKS <donotreply@hisabkitabworks.com>",
+      to: [report.recipient],
+      subject: report.subject,
+      html: report.html,
+      text: report.text,
       attachments: [{
-        content: pdfBytes.buffer,
-        filename: fileName,
-        type: "application/pdf",
-        disposition: "attachment"
+        content: report.pdfBase64,
+        filename: report.fileName
+      }],
+      tags: [{
+        name: "message_type",
+        value: "business_report"
       }]
-    });
-  } catch (error) {
-    const code = String((error as { code?: unknown }).code ?? "");
-    if (code.includes("SENDER") || code.includes("DOMAIN")) {
-      throw new HttpError(
-        503,
-        "Report email is awaiting verification of donotreply@hisabkitabworks.com in Cloudflare Email Sending."
-      );
-    }
-    throw error;
+    })
+  });
+
+  let result: ResendResponse = {};
+  try {
+    result = await response.json<ResendResponse>();
+  } catch {
+    // Resend normally returns JSON. Keep the client-facing error generic if it does not.
   }
-  return json({ sent: true, messageId: result.messageId });
+
+  if (!response.ok || !result.id) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "report_email_delivery_failed",
+      status: response.status,
+      providerError: result.name ?? "",
+      message: result.message ?? "Resend returned an invalid response."
+    }));
+    if (response.status === 401 || response.status === 403) {
+      throw new HttpError(503, "Report email authentication requires developer attention.");
+    }
+    if (response.status === 429) {
+      throw new HttpError(503, "The daily report-email allowance has been reached. Try again later.");
+    }
+    throw new HttpError(502, "The report email service is temporarily unavailable.");
+  }
+
+  return { id: result.id };
 }
 
 function cleanText(value: string | undefined, maxLength: number): string {

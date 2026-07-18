@@ -93,7 +93,7 @@ foreach ($updaterFile in Get-ChildItem -LiteralPath $updaterPublish -File) {
     Copy-Item -LiteralPath $updaterFile.FullName -Destination (Join-Path $updaterPayloadDirectory $updaterFile.Name) -Force
 }
 Copy-Item -LiteralPath (Join-Path $updaterPublish "Upgrade.exe") -Destination (Join-Path $clientPublish "Upgrade.exe") -Force
-Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.94" -Encoding Ascii
+Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value "1.0.95" -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
 Publish-DesktopApp $accountProject $accountPublish "HISAB KITAB WORKS Client Account Manager.exe"
@@ -194,12 +194,12 @@ function New-ClientUpdatePackage([string]$Version) {
     return $updateZip
 }
 
-$clientUpdateZip = New-ClientUpdatePackage "1.0.94"
+$clientUpdateZip = New-ClientUpdatePackage "1.0.95"
 
 $expectedInstallers = @(
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.94.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.94.exe"),
-    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.94.exe")
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Client_Setup_1.0.95.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_License_Generator_Setup_1.0.95.exe"),
+    (Join-Path $releaseDir "HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.95.exe")
 )
 
 Write-Host ""

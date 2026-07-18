@@ -737,6 +737,8 @@ internal sealed class DeviceLicensePayloadV2
     public int MaxUsers { get; set; }
     public string EnabledServices { get; set; } = "Accounting";
     public string PayrollState { get; set; } = "";
+    public string MonthlyReportEmail { get; set; } = "";
+    public int MonthlyReportDay { get; set; } = 3;
     public string IssuedUtc { get; set; } = "";
     public string ExpiresUtc { get; set; } = "";
     public string EncryptedConnectionKey { get; set; } = "";

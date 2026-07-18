@@ -22,6 +22,9 @@ internal sealed class NewClientAccountForm : Form
     private readonly CheckBox _accounting = new() { Text = "Core Accounting (required)", Checked = true, Enabled = false, AutoSize = true, Font = DeveloperTheme.Bold() };
     private readonly CheckBox _payroll = new() { Text = "Payroll add-on", AutoSize = true, Font = DeveloperTheme.Bold(), ForeColor = DeveloperTheme.Blue };
     private readonly CheckBox _scheduling = new() { Text = "Scheduling add-on", AutoSize = true, Font = DeveloperTheme.Bold(), ForeColor = DeveloperTheme.Blue };
+    private readonly CheckBox _monthlyReports = new() { Text = "Automatic monthly reports", AutoSize = true, Font = DeveloperTheme.Bold(), ForeColor = DeveloperTheme.Blue };
+    private readonly TextBox _monthlyReportEmail = DeveloperTheme.TextBox();
+    private readonly NumericUpDown _monthlyReportDay = new() { Dock = DockStyle.Fill, Minimum = 1, Maximum = 28, Value = 3, Font = DeveloperTheme.Body(10.5f) };
     private readonly Label _taxStatus = DeveloperTheme.Label("Select a payroll processing state.", false, DeveloperTheme.Muted);
     private readonly Label _status = DeveloperTheme.Label("Enter the new client details.", false, DeveloperTheme.Muted);
 
@@ -59,6 +62,13 @@ internal sealed class NewClientAccountForm : Form
         Controls.Add(BuildLayout());
         _guid.TextChanged += (_, _) => UpdateAddressState();
         _payrollState.SelectedIndexChanged += (_, _) => UpdateTaxStatus();
+        _monthlyReports.CheckedChanged += (_, _) =>
+        {
+            _monthlyReportEmail.Enabled = _monthlyReports.Checked;
+            _monthlyReportDay.Enabled = _monthlyReports.Checked;
+        };
+        _monthlyReportEmail.Enabled = false;
+        _monthlyReportDay.Enabled = false;
         Shown += (_, _) => _business.Focus();
     }
 
@@ -109,7 +119,7 @@ internal sealed class NewClientAccountForm : Form
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         for (var i = 1; i <= 9; i++) content.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
 
         var intro = DeveloperTheme.Label("Enter the client information, choose purchased services, and assign the payroll-processing state.", false, DeveloperTheme.Muted);
@@ -134,14 +144,21 @@ internal sealed class NewClientAccountForm : Form
         var servicesTitle = DeveloperTheme.Label("PURCHASED SERVICES", true, DeveloperTheme.Orange);
         content.Controls.Add(servicesTitle, 0, 10);
         content.SetColumnSpan(servicesTitle, 2);
-        var services = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Padding = new Padding(4, 8, 4, 8) };
-        services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
-        services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
-        services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
-        foreach (var checkBox in new[] { _accounting, _payroll, _scheduling }) { checkBox.Dock = DockStyle.Fill; checkBox.Margin = new Padding(4); }
+        var services = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, Padding = new Padding(4, 6, 4, 6) };
+        services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+        services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 22));
+        services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 23));
+        services.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        services.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        foreach (var checkBox in new[] { _accounting, _payroll, _scheduling, _monthlyReports }) { checkBox.Dock = DockStyle.Fill; checkBox.Margin = new Padding(4); }
         services.Controls.Add(_accounting, 0, 0);
         services.Controls.Add(_payroll, 1, 0);
         services.Controls.Add(_scheduling, 2, 0);
+        services.Controls.Add(_monthlyReports, 3, 0);
+        services.Controls.Add(DeveloperTheme.Label("REPORT EMAIL", true), 0, 1);
+        services.Controls.Add(_monthlyReportEmail, 1, 1); services.SetColumnSpan(_monthlyReportEmail, 2);
+        services.Controls.Add(_monthlyReportDay, 3, 1);
         content.Controls.Add(services, 0, 11);
         content.SetColumnSpan(services, 2);
 
@@ -232,12 +249,12 @@ internal sealed class NewClientAccountForm : Form
             _status.Text = "Creating client account…";
             _status.ForeColor = DeveloperTheme.Blue;
             Cursor = Cursors.WaitCursor;
-            var services = string.Join(',', new[] { "Accounting", _payroll.Checked ? "Payroll" : "", _scheduling.Checked ? "Scheduling" : "" }.Where(x => x.Length > 0));
+            var services = string.Join(',', new[] { "Accounting", _payroll.Checked ? "Payroll" : "", _scheduling.Checked ? "Scheduling" : "", _monthlyReports.Checked ? "MonthlyReports" : "" }.Where(x => x.Length > 0));
             SavedAccount = _service.Save(new ClientAccount(
                 0, 0, _business.Text.Trim(), _owner.Text.Trim(), _email.Text.Trim(), _phone.Text.Trim(),
                 _guid.Text.Trim(), _zip.Text.Trim(), _address.Text.Trim(), _database.Text.Trim(), "",
                 (int)_pcs.Value, (int)_businesses.Value, _monthlyFee.Value, _expires.Value.Date, services,
-                true, SelectedPayrollState()));
+                true, SelectedPayrollState(), _monthlyReportEmail.Text.Trim(), (int)_monthlyReportDay.Value));
             DialogResult = DialogResult.OK;
             Close();
         }

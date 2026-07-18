@@ -22,9 +22,13 @@ Set these interactively with Wrangler. Never put their values in source control.
 npx.cmd wrangler secret put PLAID_CLIENT_ID
 npx.cmd wrangler secret put PLAID_SECRET
 npx.cmd wrangler secret put TOKEN_ENCRYPTION_KEY
+npx.cmd wrangler secret put RESEND_API_KEY --env production
 ```
 
 `TOKEN_ENCRYPTION_KEY` must be a base64-encoded random 32-byte value.
+`RESEND_API_KEY` must be a domain-scoped Resend key with sending-only access to
+`hisabkitabworks.com`. The report endpoint sends PDF attachments from
+`donotreply@hisabkitabworks.com` without exposing this key to the desktop app.
 
 ## Plaid URLs
 

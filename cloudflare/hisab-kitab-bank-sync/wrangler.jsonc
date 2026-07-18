@@ -12,11 +12,6 @@
       "migrations_dir": "migrations"
     }
   ],
-  "send_email": [
-    {
-      "name": "EMAIL"
-    }
-  ],
   "vars": {
     "PLAID_ENV": "sandbox",
     "CLIENT_NAME": "HISAB KITAB WORKS",
@@ -31,11 +26,6 @@
           "database_name": "hisab-kitab-bank-sync-production",
           "database_id": "a062aa14-3d1f-4596-a1d4-5ff9cbeef8e0",
           "migrations_dir": "migrations"
-        }
-      ],
-      "send_email": [
-        {
-          "name": "EMAIL"
         }
       ],
       "vars": {

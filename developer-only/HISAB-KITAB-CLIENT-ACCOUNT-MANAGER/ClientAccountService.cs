@@ -8,7 +8,7 @@ internal sealed record ClientAccount(
     int CustomerId, int LicenseId, string BusinessName, string OwnerName, string Email, string Phone,
     string StoreGuid, string StoreZip, string StoreAddress, string DatabaseName, string SubscriptionKey,
     int MaxDevices, int MaxBusinesses, decimal MonthlyFee, DateTime ExpiresDate, string EnabledServices,
-    bool IsActive, string PayrollState);
+    bool IsActive, string PayrollState, string MonthlyReportEmail, int MonthlyReportDay);
 
 internal sealed record ServicePrice(string ServiceName, bool Enabled, decimal MonthlyRate);
 
@@ -48,6 +48,10 @@ IF COL_LENGTH('dbo.Licenses', 'EnabledServices') IS NULL
     ALTER TABLE dbo.Licenses ADD EnabledServices NVARCHAR(200) NOT NULL CONSTRAINT DF_Licenses_EnabledServices DEFAULT('Accounting');
 IF COL_LENGTH('dbo.Licenses', 'PayrollState') IS NULL
     ALTER TABLE dbo.Licenses ADD PayrollState NVARCHAR(2) NOT NULL CONSTRAINT DF_Licenses_PayrollState DEFAULT('');
+IF COL_LENGTH('dbo.Licenses', 'MonthlyReportEmail') IS NULL
+    ALTER TABLE dbo.Licenses ADD MonthlyReportEmail NVARCHAR(254) NOT NULL CONSTRAINT DF_Licenses_MonthlyReportEmail DEFAULT('');
+IF COL_LENGTH('dbo.Licenses', 'MonthlyReportDay') IS NULL
+    ALTER TABLE dbo.Licenses ADD MonthlyReportDay TINYINT NOT NULL CONSTRAINT DF_Licenses_MonthlyReportDay DEFAULT(3);
 IF COL_LENGTH('dbo.Customers', 'StoreGuid') IS NULL
     ALTER TABLE dbo.Customers ADD StoreGuid NVARCHAR(128) NULL;
 IF COL_LENGTH('dbo.Customers', 'StoreZip') IS NULL
@@ -141,7 +145,7 @@ SELECT c.Id, l.Id, c.BusinessName, c.OwnerName, c.Email, c.Phone,
        ISNULL(c.StoreGuid,''), ISNULL(c.StoreZip,''), ISNULL(cb.StoreAddress,''),
        ISNULL(cb.DatabaseName, l.AssignedDatabases), l.LicenseKey,
        l.MaxDevices, l.MaxStores, l.MonthlyFee, l.ExpiresDate, l.EnabledServices, l.IsActive,
-       ISNULL(l.PayrollState,'')
+       ISNULL(l.PayrollState,''), ISNULL(l.MonthlyReportEmail,''), ISNULL(l.MonthlyReportDay,3)
 FROM dbo.Customers c
 CROSS APPLY (SELECT TOP 1 * FROM dbo.Licenses x WHERE x.CustomerId=c.Id ORDER BY x.Id DESC) l
 OUTER APPLY (SELECT TOP 1 * FROM dbo.CustomerBusinesses b WHERE b.CustomerId=c.Id ORDER BY b.IsPrimary DESC, b.Id) cb
@@ -167,8 +171,8 @@ OUTPUT INSERTED.Id VALUES (@business,@owner,@email,@phone,'Created in Client Acc
             AddCustomerParameters(customer, input); customerId = Convert.ToInt32(customer.ExecuteScalar());
             key = UniqueKey(connection, tx);
             using var license = new SqlCommand(@"
-INSERT dbo.Licenses (CustomerId,LicenseKey,MaxStores,MaxUsers,MaxDevices,MonthlyFee,IsActive,ActivatedDate,ExpiresDate,AssignedDatabases,EnabledServices,PayrollState)
-OUTPUT INSERTED.Id VALUES (@customer,@key,@stores,999,@devices,@fee,1,SYSUTCDATETIME(),@expires,@guid,@services,@payrollState)", connection, tx);
+INSERT dbo.Licenses (CustomerId,LicenseKey,MaxStores,MaxUsers,MaxDevices,MonthlyFee,IsActive,ActivatedDate,ExpiresDate,AssignedDatabases,EnabledServices,PayrollState,MonthlyReportEmail,MonthlyReportDay)
+OUTPUT INSERTED.Id VALUES (@customer,@key,@stores,999,@devices,@fee,1,SYSUTCDATETIME(),@expires,@guid,@services,@payrollState,@reportEmail,@reportDay)", connection, tx);
             AddLicenseParameters(license, input, customerId, key); licenseId = Convert.ToInt32(license.ExecuteScalar());
             using var business = new SqlCommand(@"
 INSERT dbo.CustomerBusinesses (CustomerId,BusinessName,StoreAddress,DatabaseName,StoreGuid,IsPrimary,IsActive,CreatedUtc)
@@ -181,7 +185,7 @@ VALUES (@customer,@business,@address,@database,@guid,1,1,SYSUTCDATETIME())", con
 UPDATE dbo.Customers SET BusinessName=@business,OwnerName=@owner,Email=@email,Phone=@phone,StoreGuid=@guid,StoreZip=@zip WHERE Id=@customer", connection, tx);
             AddCustomerParameters(customer, input); customer.Parameters.AddWithValue("@customer", customerId); customer.ExecuteNonQuery();
             using var license = new SqlCommand(@"
-UPDATE dbo.Licenses SET MaxStores=@stores,MaxDevices=@devices,MonthlyFee=@fee,ExpiresDate=@expires,AssignedDatabases=@guid,EnabledServices=@services,PayrollState=@payrollState,IsActive=@active WHERE Id=@license AND CustomerId=@customer", connection, tx);
+UPDATE dbo.Licenses SET MaxStores=@stores,MaxDevices=@devices,MonthlyFee=@fee,ExpiresDate=@expires,AssignedDatabases=@guid,EnabledServices=@services,PayrollState=@payrollState,MonthlyReportEmail=@reportEmail,MonthlyReportDay=@reportDay,IsActive=@active WHERE Id=@license AND CustomerId=@customer", connection, tx);
             AddLicenseParameters(license, input, customerId, key); license.Parameters.AddWithValue("@license", licenseId); license.Parameters.AddWithValue("@active", input.IsActive); license.ExecuteNonQuery();
             using var business = new SqlCommand(@"
 IF EXISTS (SELECT 1 FROM dbo.CustomerBusinesses WHERE CustomerId=@customer AND IsPrimary=1)
@@ -194,7 +198,13 @@ ELSE
         return input with { CustomerId = customerId, LicenseId = licenseId, SubscriptionKey = key };
     }
 
-    public void UpdateServices(int customerId, int licenseId, string enabledServices, string payrollState)
+    public void UpdateServices(
+        int customerId,
+        int licenseId,
+        string enabledServices,
+        string payrollState,
+        string monthlyReportEmail,
+        int monthlyReportDay)
     {
         if (customerId <= 0 || licenseId <= 0)
             throw new InvalidOperationException("Select an existing client account first.");
@@ -205,10 +215,13 @@ ELSE
         using var connection = Open();
         using var command = new SqlCommand(@"
 UPDATE dbo.Licenses
-SET EnabledServices=@services, PayrollState=@payrollState
+SET EnabledServices=@services, PayrollState=@payrollState,
+    MonthlyReportEmail=@reportEmail, MonthlyReportDay=@reportDay
 WHERE Id=@license AND CustomerId=@customer;", connection);
         command.Parameters.AddWithValue("@services", enabledServices);
         command.Parameters.AddWithValue("@payrollState", ValidatePayrollState(payrollState));
+        command.Parameters.AddWithValue("@reportEmail", ValidateMonthlyReportEmail(enabledServices, monthlyReportEmail));
+        command.Parameters.AddWithValue("@reportDay", ValidateMonthlyReportDay(monthlyReportDay));
         command.Parameters.AddWithValue("@license", licenseId);
         command.Parameters.AddWithValue("@customer", customerId);
         if (command.ExecuteNonQuery() != 1)
@@ -231,7 +244,7 @@ WHERE LicenseId=@license;", connection);
 
         var result = new List<ServicePrice>();
         var firstEnabled = true;
-        foreach (var service in new[] { "Accounting", "Payroll", "Scheduling" })
+        foreach (var service in new[] { "Accounting", "Payroll", "Scheduling", "MonthlyReports" })
         {
             var isEnabled = enabled.Contains(service);
             var fallback = saved.Count == 0 && isEnabled && firstEnabled ? account.MonthlyFee : 0m;
@@ -410,6 +423,8 @@ ORDER BY Id;", connection);
         if (value.StoreZip.Length != 5 || !value.StoreZip.All(char.IsDigit)) throw new InvalidOperationException("Store ZIP must be five digits.");
         if (!value.EnabledServices.Split(',').Contains("Accounting", StringComparer.OrdinalIgnoreCase)) throw new InvalidOperationException("Core Accounting must remain enabled.");
         _ = ValidatePayrollState(value.PayrollState);
+        _ = ValidateMonthlyReportEmail(value.EnabledServices, value.MonthlyReportEmail);
+        _ = ValidateMonthlyReportDay(value.MonthlyReportDay);
         _ = StateFromStoreGuid(value.StoreGuid);
     }
 
@@ -437,6 +452,8 @@ WHERE c.Id<>@customer AND (c.StoreGuid=@guid OR b.StoreGuid=@guid OR b.DatabaseN
         command.Parameters.AddWithValue("@fee", value.MonthlyFee); command.Parameters.AddWithValue("@expires", value.ExpiresDate);
         command.Parameters.AddWithValue("@guid", value.StoreGuid.Trim().ToUpperInvariant()); command.Parameters.AddWithValue("@services", value.EnabledServices);
         command.Parameters.AddWithValue("@payrollState", ValidatePayrollState(value.PayrollState));
+        command.Parameters.AddWithValue("@reportEmail", ValidateMonthlyReportEmail(value.EnabledServices, value.MonthlyReportEmail));
+        command.Parameters.AddWithValue("@reportDay", ValidateMonthlyReportDay(value.MonthlyReportDay));
     }
 
     private static void AddBusinessParameters(SqlCommand command, ClientAccount value, int customerId)
@@ -446,7 +463,31 @@ WHERE c.Id<>@customer AND (c.StoreGuid=@guid OR b.StoreGuid=@guid OR b.DatabaseN
         command.Parameters.AddWithValue("@guid", value.StoreGuid.Trim().ToUpperInvariant());
     }
 
-    private static ClientAccount Read(SqlDataReader r) => new(r.GetInt32(0), r.GetInt32(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5), r.GetString(6), r.GetString(7), r.GetString(8), r.GetString(9), r.GetString(10), r.GetInt32(11), r.GetInt32(12), r.GetDecimal(13), r.GetDateTime(14), r.GetString(15), r.GetBoolean(16), r.IsDBNull(17) ? "" : r.GetString(17));
+    private static ClientAccount Read(SqlDataReader r) => new(
+        r.GetInt32(0), r.GetInt32(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5),
+        r.GetString(6), r.GetString(7), r.GetString(8), r.GetString(9), r.GetString(10), r.GetInt32(11),
+        r.GetInt32(12), r.GetDecimal(13), r.GetDateTime(14), r.GetString(15), r.GetBoolean(16),
+        r.IsDBNull(17) ? "" : r.GetString(17), r.IsDBNull(18) ? "" : r.GetString(18),
+        r.IsDBNull(19) ? 3 : Convert.ToInt32(r.GetByte(19)));
+
+    private static string ValidateMonthlyReportEmail(string enabledServices, string value)
+    {
+        var enabled = enabledServices.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Contains("MonthlyReports", StringComparer.OrdinalIgnoreCase);
+        var email = (value ?? "").Trim();
+        if (!enabled)
+            return "";
+        if (!System.Net.Mail.MailAddress.TryCreate(email, out _))
+            throw new InvalidOperationException("Enter a valid recipient email for automatic monthly reports.");
+        return email;
+    }
+
+    private static int ValidateMonthlyReportDay(int value)
+    {
+        if (value is < 1 or > 28)
+            throw new InvalidOperationException("Monthly report delivery day must be between 1 and 28.");
+        return value;
+    }
 
     private static string ValidatePayrollState(string value)
     {

@@ -236,7 +236,8 @@ ORDER BY c.BusinessName", connection);
         connection.Open();
         using var command = new SqlCommand(@"
 SELECT TOP 1 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
-       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState,
+       l.MonthlyReportEmail, l.MonthlyReportDay
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId=c.Id
 WHERE l.AssignedDatabases=@storeGuid AND l.IsActive=1
@@ -254,7 +255,8 @@ ORDER BY l.Id DESC", connection);
         connection.Open();
         using var command = new SqlCommand(@"
 SELECT TOP 1 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
-       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState,
+       l.MonthlyReportEmail, l.MonthlyReportDay
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId=c.Id
 WHERE l.LicenseKey=@subscriptionKey AND l.IsActive=1
@@ -281,7 +283,8 @@ ORDER BY l.Id DESC", connection);
 
         using (var recheck = new SqlCommand(@"
 SELECT TOP 1 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
-       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState,
+       l.MonthlyReportEmail, l.MonthlyReportDay
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId=c.Id
 WHERE l.AssignedDatabases=@storeGuid AND l.IsActive=1
@@ -351,7 +354,7 @@ VALUES
         return new ClientSubscription(
             customerId, licenseId, businessName, subscriptionKey, storeGuid,
             Math.Max(1, maxBusinesses), DefaultMaxUsers, Math.Max(1, maxDevices), expiresUtc,
-            "Accounting", StateFromStoreGuid(storeGuid));
+            "Accounting", StateFromStoreGuid(storeGuid), "", 3);
     }
 
     private void SaveCustomerActivationMetadata(int customerId, string storeGuid, string storeZip)
@@ -622,6 +625,8 @@ END", connection);
             MaxUsers = subscription.MaxUsers,
             EnabledServices = subscription.EnabledServices,
             PayrollState = assignedPayrollState,
+            MonthlyReportEmail = subscription.MonthlyReportEmail,
+            MonthlyReportDay = Math.Clamp(subscription.MonthlyReportDay, 1, 28),
             IssuedUtc = DateTime.UtcNow.ToString("O"),
             ExpiresUtc = expiresUtc.ToString("O"),
             EncryptedConnectionKey = primary.EncryptedConnectionKey,
@@ -862,7 +867,9 @@ VALUES
             reader.IsDBNull(7) ? 1 : reader.GetInt32(7),
             reader.GetDateTime(8),
             reader.IsDBNull(9) ? "Accounting" : reader.GetString(9),
-            reader.IsDBNull(10) ? "" : reader.GetString(10));
+            reader.IsDBNull(10) ? "" : reader.GetString(10),
+            reader.IsDBNull(11) ? "" : reader.GetString(11),
+            reader.IsDBNull(12) ? 3 : Convert.ToInt32(reader.GetByte(12)));
 
     private static string GenerateUniqueSubscriptionKey(SqlConnection connection, SqlTransaction transaction)
     {
@@ -886,6 +893,10 @@ IF COL_LENGTH('dbo.Licenses', 'EnabledServices') IS NULL
     ALTER TABLE dbo.Licenses ADD EnabledServices NVARCHAR(200) NOT NULL CONSTRAINT DF_Licenses_EnabledServices DEFAULT('Accounting');
 IF COL_LENGTH('dbo.Licenses', 'PayrollState') IS NULL
     ALTER TABLE dbo.Licenses ADD PayrollState NVARCHAR(2) NOT NULL CONSTRAINT DF_Licenses_PayrollState DEFAULT('');
+IF COL_LENGTH('dbo.Licenses', 'MonthlyReportEmail') IS NULL
+    ALTER TABLE dbo.Licenses ADD MonthlyReportEmail NVARCHAR(254) NOT NULL CONSTRAINT DF_Licenses_MonthlyReportEmail DEFAULT('');
+IF COL_LENGTH('dbo.Licenses', 'MonthlyReportDay') IS NULL
+    ALTER TABLE dbo.Licenses ADD MonthlyReportDay TINYINT NOT NULL CONSTRAINT DF_Licenses_MonthlyReportDay DEFAULT(3);
 IF COL_LENGTH('dbo.Customers', 'StoreGuid') IS NULL
     ALTER TABLE dbo.Customers ADD StoreGuid NVARCHAR(128) NULL;
 IF COL_LENGTH('dbo.Customers', 'StoreZip') IS NULL
@@ -999,7 +1010,9 @@ internal sealed record ClientSubscription(
     int MaxDevices,
     DateTime ExpiresDate,
     string EnabledServices,
-    string PayrollState);
+    string PayrollState,
+    string MonthlyReportEmail,
+    int MonthlyReportDay);
 
 internal sealed record RegisteredLicensePc(
     int Id,

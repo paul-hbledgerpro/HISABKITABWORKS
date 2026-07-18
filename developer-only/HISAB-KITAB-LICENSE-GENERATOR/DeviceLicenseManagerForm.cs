@@ -454,7 +454,8 @@ IF COL_LENGTH('dbo.DeviceLicenseIssueHistory', 'ReplacedDeviceId') IS NULL
         connection.Open();
         using var command = new SqlCommand(@"
 SELECT c.Id CustomerId, l.Id LicenseId, c.BusinessName, l.LicenseKey,
-       l.AssignedDatabases, l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices
+       l.AssignedDatabases, l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices,
+       l.MonthlyReportEmail, l.MonthlyReportDay
 FROM dbo.Customers c
 INNER JOIN dbo.Licenses l ON l.CustomerId = c.Id
 WHERE c.BusinessName = @business
@@ -471,7 +472,9 @@ ORDER BY l.Id DESC", connection);
             matches.Add(new SubscriptionRecord(
                 reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2), reader.GetString(3),
                 reader.IsDBNull(4) ? "" : reader.GetString(4), reader.GetInt32(5), reader.GetInt32(6),
-                reader.GetInt32(7), reader.GetDateTime(8), reader.IsDBNull(9) ? "Accounting" : reader.GetString(9)));
+                reader.GetInt32(7), reader.GetDateTime(8), reader.IsDBNull(9) ? "Accounting" : reader.GetString(9),
+                reader.IsDBNull(10) ? "" : reader.GetString(10),
+                reader.IsDBNull(11) ? 3 : Convert.ToInt32(reader.GetByte(11))));
         }
         if (matches.Count == 0)
             throw new InvalidOperationException($"No active customer subscription was found for '{businessName}'. Generate the customer license first.");
@@ -839,6 +842,8 @@ VALUES
             MaxStores = maxBusinesses,
             MaxUsers = subscription.MaxUsers,
             EnabledServices = subscription.EnabledServices,
+            MonthlyReportEmail = subscription.MonthlyReportEmail,
+            MonthlyReportDay = Math.Clamp(subscription.MonthlyReportDay, 1, 28),
             IssuedUtc = DateTime.UtcNow.ToString("O"),
             ExpiresUtc = expiresUtc.ToString("O"),
             EncryptedConnectionKey = primary.EncryptedConnectionKey,
@@ -960,7 +965,8 @@ WHERE Id=@id", connection);
     }
 
     private sealed record SubscriptionRecord(int CustomerId, int LicenseId, string BusinessName, string LicenseKey,
-        string DatabaseName, int MaxStores, int MaxUsers, int MaxDevices, DateTime ExpiresDate, string EnabledServices);
+        string DatabaseName, int MaxStores, int MaxUsers, int MaxDevices, DateTime ExpiresDate, string EnabledServices,
+        string MonthlyReportEmail, int MonthlyReportDay);
 
     private sealed record DeviceRecord(int Id, string DeviceId, string InstallationId, string DeviceName,
         string DevicePublicKey, string FingerprintHash, string Status, DateTime ActivatedDate,

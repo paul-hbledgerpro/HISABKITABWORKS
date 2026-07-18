@@ -28,6 +28,9 @@ internal sealed class MainForm : Form
     private readonly CheckBox _accounting = new() { Text = "Core Accounting (required)", Checked = true, Enabled = false, AutoSize = true, Font = DeveloperTheme.Bold() };
     private readonly CheckBox _payroll = new() { Text = "Payroll add-on", AutoSize = true, Font = DeveloperTheme.Bold(), ForeColor = DeveloperTheme.Blue };
     private readonly CheckBox _scheduling = new() { Text = "Scheduling add-on", AutoSize = true, Font = DeveloperTheme.Bold(), ForeColor = DeveloperTheme.Blue };
+    private readonly CheckBox _monthlyReports = new() { Text = "Automatic monthly reports", AutoSize = true, Font = DeveloperTheme.Bold(), ForeColor = DeveloperTheme.Blue };
+    private readonly TextBox _monthlyReportEmail = DeveloperTheme.TextBox();
+    private readonly NumericUpDown _monthlyReportDay = new() { Dock = DockStyle.Fill, Minimum = 1, Maximum = 28, Value = 3, Font = DeveloperTheme.Body(10.5f) };
     private readonly CheckBox _active = new() { Text = "Account active", Checked = true, AutoSize = true, Font = DeveloperTheme.Bold() };
     private readonly TextBox _subscription = DeveloperTheme.TextBox();
     private readonly DataGridView _grid = new() { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
@@ -54,6 +57,7 @@ internal sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi; WindowState = FormWindowState.Normal;
         _server.Text = "hbstoreledger-server.database.windows.net"; _guid.CharacterCasing = CharacterCasing.Upper; _zip.MaxLength = 5; _subscription.ReadOnly = true;
         _addressState.ReadOnly = true; _addressState.TabStop = false; _addressState.BackColor = DeveloperTheme.PaleBlue;
+        _monthlyReportEmail.Enabled = false; _monthlyReportDay.Enabled = false;
         _payrollState.Items.AddRange(UsStateCodes.Cast<object>().ToArray());
         ConfigureGrid(); Controls.Add(BuildLayout()); WireEvents(); Clear();
     }
@@ -98,7 +102,7 @@ internal sealed class MainForm : Form
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
 
@@ -128,11 +132,23 @@ internal sealed class MainForm : Form
         scroll.Controls.Add(form); outer.Controls.Add(scroll, 0, 1);
 
         outer.Controls.Add(DeveloperTheme.Label("PURCHASED SERVICES", true, DeveloperTheme.Orange), 0, 2);
-        var services = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(4, 3, 0, 3) };
+        var services = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Padding = new Padding(4, 3, 0, 3) };
         services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); services.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        services.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); services.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        foreach (var box in new[] { _accounting, _payroll, _scheduling, _active }) { box.Dock = DockStyle.Fill; box.Margin = new Padding(2); }
-        services.Controls.Add(_accounting, 0, 0); services.Controls.Add(_payroll, 1, 0); services.Controls.Add(_scheduling, 0, 1); services.Controls.Add(_active, 1, 1); outer.Controls.Add(services, 0, 3);
+        services.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); services.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); services.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        foreach (var box in new[] { _accounting, _payroll, _scheduling, _monthlyReports, _active }) { box.Dock = DockStyle.Fill; box.Margin = new Padding(2); }
+        services.Controls.Add(_accounting, 0, 0); services.Controls.Add(_payroll, 1, 0);
+        services.Controls.Add(_scheduling, 0, 1); services.Controls.Add(_monthlyReports, 1, 1);
+        var reportSettings = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(0, 2, 0, 0) };
+        reportSettings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
+        reportSettings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        reportSettings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 122));
+        reportSettings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+        reportSettings.Controls.Add(DeveloperTheme.Label("REPORT EMAIL", true), 0, 0);
+        reportSettings.Controls.Add(_monthlyReportEmail, 1, 0);
+        reportSettings.Controls.Add(DeveloperTheme.Label("SEND ON DAY", true), 2, 0);
+        reportSettings.Controls.Add(_monthlyReportDay, 3, 0);
+        services.Controls.Add(reportSettings, 0, 2); services.SetColumnSpan(reportSettings, 2);
+        outer.Controls.Add(services, 0, 3);
         var notice = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = DeveloperTheme.PaleBlue, Padding = new Padding(7, 2, 7, 2) };
         notice.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); notice.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
         notice.Controls.Add(DeveloperTheme.Label("Payroll state is developer-assigned and license-locked; the client cannot change it.", false, DeveloperTheme.Blue), 0, 0);
@@ -182,6 +198,11 @@ internal sealed class MainForm : Form
                 _payrollState.SelectedItem = state;
         };
         _payrollState.SelectedIndexChanged += (_, _) => UpdatePayrollTaxStatus();
+        _monthlyReports.CheckedChanged += (_, _) =>
+        {
+            _monthlyReportEmail.Enabled = _monthlyReports.Checked;
+            _monthlyReportDay.Enabled = _monthlyReports.Checked;
+        };
         foreach (var field in new[] {_server,_username,_password})
             field.TextChanged += (_,_) => { _service=null; _connection.Text="●  Connection changed"; _connection.ForeColor=DeveloperTheme.Muted; };
     }
@@ -212,7 +233,7 @@ internal sealed class MainForm : Form
     private void LoadSelected()
     {
         if(_grid.CurrentRow?.Cells[nameof(ClientAccount.CustomerId)].Value is not int id) return; var item=_accounts.FirstOrDefault(x=>x.CustomerId==id); if(item is null)return;
-        _customerId=item.CustomerId; _licenseId=item.LicenseId; _business.Text=item.BusinessName; _owner.Text=item.OwnerName; _email.Text=item.Email; _phone.Text=item.Phone; _guid.Text=item.StoreGuid; _zip.Text=item.StoreZip; _payrollState.SelectedItem=string.IsNullOrWhiteSpace(item.PayrollState)?StateFromStoreGuid(item.StoreGuid):item.PayrollState; _address.Text=item.StoreAddress; _database.Text=item.DatabaseName; _pcs.Value=item.MaxDevices; _businesses.Value=item.MaxBusinesses; _monthlyFee.Value=item.MonthlyFee; _expires.Value=item.ExpiresDate; _subscription.Text=item.SubscriptionKey; _payroll.Checked=Has(item,"Payroll"); _scheduling.Checked=Has(item,"Scheduling"); _active.Checked=item.IsActive;
+        _customerId=item.CustomerId; _licenseId=item.LicenseId; _business.Text=item.BusinessName; _owner.Text=item.OwnerName; _email.Text=item.Email; _phone.Text=item.Phone; _guid.Text=item.StoreGuid; _zip.Text=item.StoreZip; _payrollState.SelectedItem=string.IsNullOrWhiteSpace(item.PayrollState)?StateFromStoreGuid(item.StoreGuid):item.PayrollState; _address.Text=item.StoreAddress; _database.Text=item.DatabaseName; _pcs.Value=item.MaxDevices; _businesses.Value=item.MaxBusinesses; _monthlyFee.Value=item.MonthlyFee; _expires.Value=item.ExpiresDate; _subscription.Text=item.SubscriptionKey; _payroll.Checked=Has(item,"Payroll"); _scheduling.Checked=Has(item,"Scheduling"); _monthlyReports.Checked=Has(item,"MonthlyReports"); _monthlyReportEmail.Text=item.MonthlyReportEmail; _monthlyReportDay.Value=Math.Clamp(item.MonthlyReportDay,1,28); _active.Checked=item.IsActive;
         _editorMode.Text="EDIT EXISTING CLIENT ACCOUNT"; _editorMode.ForeColor=DeveloperTheme.Blue;
         _selectedLicense.Text=$"SELECTED: {item.StoreGuid}   •   PAYROLL STATE: {item.PayrollState}   •   SERVICES: {item.EnabledServices}";
         _selectedLicense.ForeColor=Has(item,"Payroll") || Has(item,"Scheduling") ? DeveloperTheme.Green : DeveloperTheme.OrangeDark;
@@ -230,18 +251,18 @@ internal sealed class MainForm : Form
         if (_customerId <= 0 || _licenseId <= 0) { SetStatus("Select the existing client account in Client Directory first.", true); return; }
         try
         {
-            _service.UpdateServices(_customerId, _licenseId, Services(), SelectedPayrollState());
+            _service.UpdateServices(_customerId, _licenseId, Services(), SelectedPayrollState(), _monthlyReportEmail.Text, (int)_monthlyReportDay.Value);
             var client = _business.Text.Trim();
             RefreshAccounts();
             SetStatus($"Purchased services updated for {client}. Open the License Generator and renew the same PC license.", false);
         }
         catch (Exception ex) { SetStatus(ex.Message, true); }
     }
-    private ClientAccount ReadForm() => new(_customerId,_licenseId,_business.Text.Trim(),_owner.Text.Trim(),_email.Text.Trim(),_phone.Text.Trim(),_guid.Text.Trim(),_zip.Text.Trim(),_address.Text.Trim(),_database.Text.Trim(),_subscription.Text.Trim(),(int)_pcs.Value,(int)_businesses.Value,_monthlyFee.Value,_expires.Value.Date,Services(),_active.Checked,SelectedPayrollState());
-    private string Services() => string.Join(',',new[]{"Accounting",_payroll.Checked?"Payroll":"",_scheduling.Checked?"Scheduling":""}.Where(x=>x.Length>0));
+    private ClientAccount ReadForm() => new(_customerId,_licenseId,_business.Text.Trim(),_owner.Text.Trim(),_email.Text.Trim(),_phone.Text.Trim(),_guid.Text.Trim(),_zip.Text.Trim(),_address.Text.Trim(),_database.Text.Trim(),_subscription.Text.Trim(),(int)_pcs.Value,(int)_businesses.Value,_monthlyFee.Value,_expires.Value.Date,Services(),_active.Checked,SelectedPayrollState(),_monthlyReportEmail.Text.Trim(),(int)_monthlyReportDay.Value);
+    private string Services() => string.Join(',',new[]{"Accounting",_payroll.Checked?"Payroll":"",_scheduling.Checked?"Scheduling":"",_monthlyReports.Checked?"MonthlyReports":""}.Where(x=>x.Length>0));
     private string SelectedPayrollState() => (_payrollState.SelectedItem?.ToString() ?? "").Trim().ToUpperInvariant();
     private static bool Has(ClientAccount item,string service)=>item.EnabledServices.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Contains(service,StringComparer.OrdinalIgnoreCase);
-    private void Clear(){_customerId=0;_licenseId=0;_grid.ClearSelection();foreach(var box in new[]{_business,_owner,_email,_phone,_guid,_zip,_address,_subscription,_addressState})box.Clear();_payrollState.SelectedIndex=-1;_database.Text="";_pcs.Value=1;_businesses.Value=1;_monthlyFee.Value=0;_expires.Value=DateTime.Today.AddMonths(1);_payroll.Checked=false;_scheduling.Checked=false;_active.Checked=true;_editorMode.Text="SELECT A CLIENT FROM THE DIRECTORY";_editorMode.ForeColor=DeveloperTheme.Muted;_selectedLicense.Text="SELECT AN EXISTING ACCOUNT TO EDIT, OR CLICK NEW CLIENT";_selectedLicense.ForeColor=DeveloperTheme.Muted;UpdatePayrollTaxStatus();SetStatus("Connect, then select a client or click NEW CLIENT.",false);}
+    private void Clear(){_customerId=0;_licenseId=0;_grid.ClearSelection();foreach(var box in new[]{_business,_owner,_email,_phone,_guid,_zip,_address,_subscription,_addressState,_monthlyReportEmail})box.Clear();_payrollState.SelectedIndex=-1;_database.Text="";_pcs.Value=1;_businesses.Value=1;_monthlyFee.Value=0;_expires.Value=DateTime.Today.AddMonths(1);_payroll.Checked=false;_scheduling.Checked=false;_monthlyReports.Checked=false;_monthlyReportDay.Value=3;_active.Checked=true;_editorMode.Text="SELECT A CLIENT FROM THE DIRECTORY";_editorMode.ForeColor=DeveloperTheme.Muted;_selectedLicense.Text="SELECT AN EXISTING ACCOUNT TO EDIT, OR CLICK NEW CLIENT";_selectedLicense.ForeColor=DeveloperTheme.Muted;UpdatePayrollTaxStatus();SetStatus("Connect, then select a client or click NEW CLIENT.",false);}
 
     private void OpenNewClientAccount()
     {

@@ -78,7 +78,15 @@ internal sealed partial class MainForm : Form
         {
             await LoadStoresAsync();
             ShowModule("Dashboard");
+            _ = BeginMonthlyReportDeliveryAsync();
         };
+    }
+
+    private async Task BeginMonthlyReportDeliveryAsync()
+    {
+        var message = await MonthlyReportDeliveryService.TrySendDueAsync(_reportService, _paths);
+        if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
+            BeginInvoke(() => _status.Text = message);
     }
 
     private AppDbContext CreateDb() => _storeConnections.CreateDbContext();

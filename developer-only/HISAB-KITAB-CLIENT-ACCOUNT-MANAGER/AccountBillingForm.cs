@@ -25,6 +25,7 @@ internal sealed class AccountBillingForm : Form
     private readonly NumericUpDown _accountingRate = MonthlyRate();
     private readonly NumericUpDown _payrollRate = MonthlyRate();
     private readonly NumericUpDown _schedulingRate = MonthlyRate();
+    private readonly NumericUpDown _monthlyReportsRate = MonthlyRate();
     private ClientAccount? _account;
     private AccountInvoice? _invoice;
 
@@ -45,6 +46,7 @@ internal sealed class AccountBillingForm : Form
         _accountingRate.ValueChanged += (_, _) => UpdateMonthlyLabel();
         _payrollRate.ValueChanged += (_, _) => UpdateMonthlyLabel();
         _schedulingRate.ValueChanged += (_, _) => UpdateMonthlyLabel();
+        _monthlyReportsRate.ValueChanged += (_, _) => UpdateMonthlyLabel();
         ConfigureGrids();
         Controls.Add(BuildLayout());
         Shown += (_, _) => LoadAccounts();
@@ -91,7 +93,7 @@ internal sealed class AccountBillingForm : Form
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 232));
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         var heading = DeveloperTheme.Label("CLIENT ACCOUNTS", true, DeveloperTheme.Orange);
@@ -113,10 +115,11 @@ internal sealed class AccountBillingForm : Form
 
     private Control BuildServicePriceEditor()
     {
-        var card = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 2, Padding = new Padding(8), BackColor = DeveloperTheme.PaleBlue };
+        var card = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 6, ColumnCount = 2, Padding = new Padding(8), BackColor = DeveloperTheme.PaleBlue };
         card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
@@ -128,9 +131,10 @@ internal sealed class AccountBillingForm : Form
         AddRateRow(card, 1, "CORE ACCOUNTING", _accountingRate);
         AddRateRow(card, 2, "PAYROLL ADD-ON", _payrollRate);
         AddRateRow(card, 3, "SCHEDULING ADD-ON", _schedulingRate);
+        AddRateRow(card, 4, "AUTOMATIC MONTHLY REPORTS", _monthlyReportsRate);
         var help = DeveloperTheme.Label("Older accounts without saved pricing can be entered here before generating their first invoice.", false, DeveloperTheme.Muted);
         help.Font = DeveloperTheme.Body(8);
-        card.Controls.Add(help, 0, 4);
+        card.Controls.Add(help, 0, 5);
         card.SetColumnSpan(help, 2);
         return card;
     }
@@ -316,6 +320,7 @@ internal sealed class AccountBillingForm : Form
         LoadRate(_accountingRate, prices.GetValueOrDefault("Accounting"));
         LoadRate(_payrollRate, prices.GetValueOrDefault("Payroll"));
         LoadRate(_schedulingRate, prices.GetValueOrDefault("Scheduling"));
+        LoadRate(_monthlyReportsRate, prices.GetValueOrDefault("MonthlyReports"));
         UpdateMonthlyLabel();
     }
 
@@ -328,7 +333,8 @@ internal sealed class AccountBillingForm : Form
             {
                 new ServicePrice("Accounting", _accountingRate.Enabled, _accountingRate.Value),
                 new ServicePrice("Payroll", _payrollRate.Enabled, _payrollRate.Value),
-                new ServicePrice("Scheduling", _schedulingRate.Enabled, _schedulingRate.Value)
+                new ServicePrice("Scheduling", _schedulingRate.Enabled, _schedulingRate.Value),
+                new ServicePrice("MonthlyReports", _monthlyReportsRate.Enabled, _monthlyReportsRate.Value)
             };
             _service.SaveServicePrices(_account, prices);
             var id = _account.CustomerId;
@@ -343,7 +349,7 @@ internal sealed class AccountBillingForm : Form
     }
 
     private void UpdateMonthlyLabel() =>
-        _monthly.Text = $"{EnabledRate(_accountingRate) + EnabledRate(_payrollRate) + EnabledRate(_schedulingRate):C2} TOTAL MONTHLY CHARGE";
+        _monthly.Text = $"{EnabledRate(_accountingRate) + EnabledRate(_payrollRate) + EnabledRate(_schedulingRate) + EnabledRate(_monthlyReportsRate):C2} TOTAL MONTHLY CHARGE";
 
     private void CreateInvoice()
     {
