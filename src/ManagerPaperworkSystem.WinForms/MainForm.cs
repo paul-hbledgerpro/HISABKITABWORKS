@@ -2032,72 +2032,440 @@ internal sealed partial class MainForm : Form
 
     private Control BuildOperationsHub()
     {
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = WinTheme.Bg, Padding = new Padding(4, 2, 4, 4) };
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 78));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 22));
-
-        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, BackColor = WinTheme.Bg, Margin = Padding.Empty };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
-        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        root.Controls.Add(grid, 0, 0);
-
-        if (_session.IsAdmin)
+        var snapshot = LoadOperationsHubSnapshot();
+        var now = DateTime.Today;
+        var root = new TableLayoutPanel
         {
-            AddOperationHubCard(grid, 0, "\uE716", "Vendors & Purposes", "Active", WinTheme.Green,
-                "Search vendor / purpose...", "All",
-                new[] { "Name", "Type", "Status" },
-                () => SafeHubRows(() => { using var db = CreateDb(); return GetVendorPurposePreviewRows(db); }),
-                new[] { ("Manage", (Func<Task>)(() => { ShowModule("Vendors & Purposes"); return Task.CompletedTask; }), false), ("Add New", (Func<Task>)(() => { ShowModule("Vendors & Purposes"); return Task.CompletedTask; }), true) });
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(2, 0, 2, 4)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            AddOperationHubCard(grid, 1, "\uE7BF", "Purchases", "This Month", WinTheme.Green,
-                "Search invoice / vendor...", "All",
-                new[] { "Date", "Vendor", "Amount", "Status" },
-                () => SafeHubRows(() => { using var db = CreateDb(); return GetPurchasePreviewRows(db); }),
-                new[] { ("View All", (Func<Task>)(() => { ShowModule("Purchases"); return Task.CompletedTask; }), false), ("New Purchase", (Func<Task>)(async () => await ImportPurchaseInvoiceAsync(() => Task.CompletedTask)), true) });
+        var toolbar = WinTheme.BorderedPanel(10);
+        toolbar.Dock = DockStyle.Fill;
+        toolbar.Margin = new Padding(6, 0, 6, 8);
+        var toolbarLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = Color.White
+        };
+        toolbarLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        toolbarLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+        toolbarLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        toolbarLayout.Controls.Add(new Label
+        {
+            Text = "PRIORITY WORKFLOWS\r\nYour six most-used areas, live totals, and direct actions in one place.",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.BoldFont(11),
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 0);
+        toolbarLayout.Controls.Add(new Label
+        {
+            Text = $"\u25CF  LIVE STORE DATA\r\nAs of {now:MMMM d, yyyy}",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Green,
+            Font = WinTheme.BoldFont(9),
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 1, 0);
+        var refresh = WinTheme.Button("REFRESH HUB", true);
+        refresh.Dock = DockStyle.Fill;
+        refresh.Margin = new Padding(4, 6, 0, 6);
+        refresh.Click += (_, _) => ShowModule("Operations Hub");
+        toolbarLayout.Controls.Add(refresh, 2, 0);
+        toolbar.Controls.Add(toolbarLayout);
+        root.Controls.Add(toolbar, 0, 0);
 
-            AddOperationHubCard(grid, 2, "\uE825", "Bank Statement", "This Month", WinTheme.Green,
-                "Search account / ref...", "All Accounts",
-                new[] { "Date", "Description", "Debit", "Credit", "Category" },
-                () => SafeHubRows(GetBankPreviewRows),
-                new[] { ("Reconcile", (Func<Task>)(() => { ShowModule("Bank Statement"); return Task.CompletedTask; }), false), ("Import Statement", (Func<Task>)(async () => await ImportBankStatementAsync(DateTime.Today.Month, DateTime.Today.Year, () => Task.CompletedTask)), true) });
+        var grid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 2,
+            BackColor = WinTheme.Bg,
+            Margin = Padding.Empty
+        };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.334f));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
 
-            AddOperationHubCard(grid, 3, "\uE8B7", "Product Costs", "Live", WinTheme.Green,
-                "Search item / category...", "All",
-                new[] { "Item", "SKU", "Cost", "Vendor", "Date" },
-                () => SafeHubRows(() => { using var db = CreateDb(); return GetProductCostPreviewRows(db); }),
-                new[] { ("View Costs", (Func<Task>)(() => { ShowModule("Product Costs"); return Task.CompletedTask; }), false), ("Update Costs", (Func<Task>)(async () => await ImportProductCostsAsync(() => Task.CompletedTask)), true) });
+        var shiftCard = BuildOperationsCommandCard(
+            "\uE8C7", "Shift Cash Log", "Daily register and cash-drop activity", "TODAY",
+            "CASH DROP RECEIVED", snapshot.TodayCashDrop.ToString("C2"), WinTheme.Blue,
+            "SHIFTS ENTERED", snapshot.TodayShiftCount.ToString("N0"),
+            "NET SALES", snapshot.TodayNetSales.ToString("C2"),
+            "OPEN SHIFT LOG", () => { ShowModule("Shift Cash Drop"); return Task.CompletedTask; });
+        grid.Controls.Add(shiftCard.Card, 0, 0);
 
-            AddOperationHubCard(grid, 4, "\uE7BA", "Price Alerts", "Alerts", WinTheme.Red,
-                "Search item / vendor...", "All",
-                new[] { "Item", "Vendor", "Old", "New", "Status" },
-                () => SafeHubRows(() => { using var db = CreateDb(); return GetPriceAlertPreviewRows(db); }),
-                new[] { ("View Alerts", (Func<Task>)(() => { ShowModule("Price Alerts"); return Task.CompletedTask; }), false), ("Configure Alerts", (Func<Task>)(async () => { await _purchaseService.MarkAllAlertsReadAsync(_currentStoreId); ShowModule("Operations Hub"); }), true) });
+        var cashCard = BuildOperationsCommandCard(
+            "\uEAFD", "Cash On Hand", "Cash balance, additions, and payouts", "CURRENT",
+            "AVAILABLE BALANCE", snapshot.CashBalance.ToString("C2"), snapshot.CashBalance >= 0 ? WinTheme.Green : WinTheme.Red,
+            "ADDED THIS MONTH", snapshot.MonthCashAdded.ToString("C2"),
+            "PAYOUTS THIS MONTH", snapshot.MonthCashPayouts.ToString("C2"),
+            "OPEN CASH ON HAND", () => { ShowModule("Cash On Hand"); return Task.CompletedTask; });
+        grid.Controls.Add(cashCard.Card, 1, 0);
 
-            AddOperationHubCard(grid, 5, "\uE9D9", "Profit & Loss", "This Month", WinTheme.Green,
-                "Search group / account...", "All",
-                new[] { "Particulars", "Amount", "Status" },
-                () => SafeHubRows(() => { using var db = CreateDb(); return GetProfitLossPreviewRows(db); }),
-                new[] { ("View Statement", (Func<Task>)(() => { ShowModule("Profit & Loss"); return Task.CompletedTask; }), false), ("Analyse", (Func<Task>)(async () => await GenerateProfitLossPdfAsync()), true) });
+        var checksCard = BuildOperationsCommandCard(
+            "\uE8A1", "Check Payout", "Vendor checks and clearing status", "ACTION",
+            "UNCLEARED AMOUNT", snapshot.UnclearedCheckAmount.ToString("C2"), snapshot.UnclearedCheckCount > 0 ? WinTheme.Copper : WinTheme.Green,
+            "UNCLEARED CHECKS", snapshot.UnclearedCheckCount.ToString("N0"),
+            "PAID THIS MONTH", snapshot.MonthCheckPayouts.ToString("C2"),
+            "OPEN CHECK PAYOUT", () => { ShowModule("Check Payout"); return Task.CompletedTask; });
+        grid.Controls.Add(checksCard.Card, 2, 0);
 
-            root.Controls.Add(BuildOperationHubReportsStrip(), 0, 1);
+        var purchasesCard = BuildOperationsCommandCard(
+            "\uE7BF", "Purchases", "Vendor invoices and inventory spending", "THIS MONTH",
+            "PURCHASE TOTAL", snapshot.MonthPurchases.ToString("C2"), WinTheme.Blue,
+            "INVOICES", snapshot.MonthPurchaseCount.ToString("N0"),
+            "LATEST ENTRY", snapshot.LatestPurchaseDate,
+            "OPEN PURCHASES", () => { ShowModule("Purchases"); return Task.CompletedTask; },
+            "IMPORT INVOICE", async () => await ImportPurchaseInvoiceAsync(() =>
+            {
+                ShowModule("Operations Hub");
+                return Task.CompletedTask;
+            }));
+        grid.Controls.Add(purchasesCard.Card, 0, 1);
+
+        var bankCard = BuildOperationsCommandCard(
+            "\uE825", "Bank Statement", "Import, categorize, and reconcile activity", "THIS MONTH",
+            "NET MOVEMENT", "Loading...", WinTheme.Blue,
+            "TRANSACTIONS", "\u2014",
+            "LATEST ACTIVITY", "\u2014",
+            "OPEN BANK STATEMENT", () => { ShowModule("Bank Statement"); return Task.CompletedTask; },
+            "IMPORT STATEMENT", async () => await ImportBankStatementAsync(now.Month, now.Year, () =>
+            {
+                ShowModule("Operations Hub");
+                return Task.CompletedTask;
+            }));
+        grid.Controls.Add(bankCard.Card, 1, 1);
+
+        var profitCard = BuildOperationsCommandCard(
+            "\uE9D9", "Profit & Loss", "Current-month business performance", "THIS MONTH",
+            "NET PROFIT", snapshot.MonthNetProfit.ToString("C2"), snapshot.MonthNetProfit >= 0 ? WinTheme.Green : WinTheme.Red,
+            "NET SALES", snapshot.MonthNetSales.ToString("C2"),
+            "TOTAL OUTFLOW", snapshot.MonthOutflow.ToString("C2"),
+            "OPEN PROFIT & LOSS", () => { ShowModule("Profit & Loss"); return Task.CompletedTask; },
+            "CREATE PDF", GenerateProfitLossPdfAsync);
+        grid.Controls.Add(profitCard.Card, 2, 1);
+
+        root.Controls.Add(grid, 0, 1);
+        root.HandleCreated += async (_, _) =>
+        {
+            try
+            {
+                var rows = await LoadBankStatementRowsAsync(now.Month, now.Year);
+                if (root.IsDisposed || bankCard.Card.IsDisposed)
+                    return;
+
+                bankCard.MetricValue.Text = rows.Sum(x => x.Credit - x.Debit).ToString("C2");
+                bankCard.MetricValue.ForeColor = rows.Sum(x => x.Credit - x.Debit) >= 0 ? WinTheme.Green : WinTheme.Red;
+                bankCard.LeftFactValue.Text = rows.Count.ToString("N0");
+                bankCard.RightFactValue.Text = rows.Count == 0 ? "No activity" : rows.Max(x => x.Date).ToString("M/d/yyyy");
+            }
+            catch
+            {
+                if (!root.IsDisposed && !bankCard.Card.IsDisposed)
+                {
+                    bankCard.MetricValue.Text = "Open to review";
+                    bankCard.MetricValue.ForeColor = WinTheme.Muted;
+                    bankCard.LeftFactValue.Text = "\u2014";
+                    bankCard.RightFactValue.Text = "\u2014";
+                }
+            }
+        };
+
+        return ModuleShell("\uECA5", "Operation Hub", "Priority operations, live financial summaries, and quick actions.", root);
+    }
+
+    private OperationsHubSnapshot LoadOperationsHubSnapshot()
+    {
+        try
+        {
+            var now = DateTime.Today;
+            using var db = CreateDb();
+            var shifts = EffectiveRows(
+                db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+            var cash = EffectiveRows(
+                db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+            var checks = EffectiveRows(
+                db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+            var purchases = db.PurchaseInvoices.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId)
+                .ToList();
+
+            var todayShifts = shifts.Where(x => x.Date == DateOnly.FromDateTime(now)).ToList();
+            var monthShifts = shifts.Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).ToList();
+            var monthCash = cash.Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).ToList();
+            var monthChecks = checks.Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).ToList();
+            var monthPurchases = purchases.Where(x => x.InvoiceDate.Month == now.Month && x.InvoiceDate.Year == now.Year).ToList();
+
+            decimal payroll = 0;
+            try
+            {
+                payroll = db.PayrollEntries.AsNoTracking()
+                    .Where(x => x.PayrollRun!.StoreId == _currentStoreId
+                                && x.PayrollRun.Status == PayrollRunStatus.Finalized
+                                && x.PayrollRun.PayDate.Month == now.Month
+                                && x.PayrollRun.PayDate.Year == now.Year)
+                    .Sum(x => (decimal?)x.GrossPay)
+                    .GetValueOrDefault();
+            }
+            catch
+            {
+                // Payroll is an optional licensed service and older databases may not have its tables yet.
+            }
+
+            var netSales = monthShifts.Sum(x => x.NetSales);
+            var purchaseTotal = monthPurchases.Sum(x => x.Total);
+            var operatingExpenses = monthCash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount)
+                                    + monthChecks.Sum(x => x.CheckAmount)
+                                    + payroll;
+
+            return new OperationsHubSnapshot(
+                todayShifts.Sum(x => x.CashDropReceived),
+                todayShifts.Count,
+                todayShifts.Sum(x => x.NetSales),
+                cash.Sum(x => x.CashAdded - x.PayoutAmount),
+                monthCash.Sum(x => x.CashAdded),
+                monthCash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount),
+                checks.Count(x => !x.Cleared),
+                checks.Where(x => !x.Cleared).Sum(x => x.CheckAmount),
+                monthChecks.Sum(x => x.CheckAmount),
+                monthPurchases.Count,
+                purchaseTotal,
+                monthPurchases.Count == 0 ? "No entries" : monthPurchases.Max(x => x.InvoiceDate).ToString("M/d/yyyy"),
+                netSales,
+                purchaseTotal + operatingExpenses,
+                netSales - purchaseTotal - operatingExpenses);
+        }
+        catch
+        {
+            return OperationsHubSnapshot.Empty;
+        }
+    }
+
+    private OperationsCommandCard BuildOperationsCommandCard(
+        string glyph,
+        string title,
+        string subtitle,
+        string badge,
+        string metricCaption,
+        string metric,
+        Color metricColor,
+        string leftFactCaption,
+        string leftFact,
+        string rightFactCaption,
+        string rightFact,
+        string primaryText,
+        Func<Task> primaryAction,
+        string? secondaryText = null,
+        Func<Task>? secondaryAction = null)
+    {
+        var card = WinTheme.BorderedPanel(0);
+        card.Dock = DockStyle.Fill;
+        card.Margin = new Padding(6);
+
+        var stripe = new Panel { Dock = DockStyle.Left, Width = 5, BackColor = WinTheme.Copper };
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            BackColor = Color.White,
+            Padding = new Padding(18, 12, 14, 10)
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+
+        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Color.White };
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
+        var iconHost = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 245, 234), Margin = new Padding(0, 0, 8, 8) };
+        iconHost.Controls.Add(new Label
+        {
+            Text = glyph,
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Copper,
+            Font = WinTheme.IconFont(20),
+            TextAlign = ContentAlignment.MiddleCenter
+        });
+        heading.Controls.Add(iconHost, 0, 0);
+        heading.Controls.Add(new Label
+        {
+            Text = $"{title}\r\n{subtitle}",
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.BoldFont(11),
+            TextAlign = ContentAlignment.TopLeft,
+            AutoEllipsis = true
+        }, 1, 0);
+        heading.Controls.Add(new Label
+        {
+            Text = badge,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(4, 4, 0, 18),
+            BackColor = Color.FromArgb(232, 247, 239),
+            ForeColor = WinTheme.Green,
+            Font = WinTheme.BoldFont(8),
+            TextAlign = ContentAlignment.MiddleCenter,
+            AutoEllipsis = true
+        }, 2, 0);
+        layout.Controls.Add(heading, 0, 0);
+
+        var metricPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.White };
+        metricPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        metricPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        metricPanel.Controls.Add(new Label
+        {
+            Text = metricCaption,
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BoldFont(8.5f),
+            TextAlign = ContentAlignment.BottomLeft
+        }, 0, 0);
+        var metricValue = new Label
+        {
+            Text = metric,
+            Dock = DockStyle.Fill,
+            ForeColor = metricColor,
+            Font = WinTheme.HeaderFont(20),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
+        };
+        metricPanel.Controls.Add(metricValue, 0, 1);
+        layout.Controls.Add(metricPanel, 0, 1);
+
+        var facts = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = WinTheme.Panel2,
+            Padding = new Padding(10, 5, 10, 5),
+            Margin = new Padding(0, 3, 0, 7)
+        };
+        facts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        facts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        var left = BuildOperationsFact(leftFactCaption, leftFact);
+        var right = BuildOperationsFact(rightFactCaption, rightFact);
+        facts.Controls.Add(left.Panel, 0, 0);
+        facts.Controls.Add(right.Panel, 1, 0);
+        layout.Controls.Add(facts, 0, 2);
+
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 1, BackColor = Color.White, Margin = Padding.Empty };
+        actions.ColumnCount = secondaryAction is null ? 1 : 2;
+        if (secondaryAction is null)
+        {
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         }
         else
         {
-            AddOperationHubCard(grid, 0, "\uE8B7", "Product Costs", "Live", WinTheme.Green,
-                "Search item / category...", "All",
-                new[] { "Item", "SKU", "Cost", "Vendor", "Date" },
-                () => SafeHubRows(() => { using var db = CreateDb(); return GetProductCostPreviewRows(db); }),
-                new[] { ("View Costs", (Func<Task>)(() => { ShowModule("Product Costs"); return Task.CompletedTask; }), false) });
-            AddOperationHubCard(grid, 1, "\uE7BA", "Price Alerts", "Alerts", WinTheme.Red,
-                "Search item / vendor...", "All",
-                new[] { "Item", "Vendor", "Old", "New", "Status" },
-                () => SafeHubRows(() => { using var db = CreateDb(); return GetPriceAlertPreviewRows(db); }),
-                new[] { ("View Alerts", (Func<Task>)(() => { ShowModule("Price Alerts"); return Task.CompletedTask; }), false) });
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
         }
-        return ModuleShell("\uECA5", "Operation Hub", "Overview of key operations and quick actions.", root);
+
+        var primary = WinTheme.Button(primaryText, true);
+        primary.Dock = DockStyle.Fill;
+        primary.Margin = new Padding(0, 3, secondaryAction is null ? 0 : 4, 0);
+        ConfigureOperationsAction(primary, title, primaryAction);
+        actions.Controls.Add(primary, 0, 0);
+        if (secondaryAction is not null)
+        {
+            var secondary = WinTheme.Button(secondaryText ?? "MORE");
+            secondary.Dock = DockStyle.Fill;
+            secondary.Margin = new Padding(4, 3, 0, 0);
+            ConfigureOperationsAction(secondary, title, secondaryAction);
+            actions.Controls.Add(secondary, 1, 0);
+        }
+        layout.Controls.Add(actions, 0, 3);
+
+        card.Controls.Add(layout);
+        card.Controls.Add(stripe);
+        return new OperationsCommandCard(card, metricValue, left.Value, right.Value);
+    }
+
+    private static (Control Panel, Label Value) BuildOperationsFact(string caption, string value)
+    {
+        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = WinTheme.Panel2 };
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
+        panel.Controls.Add(new Label
+        {
+            Text = caption,
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BoldFont(7.5f),
+            TextAlign = ContentAlignment.BottomLeft,
+            AutoEllipsis = true
+        }, 0, 0);
+        var valueLabel = new Label
+        {
+            Text = value,
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.BoldFont(10),
+            TextAlign = ContentAlignment.TopLeft,
+            AutoEllipsis = true
+        };
+        panel.Controls.Add(valueLabel, 0, 1);
+        return (panel, valueLabel);
+    }
+
+    private void ConfigureOperationsAction(Button button, string section, Func<Task> action)
+    {
+        button.Click += async (_, _) =>
+        {
+            button.Enabled = false;
+            try
+            {
+                await action();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), section, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (!button.IsDisposed)
+                    button.Enabled = true;
+            }
+        };
+    }
+
+    private sealed record OperationsCommandCard(Control Card, Label MetricValue, Label LeftFactValue, Label RightFactValue);
+
+    private sealed record OperationsHubSnapshot(
+        decimal TodayCashDrop,
+        int TodayShiftCount,
+        decimal TodayNetSales,
+        decimal CashBalance,
+        decimal MonthCashAdded,
+        decimal MonthCashPayouts,
+        int UnclearedCheckCount,
+        decimal UnclearedCheckAmount,
+        decimal MonthCheckPayouts,
+        int MonthPurchaseCount,
+        decimal MonthPurchases,
+        string LatestPurchaseDate,
+        decimal MonthNetSales,
+        decimal MonthOutflow,
+        decimal MonthNetProfit)
+    {
+        public static OperationsHubSnapshot Empty { get; } = new(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "No entries", 0, 0, 0);
     }
 
     private static IReadOnlyList<string[]> SafeHubRows(Func<IReadOnlyList<string[]>> load)
