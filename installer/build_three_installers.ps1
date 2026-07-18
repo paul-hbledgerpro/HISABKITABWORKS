@@ -127,6 +127,7 @@ function New-ClientUpdatePackage([string]$Version) {
         "ManagerPaperworkSystem.Core.dll",
         "ManagerPaperworkSystem.Data.dll",
         "ManagerPaperworkSystem.Reports.dll",
+        "bank-sync-service.url",
         "version.txt"
     )) {
         $entries.Add([pscustomobject]@{
@@ -142,7 +143,11 @@ function New-ClientUpdatePackage([string]$Version) {
         }
 
         foreach ($file in Get-ChildItem -LiteralPath $directory -File -Recurse) {
-            $relative = [IO.Path]::GetRelativePath($clientPublish, $file.FullName)
+            $publishPrefix = $clientPublish.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+            if (-not $file.FullName.StartsWith($publishPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to package a file outside the client publish folder: $($file.FullName)"
+            }
+            $relative = $file.FullName.Substring($publishPrefix.Length)
             $entries.Add([pscustomobject]@{
                 Source = $file.FullName
                 Entry = $relative.Replace('\', '/')
@@ -161,6 +166,7 @@ function New-ClientUpdatePackage([string]$Version) {
         throw "Automatic-update version mismatch. Expected $Version, found $versionText."
     }
 
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $stream = [IO.File]::Open($updateZip, [IO.FileMode]::CreateNew)
     try {
