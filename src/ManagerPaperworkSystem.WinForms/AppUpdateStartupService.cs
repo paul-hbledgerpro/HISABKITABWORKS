@@ -193,24 +193,24 @@ internal static class AppUpdateStartupService
             return Task.CompletedTask;
         }
 
-        using var download = new AppUpdateDownloadForm(update, required);
-        if (download.ShowDialog(owner) != DialogResult.OK ||
-            string.IsNullOrWhiteSpace(download.DownloadedPackagePath))
-            return Task.CompletedTask;
-
         var appExe = Application.ExecutablePath;
         var startInfo = new ProcessStartInfo
         {
             FileName = updaterPath,
             WorkingDirectory = AppContext.BaseDirectory,
-            UseShellExecute = false
+            UseShellExecute = true,
+            Verb = "runas"
         };
-        startInfo.ArgumentList.Add("--zip");
-        startInfo.ArgumentList.Add(download.DownloadedPackagePath);
+        startInfo.ArgumentList.Add("--download-url");
+        startInfo.ArgumentList.Add(update.DownloadUrl);
+        startInfo.ArgumentList.Add("--version");
+        startInfo.ArgumentList.Add(update.Version);
         startInfo.ArgumentList.Add("--app");
         startInfo.ArgumentList.Add(appExe);
         startInfo.ArgumentList.Add("--pid");
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+        startInfo.ArgumentList.Add("--required");
+        startInfo.ArgumentList.Add(required ? "true" : "false");
         _ = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The updater could not be started.");
 
@@ -416,128 +416,5 @@ internal sealed class AppUpdatePromptForm : Form
         Controls.Add(root);
         AcceptButton = now;
         CancelButton = later;
-    }
-}
-
-internal sealed class AppUpdateDownloadForm : Form
-{
-    private readonly AvailableAppUpdate _update;
-    private readonly Label _status;
-    private readonly ProgressBar _progress;
-
-    public AppUpdateDownloadForm(AvailableAppUpdate update, bool required)
-    {
-        _update = update;
-        WinTheme.Apply(this);
-        Text = required ? "Installing Required Update" : "Downloading Software Update";
-        Icon = WinTheme.TryLoadIcon();
-        StartPosition = FormStartPosition.CenterParent;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        ClientSize = new Size(560, 190);
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ControlBox = false;
-        ShowInTaskbar = false;
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            RowCount = 3,
-            BackColor = WinTheme.Bg,
-            Padding = new Padding(24)
-        };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.Controls.Add(new Label
-        {
-            Text = $"PREPARING HISAB KITAB {update.Version}",
-            Dock = DockStyle.Fill,
-            ForeColor = WinTheme.Copper,
-            Font = WinTheme.HeaderFont(14),
-            TextAlign = ContentAlignment.MiddleLeft
-        }, 0, 0);
-        _progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
-        root.Controls.Add(_progress, 0, 1);
-        _status = new Label
-        {
-            Text = "Connecting to the update server...",
-            Dock = DockStyle.Fill,
-            ForeColor = WinTheme.BlueDark,
-            Font = WinTheme.BodyFont(10),
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        root.Controls.Add(_status, 0, 2);
-        Controls.Add(root);
-        Shown += async (_, _) => await DownloadAsync();
-    }
-
-    public string? DownloadedPackagePath { get; private set; }
-
-    private async Task DownloadAsync()
-    {
-        try
-        {
-            var destination = Path.Combine(
-                Path.GetTempPath(),
-                $"HISAB_KITAB_Update_{_update.Version}_{Guid.NewGuid():N}.zip");
-            using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-            client.DefaultRequestHeaders.UserAgent.Add(
-                new ProductInfoHeaderValue("HisabKitabWorks", "1.0"));
-            using var response = await client.GetAsync(
-                _update.DownloadUrl,
-                HttpCompletionOption.ResponseHeadersRead);
-            response.EnsureSuccessStatusCode();
-            var length = response.Content.Headers.ContentLength;
-            await using var input = await response.Content.ReadAsStreamAsync();
-            var buffer = new byte[81920];
-            long readTotal = 0;
-            await using (var output = new FileStream(
-                             destination,
-                             FileMode.CreateNew,
-                             FileAccess.Write,
-                             FileShare.None,
-                             81920,
-                             useAsync: true))
-            {
-                int read;
-                while ((read = await input.ReadAsync(buffer)) > 0)
-                {
-                    await output.WriteAsync(buffer.AsMemory(0, read));
-                    readTotal += read;
-                    if (length is > 0)
-                        _progress.Value = Math.Clamp((int)(readTotal * 100 / length.Value), 0, 100);
-                    _status.Text = length is > 0
-                        ? $"Downloading... {_progress.Value}%"
-                        : $"Downloading... {readTotal / 1024:N0} KB";
-                }
-                await output.FlushAsync();
-            }
-
-            if (readTotal < 1024)
-                throw new InvalidOperationException("The downloaded update package is incomplete.");
-            var signature = new byte[4];
-            await using (var verify = File.OpenRead(destination))
-                _ = await verify.ReadAsync(signature);
-            if (signature[0] != (byte)'P' || signature[1] != (byte)'K')
-                throw new InvalidOperationException("The downloaded file is not a valid update package.");
-            DownloadedPackagePath = destination;
-            _progress.Value = 100;
-            _status.Text = "Download complete. HISAB KITAB will close, update, and restart.";
-            DialogResult = DialogResult.OK;
-            Close();
-        }
-        catch (Exception ex)
-        {
-            _status.ForeColor = Color.Firebrick;
-            _status.Text = $"Update download failed: {AppBootstrap.RedactSensitiveText(ex.Message)}";
-            MessageBox.Show(
-                this,
-                _status.Text,
-                "Software Update",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-            DialogResult = DialogResult.Abort;
-            Close();
-        }
     }
 }

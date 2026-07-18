@@ -33,6 +33,8 @@ internal static class Program
             string? zipPath = GetArg(args, "--zip");
             string? appExe = GetArg(args, "--app");
             string? pidStr = GetArg(args, "--pid");
+            string? downloadUrl = GetArg(args, "--download-url");
+            string? targetVersion = GetArg(args, "--version");
 
             if (!string.IsNullOrWhiteSpace(zipPath) && !string.IsNullOrWhiteSpace(appExe))
             {
@@ -49,7 +51,11 @@ internal static class Program
                 if (File.Exists(candidate)) appExe = candidate;
             }
 
-            Application.Run(new UpdateManagerForm(appExe));
+            Application.Run(new UpdateManagerForm(
+                appExe,
+                downloadUrl,
+                targetVersion,
+                pidStr));
         }
         catch (Exception ex)
         {

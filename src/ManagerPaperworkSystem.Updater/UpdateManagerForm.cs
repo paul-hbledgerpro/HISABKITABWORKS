@@ -36,6 +36,9 @@ public class UpdateManagerForm : Form
     private static readonly Color RedColor = Color.FromArgb(239, 68, 68);
 
     private readonly string? _appExe;
+    private readonly string? _startupDownloadUrl;
+    private readonly string? _startupVersion;
+    private readonly int? _originatingProcessId;
     private string? _currentVersion;
     private string? _latestVersion;
     private string? _downloadUrl;
@@ -58,12 +61,37 @@ public class UpdateManagerForm : Form
     private TextBox _txtFilePath = null!;
     private Label _lblStatusDot = null!;
 
-    public UpdateManagerForm(string? appExe)
+    public UpdateManagerForm(
+        string? appExe,
+        string? startupDownloadUrl = null,
+        string? startupVersion = null,
+        string? originatingProcessId = null)
     {
         _appExe = appExe;
+        _startupDownloadUrl = startupDownloadUrl;
+        _startupVersion = startupVersion;
+        _originatingProcessId = int.TryParse(originatingProcessId, out var pid)
+            ? pid
+            : null;
         DetectCurrentVersion();
         InitializeUI();
-        Shown += async (_, _) => await CheckForUpdates();
+        Shown += async (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(_startupDownloadUrl))
+            {
+                _downloadUrl = _startupDownloadUrl;
+                _latestVersion = _startupVersion ?? "latest";
+                _pnlServerInfo.Visible = true;
+                _lblServerVer.Text = $"Installing Version: v{_latestVersion}";
+                _lblReleaseNotes.Text = "HISAB KITAB will close, then the update will download and install.";
+                _lblStatus.ForeColor = GreenColor;
+                _lblStatus.Text = "Update approved. Waiting for HISAB KITAB to close...";
+                await DownloadAndInstall();
+                return;
+            }
+
+            await CheckForUpdates();
+        };
     }
 
     private void DetectCurrentVersion()
@@ -346,14 +374,19 @@ public class UpdateManagerForm : Form
         _btnCheck.Enabled = false;
         _progress.Visible = true;
         _lblProgress.Visible = true;
-        _lblProgress.Text = "Downloading...";
+        _lblProgress.Text = "Closing HISAB KITAB...";
         _progress.Value = 0;
 
         try
         {
+            await WaitForMainAppToCloseAsync();
+            _lblProgress.Text = "Downloading update...";
+
             // Download zip
             var fileName = Path.GetFileName(new Uri(_downloadUrl).LocalPath);
-            var downloadPath = Path.Combine(Path.GetTempPath(), $"HisabKitab_{fileName}");
+            var downloadPath = Path.Combine(
+                Path.GetTempPath(),
+                $"HISAB_KITAB_Update_{Guid.NewGuid():N}_{fileName}");
 
             using var client = new HttpClient();
             client.Timeout = TimeSpan.FromMinutes(10);
@@ -363,32 +396,39 @@ public class UpdateManagerForm : Form
             response.EnsureSuccessStatusCode();
 
             var totalBytes = response.Content.Headers.ContentLength ?? -1;
-            using var contentStream = await response.Content.ReadAsStreamAsync();
-            using var fileStream = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-
-            var buffer = new byte[8192];
+            await using var contentStream = await response.Content.ReadAsStreamAsync();
             long totalRead = 0;
-            int bytesRead;
-
-            while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
+            await using (var fileStream = new FileStream(
+                             downloadPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             81920,
+                             true))
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                totalRead += bytesRead;
-                if (totalBytes > 0)
+                var buffer = new byte[81920];
+                int bytesRead;
+                while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
                 {
-                    var pct = (int)(totalRead * 100 / totalBytes);
-                    _progress.Value = Math.Min(pct, 100);
-                    _lblProgress.Text = $"Downloading... {pct}% ({totalRead / 1024}KB / {totalBytes / 1024}KB)";
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+                    totalRead += bytesRead;
+                    if (totalBytes > 0)
+                    {
+                        var pct = (int)(totalRead * 100 / totalBytes);
+                        _progress.Value = Math.Min(pct, 100);
+                        _lblProgress.Text =
+                            $"Downloading... {pct}% ({totalRead / 1024:N0} KB / {totalBytes / 1024:N0} KB)";
+                    }
                 }
+
+                await fileStream.FlushAsync();
             }
 
-            fileStream.Close();
-            _progress.Value = 100;
-            _lblProgress.Text = "Download complete. Closing main app and applying...";
+            if (totalRead < 1024)
+                throw new InvalidOperationException("The downloaded update package is incomplete.");
 
-            // Close main app
-            CloseMainApp();
-            Thread.Sleep(2000);
+            _progress.Value = 100;
+            _lblProgress.Text = "Download complete. Installing update...";
 
             // Apply update
             var installDir = !string.IsNullOrWhiteSpace(_appExe)
@@ -526,6 +566,29 @@ public class UpdateManagerForm : Form
             }
             catch { }
         }
+    }
+
+    private async Task WaitForMainAppToCloseAsync()
+    {
+        if (_originatingProcessId is int pid && pid != Environment.ProcessId)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                if (!process.HasExited)
+                {
+                    _lblProgress.Text = "Waiting for HISAB KITAB to close...";
+                    await Task.Run(() => process.WaitForExit(12000));
+                }
+            }
+            catch (ArgumentException)
+            {
+                // The originating application has already closed.
+            }
+        }
+
+        CloseMainApp();
+        await Task.Delay(750);
     }
 
     private static bool IsNewerVersion(string latest, string current)
