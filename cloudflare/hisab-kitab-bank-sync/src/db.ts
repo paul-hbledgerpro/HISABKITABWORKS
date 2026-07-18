@@ -45,14 +45,14 @@ export async function pendingLinkSessionsForIdentity(
   const result = await env.DB.prepare(`
     SELECT * FROM link_sessions
      WHERE store_guid = ? AND customer_id = ? AND license_id = ?
-       AND status = 'Pending' AND expires_utc > ?
+       AND status = 'Pending' AND created_utc > ?
      ORDER BY created_utc DESC
      LIMIT 5
   `).bind(
     identity.storeGuid,
     identity.customerId,
     identity.licenseId,
-    new Date().toISOString()
+    new Date(Date.now() - 6 * 60 * 60_000).toISOString()
   ).all<LinkSessionRow>();
   return result.results;
 }
