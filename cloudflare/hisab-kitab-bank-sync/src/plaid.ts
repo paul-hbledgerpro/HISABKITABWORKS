@@ -36,6 +36,27 @@ type AccountsResponse = {
   accounts: PlaidAccount[];
 };
 
+type LinkTokenGetResponse = {
+  link_sessions?: Array<{
+    finished_at?: string | null;
+    on_success?: {
+      public_token?: string;
+    } | null;
+    results?: {
+      item_add_results?: Array<{
+        public_token?: string;
+      }>;
+    } | null;
+    exit?: {
+      status?: string;
+      error?: {
+        display_message?: string | null;
+        error_message?: string;
+      } | null;
+    } | null;
+  }>;
+};
+
 export type TransactionsSyncResponse = {
   added: PlaidTransaction[];
   modified: PlaidTransaction[];
@@ -77,6 +98,12 @@ export class PlaidClient {
   public exchangePublicToken(publicToken: string): Promise<TokenExchangeResponse> {
     return this.post<TokenExchangeResponse>("/item/public_token/exchange", {
       public_token: publicToken
+    });
+  }
+
+  public linkToken(linkToken: string): Promise<LinkTokenGetResponse> {
+    return this.post<LinkTokenGetResponse>("/link/token/get", {
+      link_token: linkToken
     });
   }
 

@@ -3952,18 +3952,61 @@ internal sealed partial class MainForm : Form
                 return;
             }
 
+            connectBank.Enabled = false;
             try
             {
+                var existingConnectionIds = (await client.GetConnectionsAsync())
+                    .Select(connection => connection.ConnectionId)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var hostedLink = await client.CreateHostedLinkAsync();
                 Process.Start(new ProcessStartInfo(hostedLink.AbsoluteUri) { UseShellExecute = true });
+                liveBankStatus.Text = "Complete the secure Plaid connection in your browser…";
+                liveBankStatus.ForeColor = WinTheme.Blue;
+
+                var deadline = DateTime.UtcNow.AddMinutes(10);
+                while (DateTime.UtcNow < deadline && !IsDisposed)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(3));
+                    if (IsDisposed)
+                        return;
+                    var connections = await client.GetConnectionsAsync();
+                    var connectedAccount = connections.FirstOrDefault(connection =>
+                        !existingConnectionIds.Contains(connection.ConnectionId));
+                    if (connectedAccount is null)
+                        continue;
+
+                    liveBankStatus.Text = "Bank connected — importing the first transactions…";
+                    var result = await client.SyncAsync();
+                    await SaveLiveBankSyncAsync(result);
+                    await refreshAsync();
+                    await refreshLiveBankStatusAsync();
+                    MessageBox.Show(this,
+                        $"Bank account connected successfully.\n\n"
+                        + $"Institution: {connectedAccount.InstitutionName}\n"
+                        + $"Account: {connectedAccount.AccountName}\n\n"
+                        + $"Imported transactions: {result.Added.Count}",
+                        "Bank Connected", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                liveBankStatus.Text = "Plaid connection is still awaiting completion";
+                liveBankStatus.ForeColor = WinTheme.Copper;
                 MessageBox.Show(this,
-                    "Complete the secure bank connection in your browser. Then return here and click Sync Now.",
-                    "Connect Bank", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    "The bank connection has not completed yet.\n\n"
+                    + "If the Plaid browser window is still open, finish every step and select the bank account to share. "
+                    + "Then return here and click Sync Now.",
+                    "Bank Connection Pending", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
+                liveBankStatus.Text = "Bank connection needs attention";
+                liveBankStatus.ForeColor = WinTheme.Red;
                 MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "Connect Bank",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                connectBank.Enabled = true;
             }
         };
         syncBank.Click += async (_, _) => await syncLiveBankAsync(showSuccess: true);

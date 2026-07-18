@@ -1,10 +1,12 @@
 import { authenticateRequest } from "./auth";
 import { decryptSecret, encryptSecret, sha256Hex } from "./crypto";
 import {
+  claimLinkSession,
   claimWebhook,
   completeLinkSession,
   connectionsForIdentity,
   getLinkSession,
+  pendingLinkSessionsForIdentity,
   saveConnection,
   saveLinkSession,
   updateConnectionSync
@@ -92,6 +94,7 @@ async function getConnections(
   env: WorkerEnv,
   identity: RequestIdentity
 ): Promise<Response> {
+  await recoverCompletedHostedLinks(env, identity);
   const rows = await connectionsForIdentity(env, identity);
   return json(rows.map(row => ({
     connectionId: row.connection_id,
@@ -109,6 +112,7 @@ async function syncTransactions(
   env: WorkerEnv,
   identity: RequestIdentity
 ): Promise<Response> {
+  await recoverCompletedHostedLinks(env, identity);
   const connections = await connectionsForIdentity(env, identity);
   if (connections.length === 0) {
     throw new HttpError(
@@ -208,9 +212,15 @@ async function handlePlaidWebhook(
     webhook_code?: string;
     status?: string;
     link_token?: string;
+    public_token?: string;
     public_tokens?: string[];
   };
   if (payload.webhook_type === "LINK" &&
+      payload.webhook_code === "ITEM_ADD_RESULT" &&
+      payload.link_token &&
+      payload.public_token) {
+    ctx.waitUntil(completeHostedLink(env, payload.link_token, [payload.public_token]));
+  } else if (payload.webhook_type === "LINK" &&
       payload.webhook_code === "SESSION_FINISHED" &&
       payload.status === "SUCCESS" &&
       payload.link_token &&
@@ -226,7 +236,8 @@ async function completeHostedLink(
   publicTokens: string[]
 ): Promise<void> {
   const session = await getLinkSession(env, linkToken);
-  if (!session || session.status === "Completed") {
+  if (!session || session.status !== "Pending" ||
+      !await claimLinkSession(env, linkToken)) {
     return;
   }
 
@@ -266,6 +277,61 @@ async function completeHostedLink(
       linkTokenSuffix: linkToken.slice(-8),
       message
     }));
+  }
+}
+
+async function recoverCompletedHostedLinks(
+  env: WorkerEnv,
+  identity: RequestIdentity
+): Promise<void> {
+  const pendingSessions = await pendingLinkSessionsForIdentity(env, identity);
+  if (pendingSessions.length === 0) {
+    return;
+  }
+
+  const plaid = new PlaidClient(env);
+  for (const session of pendingSessions) {
+    try {
+      const details = await plaid.linkToken(session.link_token);
+      const publicTokens = new Set<string>();
+      let finished = false;
+      let exitMessage = "";
+
+      for (const linkSession of details.link_sessions ?? []) {
+        finished ||= Boolean(linkSession.finished_at);
+        const legacyToken = linkSession.on_success?.public_token?.trim();
+        if (legacyToken) {
+          publicTokens.add(legacyToken);
+        }
+        for (const result of linkSession.results?.item_add_results ?? []) {
+          const token = result.public_token?.trim();
+          if (token) {
+            publicTokens.add(token);
+          }
+        }
+        exitMessage ||= linkSession.exit?.error?.display_message?.trim()
+          || linkSession.exit?.error?.error_message?.trim()
+          || linkSession.exit?.status?.trim()
+          || "";
+      }
+
+      if (publicTokens.size > 0) {
+        await completeHostedLink(env, session.link_token, [...publicTokens]);
+      } else if (finished) {
+        await completeLinkSession(
+          env,
+          session.link_token,
+          exitMessage || "The Plaid session ended before a bank account was connected."
+        );
+      }
+    } catch (error) {
+      console.error(JSON.stringify({
+        level: "error",
+        event: "hosted_link_recovery_failed",
+        linkTokenSuffix: session.link_token.slice(-8),
+        message: error instanceof Error ? error.message : "Unable to inspect the Plaid Link session."
+      }));
+    }
   }
 }
 

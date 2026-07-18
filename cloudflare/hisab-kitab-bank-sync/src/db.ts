@@ -38,6 +38,37 @@ export async function getLinkSession(
     .first<LinkSessionRow>();
 }
 
+export async function pendingLinkSessionsForIdentity(
+  env: WorkerEnv,
+  identity: RequestIdentity
+): Promise<LinkSessionRow[]> {
+  const result = await env.DB.prepare(`
+    SELECT * FROM link_sessions
+     WHERE store_guid = ? AND customer_id = ? AND license_id = ?
+       AND status = 'Pending' AND expires_utc > ?
+     ORDER BY created_utc DESC
+     LIMIT 5
+  `).bind(
+    identity.storeGuid,
+    identity.customerId,
+    identity.licenseId,
+    new Date().toISOString()
+  ).all<LinkSessionRow>();
+  return result.results;
+}
+
+export async function claimLinkSession(
+  env: WorkerEnv,
+  linkToken: string
+): Promise<boolean> {
+  const result = await env.DB.prepare(`
+    UPDATE link_sessions
+       SET status = 'Processing'
+     WHERE link_token = ? AND status = 'Pending'
+  `).bind(linkToken).run();
+  return (result.meta.changes ?? 0) === 1;
+}
+
 export async function completeLinkSession(
   env: WorkerEnv,
   linkToken: string,
