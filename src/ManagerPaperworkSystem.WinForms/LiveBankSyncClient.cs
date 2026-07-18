@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -31,8 +32,10 @@ internal sealed class LiveBankSyncClient : IDisposable
     public async Task<Uri> CreateHostedLinkAsync(CancellationToken cancellationToken = default)
     {
         EnsureConfigured();
-        using var request = CreateRequest(HttpMethod.Post, "api/bank/link-session");
-        request.Content = JsonContent.Create(CurrentIdentity(), options: JsonOptions);
+        using var request = CreateJsonRequest(
+            HttpMethod.Post,
+            "/api/bank/link-session",
+            CurrentIdentity());
         using var response = await _http.SendAsync(request, cancellationToken);
         var payload = await ReadAsync<BankLinkSessionResponse>(response, cancellationToken);
         if (!Uri.TryCreate(payload.LinkUrl, UriKind.Absolute, out var linkUri)
@@ -44,8 +47,10 @@ internal sealed class LiveBankSyncClient : IDisposable
     public async Task<LiveBankSyncResult> SyncAsync(CancellationToken cancellationToken = default)
     {
         EnsureConfigured();
-        using var request = CreateRequest(HttpMethod.Post, "api/bank/transactions/sync");
-        request.Content = JsonContent.Create(CurrentIdentity(), options: JsonOptions);
+        using var request = CreateJsonRequest(
+            HttpMethod.Post,
+            "/api/bank/transactions/sync",
+            CurrentIdentity());
         using var response = await _http.SendAsync(request, cancellationToken);
         return await ReadAsync<LiveBankSyncResult>(response, cancellationToken);
     }
@@ -53,7 +58,11 @@ internal sealed class LiveBankSyncClient : IDisposable
     public async Task<IReadOnlyList<LiveBankConnection>> GetConnectionsAsync(CancellationToken cancellationToken = default)
     {
         EnsureConfigured();
-        using var request = CreateRequest(HttpMethod.Get, "api/bank/connections");
+        using var request = CreateSignedRequest(
+            HttpMethod.Get,
+            "/api/bank/connections",
+            Array.Empty<byte>(),
+            hasJsonBody: false);
         using var response = await _http.SendAsync(request, cancellationToken);
         return await ReadAsync<List<LiveBankConnection>>(response, cancellationToken);
     }
@@ -71,14 +80,43 @@ internal sealed class LiveBankSyncClient : IDisposable
             Environment.MachineName);
     }
 
-    private HttpRequestMessage CreateRequest(HttpMethod method, string relativePath)
+    private HttpRequestMessage CreateJsonRequest<T>(HttpMethod method, string path, T payload)
+    {
+        var bodyBytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
+        return CreateSignedRequest(method, path, bodyBytes, hasJsonBody: true);
+    }
+
+    private HttpRequestMessage CreateSignedRequest(
+        HttpMethod method,
+        string path,
+        byte[] bodyBytes,
+        bool hasJsonBody)
     {
         var identity = CurrentIdentity();
-        var request = new HttpRequestMessage(method, relativePath);
+        var proof = DeviceLicenseService.CreateGatewayRequestProof(
+            method.Method,
+            path,
+            identity.StoreGuid,
+            identity.CustomerId,
+            identity.LicenseId,
+            bodyBytes);
+        var request = new HttpRequestMessage(method, path.TrimStart('/'));
+        if (hasJsonBody)
+        {
+            request.Content = new ByteArrayContent(bodyBytes);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        }
+
         request.Headers.TryAddWithoutValidation("X-HK-Store-Guid", identity.StoreGuid);
         request.Headers.TryAddWithoutValidation("X-HK-Customer-Id", identity.CustomerId.ToString());
         request.Headers.TryAddWithoutValidation("X-HK-License-Id", identity.LicenseId.ToString());
-        request.Headers.TryAddWithoutValidation("X-HK-Device-Id", identity.DeviceId);
+        request.Headers.TryAddWithoutValidation("X-HK-Device-Id", proof.DeviceId);
+        request.Headers.TryAddWithoutValidation("X-HK-Device-Name", proof.DeviceName);
+        request.Headers.TryAddWithoutValidation("X-HK-Timestamp", proof.Timestamp);
+        request.Headers.TryAddWithoutValidation("X-HK-Nonce", proof.Nonce);
+        request.Headers.TryAddWithoutValidation("X-HK-Body-SHA256", proof.BodySha256);
+        request.Headers.TryAddWithoutValidation("X-HK-Device-Proof", proof.DeviceProof);
+        request.Headers.TryAddWithoutValidation("X-HK-License-Envelope", proof.LicenseEnvelope);
         request.Headers.TryAddWithoutValidation("X-HK-App-Version", Application.ProductVersion);
         return request;
     }

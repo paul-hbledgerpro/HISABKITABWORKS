@@ -53,6 +53,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="bank-sync-service.url">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
     <Content Include="TaxRules\us-payroll-2026.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

@@ -414,6 +414,60 @@ internal static class DeviceLicenseService
         return false;
     }
 
+    internal static DeviceGatewayRequestProof CreateGatewayRequestProof(
+        string method,
+        string path,
+        string storeGuid,
+        int customerId,
+        int licenseId,
+        byte[] bodyBytes)
+    {
+        if (!File.Exists(InstalledLicensePath))
+            throw new InvalidOperationException("A valid PC license is required before connecting a bank.");
+        if (string.IsNullOrWhiteSpace(method) || string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException("The secure bank request is invalid.");
+
+        var identity = GetOrCreateIdentity();
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var nonce = Guid.NewGuid().ToString("N");
+        var normalizedPath = "/" + path.Trim().TrimStart('/');
+        var bodyHash = Convert.ToHexString(SHA256.HashData(bodyBytes)).ToLowerInvariant();
+        var canonical = string.Join("\n",
+            method.Trim().ToUpperInvariant(),
+            normalizedPath,
+            storeGuid,
+            customerId,
+            licenseId,
+            identity.DeviceId,
+            timestamp,
+            nonce,
+            bodyHash);
+
+        using var key = OpenKey(identity);
+        using var rsa = new RSACng(key);
+        var signature = rsa.SignData(
+            Encoding.UTF8.GetBytes(canonical),
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pss);
+        var licenseEnvelope = ToBase64Url(Encoding.UTF8.GetBytes(
+            File.ReadAllText(InstalledLicensePath)));
+
+        return new DeviceGatewayRequestProof(
+            identity.DeviceId,
+            Environment.MachineName,
+            timestamp,
+            nonce,
+            bodyHash,
+            Convert.ToBase64String(signature),
+            licenseEnvelope);
+    }
+
+    private static string ToBase64Url(byte[] value)
+        => Convert.ToBase64String(value)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
     public static DatabaseConnectionSettings? LoadProtectedConnection()
     {
         if (!File.Exists(ProtectedConnectionPath))
@@ -617,6 +671,15 @@ internal sealed class DeviceIdentityRecord
     public string PublicKey { get; set; } = "";
     public string CreatedUtc { get; set; } = "";
 }
+
+internal sealed record DeviceGatewayRequestProof(
+    string DeviceId,
+    string DeviceName,
+    string Timestamp,
+    string Nonce,
+    string BodySha256,
+    string DeviceProof,
+    string LicenseEnvelope);
 
 internal sealed class DeviceLicenseRequestV2
 {

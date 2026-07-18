@@ -50,6 +50,8 @@ Backups/
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
 appsettings.*.local.json
 connection_settings.json
 store_connections.json
@@ -60,6 +62,10 @@ pending_store_info.json
 *.snk
 *.pem
 *.key
+
+# Node.js and Cloudflare local state
+**/node_modules/
+**/.wrangler/
 
 # OS and temporary files
 .DS_Store

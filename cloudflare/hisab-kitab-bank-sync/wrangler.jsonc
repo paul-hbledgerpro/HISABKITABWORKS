@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "hisab-kitab-bank-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hisab-kitab-bank-sync",
+      "database_id": "a46fcfa1-6e69-4e06-9c4e-c0928da324df",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "PLAID_ENV": "sandbox",
+    "CLIENT_NAME": "HISAB KITAB WORKS",
+    "TRANSACTION_DAYS": "90"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
