@@ -93,7 +93,6 @@ New-Item -ItemType Directory -Force -Path $updaterPayloadDirectory | Out-Null
 foreach ($updaterFile in Get-ChildItem -LiteralPath $updaterPublish -File) {
     Copy-Item -LiteralPath $updaterFile.FullName -Destination (Join-Path $updaterPayloadDirectory $updaterFile.Name) -Force
 }
-Copy-Item -LiteralPath (Join-Path $updaterPublish "Upgrade.exe") -Destination (Join-Path $clientPublish "Upgrade.exe") -Force
 Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value $Version -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
