@@ -242,13 +242,40 @@ internal static class PortalSyncService
         var page = pages.FirstOrDefault() ?? await browser.NewPageAsync();
         page.DefaultTimeout = 45_000;
         await ConfigureDownloadsAsync(page, downloadDirectory);
-        await page.GoToAsync(settings.PortalUrl, WaitUntilNavigation.Networkidle2);
-        cancellationToken.ThrowIfCancellationRequested();
+        string downloadedPath;
+        try
+        {
+            await page.GoToAsync(settings.PortalUrl, WaitUntilNavigation.Networkidle2);
+            cancellationToken.ThrowIfCancellationRequested();
 
-        await EnsureSignedInAsync(page, settings);
-        await OpenCashAndSalesReportAsync(page);
-        var downloadedPath = await GenerateReportAsync(
-            browser, page, downloadDirectory, targetDate, cancellationToken);
+            await EnsureSignedInAsync(page, settings);
+            await OpenCashAndSalesReportAsync(page);
+            downloadedPath = await GenerateReportAsync(
+                browser, page, downloadDirectory, targetDate, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            var diagnostic = await DescribePortalStateAsync(page);
+            var screenshotPath = Path.Combine(
+                AppBootstrap.AppDataPath,
+                "Logs",
+                $"pos-portal-sync-{settings.Id:N}.png");
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(screenshotPath)!);
+                await page.ScreenshotAsync(screenshotPath, new ScreenshotOptions { FullPage = true });
+            }
+            catch
+            {
+                // Diagnostics must never hide the original portal failure.
+            }
+
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(diagnostic)
+                    ? exception.Message
+                    : $"{exception.Message} Portal state: {diagnostic}",
+                exception);
+        }
 
         await using var db = CreateStoreDatabase(settings);
         await EnsureTargetDatabaseReadyAsync(db, settings.BusinessName);
@@ -286,32 +313,38 @@ internal static class PortalSyncService
 
         if (await IsVisibleAsync(page, "#StoreSelectionModal"))
         {
-            if (!string.IsNullOrWhiteSpace(settings.PortalStoreName))
-            {
-                await page.EvaluateFunctionAsync(
-                    @"name => {
-                        const select = document.querySelector('#cbxSelectStore');
-                        const wanted = Array.from(select.options).find(o =>
-                            o.textContent.trim().toLowerCase().includes(name.trim().toLowerCase()));
-                        if (wanted) {
-                            select.value = wanted.value;
-                            select.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    }",
-                    settings.PortalStoreName);
-            }
+            await SelectPortalStoreAsync(page, settings.PortalStoreName);
 
             await WaitUntilAsync(page,
-                () => IsVisibleAsync(page, "#txtFinalLoginUserName"),
-                TimeSpan.FromSeconds(30),
-                "The AdventPOS store login controls did not load.");
+                async () =>
+                    await IsVisibleAsync(page, "#txtFinalLoginUserName") &&
+                    await IsVisibleAsync(page, "#txtFinalLoginPassword") &&
+                    await IsVisibleAsync(page, "#btnFinalStepToLogin"),
+                TimeSpan.FromSeconds(45),
+                "AdventPOS selected the store, but its store-user login controls did not load.");
             if (!string.IsNullOrWhiteSpace(settings.StoreUserName))
                 await ReplaceValueAsync(page, "#txtFinalLoginUserName", settings.StoreUserName);
             if (!string.IsNullOrWhiteSpace(settings.StorePassword))
                 await ReplaceValueAsync(page, "#txtFinalLoginPassword", settings.StorePassword);
+
+            var storeHomeNavigation = page.WaitForNavigationAsync(new NavigationOptions
+            {
+                WaitUntil = [WaitUntilNavigation.Networkidle2],
+                Timeout = 60_000
+            });
             await page.EvaluateExpressionAsync(
                 "document.querySelector('#chkRememberPwd').checked=true; " +
                 "document.querySelector('#btnFinalStepToLogin').click();");
+            try
+            {
+                await storeHomeNavigation;
+            }
+            catch (TimeoutException)
+            {
+                // The final readiness check below provides the actionable
+                // message. Some portal responses retain background requests
+                // long enough that Networkidle2 reaches its timeout.
+            }
         }
 
         await WaitUntilAsync(page,
@@ -320,27 +353,157 @@ internal static class PortalSyncService
             "AdventPOS did not reach the store home page. A verification code, CAPTCHA, or password update may require attention.");
     }
 
+    private static async Task SelectPortalStoreAsync(IPage page, string configuredStoreName)
+    {
+        if (string.IsNullOrWhiteSpace(configuredStoreName))
+            throw new InvalidOperationException(
+                "Enter the AdventPOS store name in POS Auto Sync Setup.");
+
+        await WaitUntilAsync(page,
+            () => page.EvaluateFunctionAsync<bool>(
+                @"configuredName => {
+                    const normalize = value => (value || '')
+                        .normalize('NFKD')
+                        .replace(/[\u0300-\u036f]/g, '')
+                        .replace(/[^a-z0-9]/gi, '')
+                        .toLowerCase();
+                    const select = document.querySelector('#cbxSelectStore');
+                    if (!select) return false;
+                    const style = window.getComputedStyle(select);
+                    const bounds = select.getBoundingClientRect();
+                    if (style.display === 'none' || style.visibility === 'hidden' ||
+                        bounds.width <= 0 || bounds.height <= 0) return false;
+                    const wanted = normalize(configuredName);
+                    return Array.from(select.options).some(option => {
+                        const actual = normalize(option.textContent);
+                        return option.value !== '-1' &&
+                               (actual === wanted || actual.includes(wanted) || wanted.includes(actual));
+                    });
+                }",
+                configuredStoreName),
+            TimeSpan.FromSeconds(45),
+            $"The configured AdventPOS store '{configuredStoreName}' was not found in the Store Selection list.");
+
+        var selectedName = await page.EvaluateFunctionAsync<string>(
+            @"configuredName => {
+                const normalize = value => (value || '')
+                    .normalize('NFKD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .replace(/[^a-z0-9]/gi, '')
+                    .toLowerCase();
+                const select = document.querySelector('#cbxSelectStore');
+                const wanted = normalize(configuredName);
+                const options = Array.from(select.options).filter(option => option.value !== '-1');
+                const option =
+                    options.find(candidate => normalize(candidate.textContent) === wanted) ||
+                    options.find(candidate => {
+                        const actual = normalize(candidate.textContent);
+                        return actual.includes(wanted) || wanted.includes(actual);
+                    });
+                if (!option) return '';
+
+                select.disabled = false;
+                select.value = option.value;
+                if (typeof window.LoadStoreUsers === 'function')
+                    window.LoadStoreUsers(option.value);
+                else {
+                    select.dispatchEvent(new Event('input', { bubbles: true }));
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+
+                // The portal can show a remembered-user tile after store
+                // selection. The unattended sync always uses the protected
+                // credentials saved in HISAB KITAB, so open the credential
+                // controls explicitly.
+                if (typeof window.UserAnotherAccount_Clicked === 'function')
+                    window.UserAnotherAccount_Clicked();
+
+                return (option.textContent || '').trim();
+            }",
+            configuredStoreName);
+
+        if (string.IsNullOrWhiteSpace(selectedName))
+            throw new InvalidOperationException(
+                $"AdventPOS did not select the configured store '{configuredStoreName}'.");
+    }
+
     private static async Task OpenCashAndSalesReportAsync(IPage page)
     {
-        if (!await HasCashReportFunctionsAsync(page))
+        if (!await IsVisibleAsync(page, "#ReportModal"))
         {
-            await page.EvaluateExpressionAsync(
+            var opened = await page.EvaluateExpressionAsync<bool>(
                 @"(() => {
-                    const candidates = Array.from(document.querySelectorAll('a,button,li,span'))
-                        .filter(e => (e.textContent || '').trim().toLowerCase() === 'reports' && e.offsetParent);
-                    if (candidates.length) candidates[candidates.length - 1].click();
+                    // Admin Reports is a Bootstrap modal in AdventPOS. Opening
+                    // the modal directly is more reliable than depending on
+                    // changing sidebar markup, and it invokes the portal's own
+                    // report date/filter loading handlers.
+                    const reportModal = document.querySelector('#ReportModal');
+                    if (reportModal && window.jQuery && typeof window.jQuery.fn.modal === 'function') {
+                        window.jQuery(reportModal).modal('show');
+                        return true;
+                    }
+
+                    const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const isVisible = element => {
+                        if (!element) return false;
+                        const style = window.getComputedStyle(element);
+                        const bounds = element.getBoundingClientRect();
+                        return style.display !== 'none' &&
+                               style.visibility !== 'hidden' &&
+                               bounds.width > 0 &&
+                               bounds.height > 0;
+                    };
+                    const elements = Array.from(
+                        document.querySelectorAll('a,button,[role=""button""],li,span'));
+                    // Admin Reports is a submenu item. It is intentionally
+                    // hidden until the Report menu is hovered, but a
+                    // programmatic click still executes its portal handler.
+                    const adminReports = Array.from(
+                        document.querySelectorAll('a,button,[role=""button""]')).find(element =>
+                        normalize(element.textContent) === 'admin reports');
+                    if (adminReports) {
+                        adminReports.click();
+                        return true;
+                    }
+                    const candidate =
+                        elements.find(element =>
+                            isVisible(element) &&
+                            (normalize(element.textContent) === 'reports' ||
+                             normalize(element.textContent) === 'report'));
+                    if (!candidate) return false;
+                    const clickable = candidate.closest('a,button,[role=""button""]') || candidate;
+                    clickable.click();
+                    return true;
                 })()");
+
+            if (!opened)
+                throw new InvalidOperationException(
+                    "The AdventPOS Admin Reports control was not found after store login.");
         }
 
         await WaitUntilAsync(page,
-            () => HasCashReportFunctionsAsync(page),
+            async () =>
+                await HasCashReportFunctionsAsync(page) &&
+                await IsVisibleAsync(page, "#ReportModal"),
             TimeSpan.FromSeconds(60),
-            "The AdventPOS Reports page did not load.");
+            "The AdventPOS Admin Reports window did not finish loading.");
 
         var selected = await page.EvaluateFunctionAsync<bool>(
             @"() => {
                 if (!Array.isArray(window.SalesReports_Enum)) return false;
-                const index = window.SalesReports_Enum.findIndex(r => r && r.Name === 'CashAndSales');
+                const salesTab = document.querySelector(
+                    'ul#ULReportTabs li[data-id=""0""] a, ul#ULReportTabs li[data-Id=""0""] a');
+                if (salesTab) {
+                    if (window.jQuery && typeof window.jQuery.fn.tab === 'function')
+                        window.jQuery(salesTab).tab('show');
+                    else
+                        salesTab.click();
+                }
+
+                const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const index = window.SalesReports_Enum.findIndex(report =>
+                    report && (report.Name === 'CashAndSales' ||
+                               normalize(report.LongName) === 'cash and sales summary'));
                 if (index < 0) return false;
                 const selector = `#Div_tbRptSales [data-Id='${index}'], #Div_tbRptSales [data-id='${index}']`;
                 const item = document.querySelector(selector);
@@ -359,25 +522,53 @@ internal static class PortalSyncService
         DateOnly targetDate,
         CancellationToken cancellationToken)
     {
-        var dateText = targetDate.ToString("M/d/yyyy", CultureInfo.InvariantCulture);
+        var dateText = targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         await page.EvaluateFunctionAsync(
             @"dateText => {
                 const period = document.querySelector('#cbxReportPeriod');
+                // Use the custom period with an explicit app-calculated date.
+                // AdventPOS can run in a different server timezone, so its
+                // native Yesterday option can otherwise move the report ahead
+                // by one day late in the evening.
                 if (period) {
                     period.value = '13';
                     period.dispatchEvent(new Event('change', { bubbles: true }));
                 }
                 const start = document.querySelector('#dtRTPStartDate');
                 const end = document.querySelector('#dtRTPEndDate');
-                if (start) { start.disabled = false; start.value = dateText; }
-                if (end) { end.disabled = false; end.value = dateText; }
+                for (const input of [start, end]) {
+                    if (!input) continue;
+                    input.disabled = false;
+                    if (window.jQuery && typeof window.jQuery.fn.datepicker === 'function')
+                        window.jQuery(input).datepicker('setDate', dateText);
+                    input.value = dateText;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
             }",
             dateText);
+
+        await WaitUntilAsync(page,
+            () => page.EvaluateFunctionAsync<bool>(
+                @"dateText => {
+                    const reportType = document.querySelector('#ReportTypeValue_0');
+                    const start = document.querySelector('#dtRTPStartDate');
+                    const end = document.querySelector('#dtRTPEndDate');
+                    const period = document.querySelector('#cbxReportPeriod');
+                    return !!reportType && !!(reportType.textContent || '').trim() &&
+                           !!start && start.value === dateText &&
+                           !!end && end.value === dateText &&
+                           !!period && period.value === '13';
+                }",
+                dateText),
+            TimeSpan.FromSeconds(30),
+            "AdventPOS did not finish selecting Cash and Sales Summary for Yesterday.");
 
         var knownPages = (await browser.PagesAsync()).ToHashSet();
         await page.EvaluateExpressionAsync("ViewReport(true, true, false);");
 
         var deadline = DateTime.UtcNow.AddSeconds(75);
+        var exportRequested = false;
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -389,9 +580,13 @@ internal static class PortalSyncService
                 return downloaded;
             }
 
-            var reportPage = (await browser.PagesAsync())
-                .FirstOrDefault(candidate => !knownPages.Contains(candidate));
-            if (reportPage is not null)
+            var reportPage = page.Url.Contains(
+                    "/Report/ViewReportResult",
+                    StringComparison.OrdinalIgnoreCase)
+                ? page
+                : (await browser.PagesAsync())
+                    .FirstOrDefault(candidate => !knownPages.Contains(candidate));
+            if (reportPage is not null && !exportRequested)
             {
                 try
                 {
@@ -405,33 +600,68 @@ internal static class PortalSyncService
                 {
                     // Some report viewers keep a background connection open.
                 }
-
-                var outputPath = Path.Combine(
-                    downloadDirectory,
-                    $"AdventPOS_CashSales_{targetDate:yyyyMMdd}_{Guid.NewGuid():N}.pdf");
-                await reportPage.PdfAsync(outputPath, new PdfOptions
-                {
-                    PrintBackground = true,
-                    Format = PuppeteerSharp.Media.PaperFormat.Letter,
-                    Landscape = false,
-                    PreferCSSPageSize = true
-                });
-                try
-                {
-                    CashSalesSummaryImportCoordinator.Validate(
-                        await CashSalesSummaryPdfImporter.ImportAsync(outputPath, cancellationToken));
-                    return outputPath;
-                }
-                catch
-                {
-                    try { File.Delete(outputPath); } catch { }
-                }
+                await ConfigureDownloadsAsync(reportPage, downloadDirectory);
+                await RequestActiveReportsPdfExportAsync(reportPage);
+                exportRequested = true;
             }
             await Task.Delay(1000, cancellationToken);
         }
 
         throw new InvalidOperationException(
             "AdventPOS did not produce a valid Cash and Sales Summary PDF. The portal may have changed its report screen.");
+    }
+
+    private static async Task RequestActiveReportsPdfExportAsync(IPage reportPage)
+    {
+        await WaitUntilAsync(
+            reportPage,
+            () => reportPage.EvaluateExpressionAsync<bool>(
+                @"Array.from(document.querySelectorAll('button'))
+                    .some(button => button.title === 'Export' &&
+                                    !button.closest('.arjs-export-panel'))"),
+            TimeSpan.FromSeconds(30),
+            "The AdventPOS report opened, but its Export control did not become ready.");
+
+        await reportPage.EvaluateExpressionAsync(
+            @"Array.from(document.querySelectorAll('button'))
+                .find(button => button.title === 'Export' &&
+                                !button.closest('.arjs-export-panel'))
+                .click()");
+
+        await WaitUntilAsync(
+            reportPage,
+            () => IsVisibleAsync(reportPage, ".arjs-export-panel"),
+            TimeSpan.FromSeconds(15),
+            "The AdventPOS report Export panel did not open.");
+
+        await reportPage.EvaluateExpressionAsync(
+            "document.querySelector('.arjs-export-panel .gc-dd button').click()");
+        await WaitUntilAsync(
+            reportPage,
+            () => reportPage.EvaluateExpressionAsync<bool>(
+                @"Array.from(document.querySelectorAll('button.gc-dd-menu__item'))
+                    .some(button => (button.title || button.textContent || '')
+                        .toLowerCase().includes('pdf'))"),
+            TimeSpan.FromSeconds(15),
+            "PDF was not available in the AdventPOS Export format list.");
+
+        await reportPage.EvaluateExpressionAsync(
+            @"Array.from(document.querySelectorAll('button.gc-dd-menu__item'))
+                .find(button => (button.title || button.textContent || '')
+                    .toLowerCase().includes('pdf'))
+                .click()");
+        await WaitUntilAsync(
+            reportPage,
+            () => reportPage.EvaluateExpressionAsync<bool>(
+                @"Array.from(document.querySelectorAll('.arjs-export-panel button'))
+                    .some(button => button.title === 'Export')"),
+            TimeSpan.FromSeconds(15),
+            "The AdventPOS PDF Export action did not become ready.");
+
+        await reportPage.EvaluateExpressionAsync(
+            @"Array.from(document.querySelectorAll('.arjs-export-panel button'))
+                .find(button => button.title === 'Export')
+                .click()");
     }
 
     private static async Task ConfigureDownloadsAsync(IPage page, string downloadDirectory)
@@ -462,19 +692,84 @@ internal static class PortalSyncService
         page.EvaluateFunctionAsync<bool>(
             @"selector => {
                 const element = document.querySelector(selector);
-                return !!element && !!element.offsetParent;
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                const bounds = element.getBoundingClientRect();
+                return style.display !== 'none' &&
+                       style.visibility !== 'hidden' &&
+                       style.opacity !== '0' &&
+                       bounds.width > 0 &&
+                       bounds.height > 0;
             }",
             selector);
 
     private static Task<bool> IsPortalHomeReadyAsync(IPage page) =>
         page.EvaluateExpressionAsync<bool>(
-            "Boolean(localStorage.getItem('StoreConfig')) && " +
-            "!document.querySelector('#StoreSelectionModal.show')");
+            @"(() => {
+                const isVisible = element => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const bounds = element.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                           style.visibility !== 'hidden' &&
+                           style.opacity !== '0' &&
+                           bounds.width > 0 &&
+                           bounds.height > 0;
+                };
+                return Boolean(localStorage.getItem('StoreConfig')) &&
+                       !isVisible(document.querySelector('#StoreSelectionModal')) &&
+                       !isVisible(document.querySelector('#txtLoginUserName'));
+            })()");
 
     private static Task<bool> HasCashReportFunctionsAsync(IPage page) =>
         page.EvaluateExpressionAsync<bool>(
             "typeof window.lstSales_SelectedIndexChanged === 'function' && " +
             "Array.isArray(window.SalesReports_Enum) && window.SalesReports_Enum.length > 0");
+
+    private static async Task<string> DescribePortalStateAsync(IPage page)
+    {
+        try
+        {
+            return await page.EvaluateExpressionAsync<string>(
+                @"(() => {
+                    const clean = value => (value || '').replace(/\s+/g, ' ').trim();
+                    const visible = element => {
+                        if (!element) return false;
+                        const style = window.getComputedStyle(element);
+                        const bounds = element.getBoundingClientRect();
+                        return style.display !== 'none' &&
+                               style.visibility !== 'hidden' &&
+                               style.opacity !== '0' &&
+                               bounds.width > 0 &&
+                               bounds.height > 0;
+                    };
+                    const messages = Array.from(document.querySelectorAll(
+                            '.modal.show, .swal2-container, .bootbox, [role=""dialog""]'))
+                        .filter(visible)
+                        .map(element => clean(element.innerText))
+                        .filter(Boolean)
+                        .map(value => value.substring(0, 240));
+                    const store = document.querySelector('#cbxSelectStore');
+                    const selectedStore = store && store.selectedIndex >= 0
+                        ? clean(store.options[store.selectedIndex].textContent)
+                        : '';
+                    const phase =
+                        visible(document.querySelector('#txtFinalLoginUserName')) ? 'store-user-login' :
+                        visible(document.querySelector('#txtLoginUserName')) ? 'owner-login' :
+                        document.querySelector('#ReportModal.show') ? 'admin-reports' :
+                        'store-home';
+                    return [
+                        `phase=${phase}`,
+                        selectedStore ? `store=${selectedStore}` : '',
+                        messages.length ? `message=${messages.join(' | ')}` : ''
+                    ].filter(Boolean).join('; ');
+                })()");
+        }
+        catch
+        {
+            return "";
+        }
+    }
 
     private static async Task WaitUntilAsync(
         IPage page,

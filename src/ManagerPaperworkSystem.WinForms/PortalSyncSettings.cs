@@ -45,10 +45,10 @@ internal static class PortalSyncSettingsStore
         Path.Combine(AppBootstrap.AppDataPath, "pos-portal-sync.protected");
 
     public static string ProfileDirectory(Guid id) =>
-        Path.Combine(AppBootstrap.AppDataPath, "POS Portal Sync", "Chrome Profiles", id.ToString("N"));
+        ResolveAutomationDirectory(id, "ChromeProfiles", "Chrome Profiles");
 
     public static string DownloadDirectory(Guid id) =>
-        Path.Combine(AppBootstrap.AppDataPath, "POS Portal Sync", "Downloads", id.ToString("N"));
+        ResolveAutomationDirectory(id, "Downloads", "Downloads");
 
     public static PortalSyncSettingsDocument Load()
     {
@@ -89,5 +89,57 @@ internal static class PortalSyncSettingsStore
         {
             CryptographicOperations.ZeroMemory(clear);
         }
+    }
+
+    private static string ResolveAutomationDirectory(
+        Guid id,
+        string compactDirectoryName,
+        string legacyDirectoryName)
+    {
+        // Chrome's new headless mode treats unquoted path fragments as
+        // additional page targets. Puppeteer/Chrome combinations on Windows
+        // can expose that behavior when a persistent profile or download path
+        // contains spaces. Keep the automation-only files in a compact path.
+        var compactPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HisabKitabPOS",
+            compactDirectoryName,
+            id.ToString("N"));
+        if (Directory.Exists(compactPath))
+            return compactPath;
+
+        var legacyPath = Path.Combine(
+            AppBootstrap.AppDataPath,
+            "POS Portal Sync",
+            legacyDirectoryName,
+            id.ToString("N"));
+        if (!Directory.Exists(legacyPath))
+            return compactPath;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(compactPath)!);
+        try
+        {
+            Directory.Move(legacyPath, compactPath);
+        }
+        catch (IOException)
+        {
+            CopyDirectory(legacyPath, compactPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            CopyDirectory(legacyPath, compactPath);
+        }
+        return compactPath;
+    }
+
+    private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
+    {
+        Directory.CreateDirectory(destinationDirectory);
+        foreach (var file in Directory.EnumerateFiles(sourceDirectory))
+            File.Copy(file, Path.Combine(destinationDirectory, Path.GetFileName(file)), true);
+        foreach (var directory in Directory.EnumerateDirectories(sourceDirectory))
+            CopyDirectory(
+                directory,
+                Path.Combine(destinationDirectory, Path.GetFileName(directory)));
     }
 }
