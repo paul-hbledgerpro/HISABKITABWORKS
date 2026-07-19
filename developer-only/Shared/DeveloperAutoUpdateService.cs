@@ -144,6 +144,21 @@ internal static class DeveloperAutoUpdateService
 
     private static string CurrentVersion()
     {
+        try
+        {
+            var versionFile = Path.Combine(AppContext.BaseDirectory, "version.txt");
+            if (File.Exists(versionFile))
+            {
+                var installedVersion = NormalizeVersion(File.ReadAllText(versionFile));
+                if (Version.TryParse(installedVersion, out _))
+                    return installedVersion;
+            }
+        }
+        catch
+        {
+            // Fall back to the executable metadata when the version file is unavailable.
+        }
+
         var version = Assembly.GetEntryAssembly()?.GetName().Version;
         return version is null
             ? "0.0.0"
