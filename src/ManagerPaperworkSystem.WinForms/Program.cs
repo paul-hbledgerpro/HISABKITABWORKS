@@ -52,6 +52,17 @@ internal static class Program
 
         try
         {
+            // Check before licensing, database initialization, setup, and login.
+            // This lets an older installation repair itself even when a later
+            // startup stage is temporarily unable to complete.
+            if (AppUpdateStartupService
+                .CheckBeforeApplicationStartupAsync()
+                .GetAwaiter()
+                .GetResult())
+            {
+                return;
+            }
+
             var retryStartup = true;
             while (retryStartup)
             {

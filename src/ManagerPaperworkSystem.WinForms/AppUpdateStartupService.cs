@@ -37,16 +37,21 @@ internal static class AppUpdateStartupService
     private static string StatePath =>
         Path.Combine(AppBootstrap.AppDataPath, "app-update-state.protected");
 
+    public static string CurrentVersion => GetCurrentVersion();
+
+    public static async Task<bool> CheckBeforeApplicationStartupAsync()
+        => await CheckAsync(owner: null, showUpToDateMessage: false);
+
     public static async Task CheckAtStartupAsync(Form owner)
-        => await CheckAsync(owner, showUpToDateMessage: false);
+        => _ = await CheckAsync(owner, showUpToDateMessage: false);
 
     public static async Task CheckManuallyAsync(Form owner)
-        => await CheckAsync(owner, showUpToDateMessage: true);
+        => _ = await CheckAsync(owner, showUpToDateMessage: true);
 
-    private static async Task CheckAsync(Form owner, bool showUpToDateMessage)
+    private static async Task<bool> CheckAsync(Form? owner, bool showUpToDateMessage)
     {
         if (!await Gate.WaitAsync(0))
-            return;
+            return false;
         try
         {
             var update = await FindUpdateAsync();
@@ -60,7 +65,7 @@ internal static class AppUpdateStartupService
                         "Software Update",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
-                return;
+                return false;
             }
 
             var state = LoadState(update.Version);
@@ -75,26 +80,28 @@ internal static class AppUpdateStartupService
                     "Required Software Update",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
-                await DownloadAndLaunchUpdaterAsync(owner, update, required: true);
-                return;
+                return await DownloadAndLaunchUpdaterAsync(owner, update, required: true);
             }
 
             using var prompt = new AppUpdatePromptForm(
                 update,
                 state.DeferralCount,
                 MaximumDeferrals);
-            var choice = prompt.ShowDialog(owner) == DialogResult.OK
+            var promptResult = owner is null
+                ? prompt.ShowDialog()
+                : prompt.ShowDialog(owner);
+            var choice = promptResult == DialogResult.OK
                 ? AppUpdateChoice.UpdateNow
                 : AppUpdateChoice.UpdateLater;
             if (choice == AppUpdateChoice.UpdateNow)
             {
-                await DownloadAndLaunchUpdaterAsync(owner, update, required: false);
-                return;
+                return await DownloadAndLaunchUpdaterAsync(owner, update, required: false);
             }
 
             state.DeferralCount++;
             state.LastDeferredUtc = DateTime.UtcNow;
             SaveState(state);
+            return false;
         }
         catch (HttpRequestException)
         {
@@ -106,6 +113,7 @@ internal static class AppUpdateStartupService
                     "Software Update",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
+            return false;
         }
         catch (TaskCanceledException)
         {
@@ -116,6 +124,7 @@ internal static class AppUpdateStartupService
                     "Software Update",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
+            return false;
         }
         catch (Exception ex)
         {
@@ -126,6 +135,7 @@ internal static class AppUpdateStartupService
                     "Software Update",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
+            return false;
         }
         finally
         {
@@ -176,8 +186,8 @@ internal static class AppUpdateStartupService
         return new AvailableAppUpdate(latestVersion, downloadUrl, notes);
     }
 
-    private static Task DownloadAndLaunchUpdaterAsync(
-        Form owner,
+    private static Task<bool> DownloadAndLaunchUpdaterAsync(
+        Form? owner,
         AvailableAppUpdate update,
         bool required)
     {
@@ -197,7 +207,7 @@ internal static class AppUpdateStartupService
                 "Software Update",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
-            return Task.CompletedTask;
+            return Task.FromResult(false);
         }
 
         var updaterWorkingDirectory = PrepareUpdaterWorkingCopy(updaterSourceDirectory);
@@ -223,19 +233,23 @@ internal static class AppUpdateStartupService
         _ = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The updater could not be started.");
 
-        owner.Hide();
-        owner.BeginInvoke(new Action(() =>
+        if (owner is not null)
         {
-            try
+            owner.Hide();
+            owner.BeginInvoke(new Action(() =>
             {
-                owner.Close();
-            }
-            finally
-            {
-                Application.Exit();
-            }
-        }));
-        return Task.CompletedTask;
+                try
+                {
+                    owner.Close();
+                }
+                finally
+                {
+                    Application.Exit();
+                }
+            }));
+        }
+
+        return Task.FromResult(true);
     }
 
     private static string PrepareUpdaterWorkingCopy(string sourceDirectory)

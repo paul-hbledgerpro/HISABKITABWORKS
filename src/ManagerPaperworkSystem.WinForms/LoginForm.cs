@@ -374,12 +374,7 @@ internal sealed class LoginForm : Form
                 await LoginAsync();
             }
         };
-        Shown += async (_, _) =>
-        {
-            await AppUpdateStartupService.CheckAtStartupAsync(this);
-            if (!IsDisposed && Visible)
-                _username.Focus();
-        };
+        Shown += (_, _) => _username.Focus();
     }
 
     private static Label FormLabel(string text)

@@ -465,7 +465,7 @@ internal sealed partial class MainForm : Form
         root.Controls.Add(sidebar, 0, 2);
         root.Controls.Add(_content, 1, 2);
 
-        _status.Text = $"Store: {_session.StoreName}    |    User: {_session.DisplayName} ({_session.Role})";
+        _status.Text = SessionStatusText();
         _status.Dock = DockStyle.Fill;
         _status.TextAlign = ContentAlignment.MiddleCenter;
         root.Controls.Add(_status, 0, 3);
@@ -501,7 +501,14 @@ internal sealed partial class MainForm : Form
         var help = new ToolStripMenuItem("Help") { ForeColor = Color.White };
         help.DropDownItems.Add(MenuItem("Check for Updates...", async (_, _) => await AppUpdateStartupService.CheckManuallyAsync(this)));
         help.DropDownItems.Add(new ToolStripSeparator());
-        help.DropDownItems.Add(MenuItem("About", (_, _) => MessageBox.Show(this, "HISAB KITAB WinForms\nConverted shell using the existing database logic.", "About", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+        help.DropDownItems.Add(MenuItem(
+            $"About HISAB KITAB {AppUpdateStartupService.CurrentVersion}",
+            (_, _) => MessageBox.Show(
+                this,
+                $"HISAB KITAB WORKS\nVersion {AppUpdateStartupService.CurrentVersion}",
+                "About HISAB KITAB",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information)));
 
         menu.Items.Add(file);
         menu.Items.Add(settings);
@@ -809,7 +816,7 @@ internal sealed partial class MainForm : Form
                 LicenseRuntime.ConfigurePayrollStateForConnection(CurrentStoreConnectionString());
                 _session.LastStoreId = selected.Id;
                 _session.StoreName = selected.Name;
-                _status.Text = $"Store: {_session.StoreName}    |    User: {_session.DisplayName} ({_session.Role})";
+                _status.Text = SessionStatusText();
                 await SaveSelectedStorePreferenceAsync(selected.Id, selected.Name, selected.Address);
             }
         }
@@ -845,6 +852,11 @@ internal sealed partial class MainForm : Form
         return a.Length > 0 && a == b;
     }
 
+    private string SessionStatusText(string? storeName = null)
+        => $"Store: {storeName ?? _session.StoreName}    |    " +
+           $"User: {_session.DisplayName} ({_session.Role})    |    " +
+           $"Version: {AppUpdateStartupService.CurrentVersion}";
+
     private async Task StoreChangedAsync()
     {
         if (_loadingStores)
@@ -860,7 +872,7 @@ internal sealed partial class MainForm : Form
         LicenseRuntime.ConfigurePayrollStateForConnection(CurrentStoreConnectionString());
         _session.LastStoreId = store.Id;
         _session.StoreName = store.Name;
-        _status.Text = $"Store: {store.Name}    |    User: {_session.DisplayName} ({_session.Role})";
+        _status.Text = SessionStatusText(store.Name);
 
         await SaveSelectedStorePreferenceAsync(store.Id, store.Name, store.Address);
 
