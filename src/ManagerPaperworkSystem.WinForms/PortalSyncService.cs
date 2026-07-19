@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Security.Principal;
+using System.Text;
+using System.Xml.Linq;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
@@ -67,34 +70,60 @@ internal static class PortalSyncService
             throw new InvalidOperationException("The installed HISAB KITAB executable could not be located.");
 
         var taskName = $"{TaskName} - {storeConfigurationId:N}";
-        var action = $"\"{executable}\" --portal-sync-store {storeConfigurationId:D}";
-        using var process = Process.Start(new ProcessStartInfo
+        var temporaryXml = Path.Combine(
+            Path.GetTempPath(),
+            $"hisab-kitab-pos-sync-{storeConfigurationId:N}-{Guid.NewGuid():N}.xml");
+        try
         {
-            FileName = "schtasks.exe",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            ArgumentList =
+            File.WriteAllText(
+                temporaryXml,
+                CreateScheduledTaskXml(executable, storeConfigurationId, runAt),
+                Encoding.Unicode);
+            using var process = Process.Start(new ProcessStartInfo
             {
-                "/Create",
-                "/TN", taskName,
-                "/TR", action,
-                "/SC", "DAILY",
-                "/ST", runAt.ToString("HH:mm", CultureInfo.InvariantCulture),
-                "/F"
+                FileName = "schtasks.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                ArgumentList =
+                {
+                    "/Create",
+                    "/TN", taskName,
+                    "/XML", temporaryXml,
+                    "/F"
+                }
+            }) ?? throw new InvalidOperationException("Windows Task Scheduler could not be started.");
+            process.WaitForExit(20_000);
+            if (process.ExitCode != 0)
+            {
+                var error = process.StandardError.ReadToEnd().Trim();
+                if (string.IsNullOrWhiteSpace(error))
+                    error = process.StandardOutput.ReadToEnd().Trim();
+                throw new InvalidOperationException(
+                    "The daily sync task could not be created. " +
+                    (string.IsNullOrWhiteSpace(error) ? "Run HISAB KITAB once as administrator." : error));
             }
-        }) ?? throw new InvalidOperationException("Windows Task Scheduler could not be started.");
-        process.WaitForExit(20_000);
-        if (process.ExitCode != 0)
-        {
-            var error = process.StandardError.ReadToEnd().Trim();
-            if (string.IsNullOrWhiteSpace(error))
-                error = process.StandardOutput.ReadToEnd().Trim();
-            throw new InvalidOperationException(
-                "The daily sync task could not be created. " +
-                (string.IsNullOrWhiteSpace(error) ? "Run HISAB KITAB once as administrator." : error));
         }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryXml);
+            }
+            catch
+            {
+                // A temporary task definition can be removed by Windows later.
+            }
+        }
+    }
+
+    public static void EnsureConfiguredDailyTasks()
+    {
+        foreach (var settings in PortalSyncSettingsStore.Load().Stores.Where(item => item.Enabled))
+            EnsureDailyTask(
+                settings.Id,
+                new TimeOnly(settings.DailyHour, settings.DailyMinute));
     }
 
     public static async Task<IReadOnlyList<PortalSyncRunResult>> RunDueAsync(
@@ -127,15 +156,40 @@ internal static class PortalSyncService
 
             var document = PortalSyncSettingsStore.Load();
             var results = new List<PortalSyncRunResult>();
-            foreach (var settings in document.Stores
-                         .Where(item => item.Enabled &&
-                                        (onlyStoreConfigurationId is null ||
-                                         item.Id == onlyStoreConfigurationId.Value))
-                         .ToList())
+            var configuredStores = document.Stores
+                .Where(item => item.Enabled &&
+                               (onlyStoreConfigurationId is null ||
+                                item.Id == onlyStoreConfigurationId.Value))
+                .ToList();
+            if (onlyStoreConfigurationId is not null && configuredStores.Count == 0)
+            {
+                var missing = new PortalSyncRunResult(
+                    "",
+                    false,
+                    false,
+                    $"The scheduled POS configuration {onlyStoreConfigurationId:D} was not found or is disabled.");
+                results.Add(missing);
+                WriteLog(missing);
+                return results;
+            }
+
+            foreach (var settings in configuredStores)
             {
                 var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
                 if (!force && settings.LastImportedReportDate >= yesterday)
+                {
+                    var skipped = new PortalSyncRunResult(
+                        settings.BusinessName,
+                        true,
+                        false,
+                        $"Scheduled check completed: the {yesterday:M/d/yyyy} POS reports were already imported.");
+                    settings.LastAttemptUtc = DateTime.UtcNow;
+                    settings.LastStatus = skipped.Message;
+                    results.Add(skipped);
+                    PortalSyncSettingsStore.Save(document);
+                    WriteLog(skipped);
                     continue;
+                }
                 if (!force && DateTime.Now.TimeOfDay <
                     new TimeSpan(settings.DailyHour, settings.DailyMinute, 0))
                     continue;
@@ -187,6 +241,69 @@ internal static class PortalSyncService
             processLock?.Dispose();
             RunGate.Release();
         }
+    }
+
+    internal static void WriteDiagnostic(
+        string businessName,
+        bool success,
+        string message) =>
+        WriteLog(new PortalSyncRunResult(businessName, success, false, message));
+
+    private static string CreateScheduledTaskXml(
+        string executable,
+        Guid storeConfigurationId,
+        TimeOnly runAt)
+    {
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        var userSid = WindowsIdentity.GetCurrent().User?.Value
+                      ?? throw new InvalidOperationException(
+                          "The current Windows user could not be identified for POS scheduling.");
+        var start = DateTime.Today.Add(runAt.ToTimeSpan())
+            .ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
+        var document = new XDocument(
+            new XDeclaration("1.0", "UTF-16", null),
+            new XElement(ns + "Task",
+                new XAttribute("version", "1.4"),
+                new XElement(ns + "RegistrationInfo",
+                    new XElement(ns + "Description",
+                        "Downloads and imports the prior day's HISAB KITAB POS reports.")),
+                new XElement(ns + "Triggers",
+                    new XElement(ns + "CalendarTrigger",
+                        new XElement(ns + "StartBoundary", start),
+                        new XElement(ns + "Enabled", "true"),
+                        new XElement(ns + "ScheduleByDay",
+                            new XElement(ns + "DaysInterval", "1")))),
+                new XElement(ns + "Principals",
+                    new XElement(ns + "Principal",
+                        new XAttribute("id", "Author"),
+                        new XElement(ns + "UserId", userSid),
+                        new XElement(ns + "LogonType", "InteractiveToken"),
+                        new XElement(ns + "RunLevel", "LeastPrivilege"))),
+                new XElement(ns + "Settings",
+                    new XElement(ns + "MultipleInstancesPolicy", "IgnoreNew"),
+                    new XElement(ns + "DisallowStartIfOnBatteries", "false"),
+                    new XElement(ns + "StopIfGoingOnBatteries", "false"),
+                    new XElement(ns + "AllowHardTerminate", "true"),
+                    new XElement(ns + "StartWhenAvailable", "true"),
+                    new XElement(ns + "AllowStartOnDemand", "true"),
+                    new XElement(ns + "Enabled", "true"),
+                    new XElement(ns + "Hidden", "false"),
+                    new XElement(ns + "RunOnlyIfIdle", "false"),
+                    new XElement(ns + "WakeToRun", "true"),
+                    new XElement(ns + "ExecutionTimeLimit", "PT2H"),
+                    new XElement(ns + "Priority", "7"),
+                    new XElement(ns + "RestartOnFailure",
+                        new XElement(ns + "Interval", "PT15M"),
+                        new XElement(ns + "Count", "3"))),
+                new XElement(ns + "Actions",
+                    new XAttribute("Context", "Author"),
+                    new XElement(ns + "Exec",
+                        new XElement(ns + "Command", executable),
+                        new XElement(ns + "Arguments",
+                            $"--portal-sync-store {storeConfigurationId:D}"),
+                        new XElement(ns + "WorkingDirectory",
+                            Path.GetDirectoryName(executable) ?? "")))));
+        return document.ToString(SaveOptions.DisableFormatting);
     }
 
     private static async Task<PortalSyncRunResult> RunStoreWithRetriesAsync(

@@ -103,22 +103,33 @@ internal static class Program
         try
         {
             // Scheduled execution must never open an activation or error dialog.
-            if (DeviceLicenseService.ValidateInstalledLicense().Status != DeviceLicenseStatus.Valid)
+            var licenseStatus = DeviceLicenseService.ValidateInstalledLicense().Status;
+            if (licenseStatus != DeviceLicenseStatus.Valid)
+            {
+                PortalSyncService.WriteDiagnostic(
+                    "",
+                    false,
+                    $"Scheduled POS sync stopped because the device license status is {licenseStatus}.");
+                Environment.ExitCode = 1;
                 return;
+            }
             using var services = AppBootstrap.BuildServices();
             AppBootstrap.InitializeDatabaseAsync(services).GetAwaiter().GetResult();
             LicensedBusinessService.SynchronizeAsync(services).GetAwaiter().GetResult();
             var paths = services.GetRequiredService<ManagerPaperworkSystem.Core.Services.IAppPaths>();
-            PortalSyncService.RunDueAsync(
+            var results = PortalSyncService.RunDueAsync(
                     paths,
                     force: false,
                     visibleChrome: false,
                     onlyStoreConfigurationId: storeConfigurationId)
                 .GetAwaiter()
                 .GetResult();
+            if (results.Any(result => !result.Success))
+                Environment.ExitCode = 1;
         }
         catch (Exception exception)
         {
+            Environment.ExitCode = 1;
             try
             {
                 var directory = Path.Combine(AppBootstrap.AppDataPath, "Logs");

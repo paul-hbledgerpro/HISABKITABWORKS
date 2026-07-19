@@ -144,6 +144,17 @@ internal sealed partial class MainForm : Form
     {
         try
         {
+            // Refresh task settings after an application update so existing
+            // clients gain missed-start, wake, battery, and retry behavior.
+            PortalSyncService.EnsureConfiguredDailyTasks();
+        }
+        catch
+        {
+            // The in-app catch-up below still works if Windows rejects a task update.
+        }
+
+        try
+        {
             var results = await PortalSyncService.RunDueAsync(_paths, force: false, visibleChrome: false);
             var message = results.LastOrDefault()?.Message;
             if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
