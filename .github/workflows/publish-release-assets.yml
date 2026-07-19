@@ -1,0 +1,59 @@
+name: Publish desktop release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag
+        required: true
+        type: string
+      version:
+        description: Four-part-free application version (for example 1.0.112)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build installers and automatic-update packages
+        shell: pwsh
+        run: ./installer/build_three_installers.ps1 -Version '${{ inputs.version }}'
+
+      - name: Upload all release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $files = Get-ChildItem -LiteralPath installer/release -File |
+            Where-Object {
+              $_.Name -like "*_${{ inputs.version }}.exe" -or
+              $_.Name -like "*_${{ inputs.version }}.zip"
+            } |
+            Select-Object -ExpandProperty FullName
+
+          if ($files.Count -ne 6) {
+            throw "Expected exactly six release assets, found $($files.Count)."
+          }
+
+          gh release upload $env:RELEASE_TAG $files --clobber
