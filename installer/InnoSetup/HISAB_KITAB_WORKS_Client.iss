@@ -17,7 +17,7 @@ DisableProgramGroupPage=yes
 OutputDir=..\release
 OutputBaseFilename=HISAB_KITAB_WORKS_Client_Setup_1.0.105
 SetupIconFile=..\..\src\ManagerPaperworkSystem.UI\Assets\HisabKitab.ico
-Compression=lzma2
+Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
@@ -38,7 +38,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The application UI is English-only. Excluding optional .NET satellite
+; translation assemblies keeps the self-contained installer below common
+; enterprise proxy upload limits without removing any executable dependency.
+Source: "{#MySourceDir}\*"; DestDir: "{app}"; Excludes: "\cs\*,\de\*,\es\*,\fr\*,\it\*,\ja\*,\ko\*,\pl\*,\pt-BR\*,\ru\*,\tr\*,\zh-Hans\*,\zh-Hant\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
