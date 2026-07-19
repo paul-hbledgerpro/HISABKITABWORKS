@@ -742,6 +742,22 @@ internal sealed partial class MainForm
                 item.StoreId == _currentStoreId &&
                 item.PosSalesSummaryId == summary.Id);
         var oldDate = shift?.Date;
+        var hasRegisterZReports = await db.ShiftLogs.AsNoTracking()
+            .AnyAsync(item =>
+                item.StoreId == _currentStoreId &&
+                item.Date == summary.ReportTo &&
+                item.PosReportKey != "");
+
+        if (hasRegisterZReports)
+        {
+            if (shift is not null)
+            {
+                db.ShiftLogs.Remove(shift);
+                await db.SaveChangesAsync();
+                await SyncShiftLogCashDropsToCashOnHandAsync(oldDate!.Value);
+            }
+            return;
+        }
 
         if (!summary.IsReconciled)
         {

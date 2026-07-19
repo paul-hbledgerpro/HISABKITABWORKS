@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using ClosedXML.Excel;
 
@@ -34,6 +35,42 @@ public sealed class PosReportImportService
             ".pdf" => ImportPdf(filePath),
             _ => throw new NotSupportedException("Only .xlsx and .pdf are supported.")
         };
+    }
+
+    public IReadOnlyList<PosReportData> ImportZReports(string filePath)
+    {
+        if (!Path.GetExtension(filePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            return [Import(filePath)];
+
+        using var document = UglyToad.PdfPig.PdfDocument.Open(filePath);
+        var reports = new Dictionary<string, StringBuilder>(StringComparer.OrdinalIgnoreCase);
+        string? activeBatch = null;
+        foreach (var page in document.GetPages())
+        {
+            var text = page.Text ?? "";
+            var batch = RegexMatch1(text, @"Batch:\s*([0-9]+)");
+            if (!string.IsNullOrWhiteSpace(batch))
+                activeBatch = batch;
+            if (string.IsNullOrWhiteSpace(activeBatch))
+                continue;
+            if (!reports.TryGetValue(activeBatch, out var report))
+            {
+                report = new StringBuilder();
+                reports.Add(activeBatch, report);
+            }
+            report.AppendLine(text);
+        }
+
+        if (reports.Count == 0)
+            return [Import(filePath)];
+
+        return reports.Values
+            .Select(report => ParseZReportFromText(report.ToString()))
+            .GroupBy(report =>
+                $"{report.ReportDate:yyyy-MM-dd}|{report.ShiftOrBatch}|{report.Employee}",
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
     }
 
     private PosReportData ImportXlsx(string filePath)

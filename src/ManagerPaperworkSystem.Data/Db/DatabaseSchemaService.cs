@@ -127,12 +127,13 @@ public static class DatabaseSchemaService
                     [RegisterPayout] DECIMAL(18,2) NOT NULL DEFAULT 0,
                     [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '',
                     [PosSalesSummaryId] INT NULL,
+                    [PosReportKey] NVARCHAR(200) NOT NULL DEFAULT '',
                     [IsCorrection] BIT NOT NULL DEFAULT 0,
                     [CorrectsId] INT NULL,
                     [CreatedByUserId] INT NULL,
                     [CreatedByName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                    [PosReportPath] NVARCHAR(500) NULL
+                    [PosReportPath] NVARCHAR(500) NOT NULL DEFAULT ''
                 )");
 
             await ExecuteSafe(conn, @"
@@ -170,6 +171,8 @@ public static class DatabaseSchemaService
                 )");
 
             await EnsureColumnAsync(conn, "ShiftLogs", "PosSalesSummaryId", "INT NULL");
+            await EnsureColumnAsync(conn, "ShiftLogs", "PosReportKey", "NVARCHAR(200) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "ShiftLogs", "PosReportPath", "NVARCHAR(500) NOT NULL DEFAULT ''");
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (
                     SELECT 1 FROM sys.indexes
@@ -178,6 +181,14 @@ public static class DatabaseSchemaService
                     CREATE UNIQUE INDEX [UX_ShiftLogs_PosSalesSummaryId]
                         ON [dbo].[ShiftLogs] ([PosSalesSummaryId])
                         WHERE [PosSalesSummaryId] IS NOT NULL;");
+            await ExecuteSafe(conn, @"
+                IF NOT EXISTS (
+                    SELECT 1 FROM sys.indexes
+                    WHERE name = 'UX_ShiftLogs_Store_PosReportKey'
+                      AND object_id = OBJECT_ID(N'[dbo].[ShiftLogs]'))
+                    CREATE UNIQUE INDEX [UX_ShiftLogs_Store_PosReportKey]
+                        ON [dbo].[ShiftLogs] ([StoreId], [PosReportKey])
+                        WHERE [PosReportKey] <> '';");
 
             // Consolidated POS summaries retain the source report details and can be
             // reconciled into one accounting shift entry after a manager enters the

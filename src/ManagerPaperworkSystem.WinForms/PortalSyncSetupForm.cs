@@ -19,6 +19,14 @@ internal sealed class PortalSyncSetupForm : Form
         Dock = DockStyle.Fill,
         Font = WinTheme.BodyFont(10)
     };
+    private readonly NumericUpDown _expectedZReports = new()
+    {
+        Minimum = 1,
+        Maximum = 20,
+        Value = 2,
+        Dock = DockStyle.Fill,
+        Font = WinTheme.BodyFont(10)
+    };
     private readonly CheckBox _enabled = new()
     {
         Text = "Enable unattended daily download and import",
@@ -125,7 +133,8 @@ internal sealed class PortalSyncSetupForm : Form
         card.Controls.Add(form);
 
         AddField(form, "LICENSED HISAB KITAB STORE *", _business, 0, 0, 2);
-        AddField(form, "DAILY RUN TIME", _runTime, 2, 0, 2);
+        AddField(form, "DAILY RUN TIME", _runTime, 2, 0, 1);
+        AddField(form, "DAILY Z REPORTS", _expectedZReports, 3, 0, 1);
         AddField(form, "ADVENTPOS WEB PORTAL", _portalUrl, 0, 1, 4);
         AddField(form, "PORTAL EMAIL *", _email, 0, 2, 2);
         AddField(form, "PORTAL PASSWORD *", _portalPassword, 2, 2, 2);
@@ -144,7 +153,8 @@ internal sealed class PortalSyncSetupForm : Form
                 "1. Save the settings.  2. Open the dedicated Chrome profile.  " +
                 "3. Complete any AdventPOS verification and select the correct store.  " +
                 "4. Close Chrome and use TEST / SYNC NOW.\n\n" +
-                "After that, Windows runs the sync daily. If the PC is off, HISAB KITAB catches up the next time it opens.",
+                "After that, Windows downloads the Cash & Sales Summary and every expected register Z Report together. " +
+                "If the PC is off, HISAB KITAB catches up the next time it opens.",
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,
             Font = WinTheme.BodyFont(10),
@@ -252,6 +262,7 @@ internal sealed class PortalSyncSetupForm : Form
         settings.Enabled = _enabled.Checked;
         settings.DailyHour = _runTime.Value.Hour;
         settings.DailyMinute = _runTime.Value.Minute;
+        settings.ExpectedDailyZReports = decimal.ToInt32(_expectedZReports.Value);
         if (!_document.Stores.Contains(settings))
             _document.Stores.Add(settings);
         PortalSyncSettingsStore.Save(_document);
@@ -288,6 +299,7 @@ internal sealed class PortalSyncSetupForm : Form
         _runTime.Value = DateTime.Today
             .AddHours(settings?.DailyHour ?? 1)
             .AddMinutes(settings?.DailyMinute ?? 15);
+        _expectedZReports.Value = Math.Clamp(settings?.ExpectedDailyZReports ?? 2, 1, 20);
         _status.Text = settings is null
             ? $"No automatic POS setup exists for {business.BusinessName}."
             : $"Last result: {settings.LastStatus}";

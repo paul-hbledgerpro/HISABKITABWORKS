@@ -25,6 +25,7 @@ internal sealed class PortalStoreSyncSettings
     public string StorePassword { get; set; } = "";
     public int DailyHour { get; set; } = 1;
     public int DailyMinute { get; set; } = 15;
+    public int ExpectedDailyZReports { get; set; } = 2;
     public DateTime? LastAttemptUtc { get; set; }
     public DateTime? LastSuccessUtc { get; set; }
     public DateOnly? LastImportedReportDate { get; set; }

@@ -85,6 +85,10 @@ public static class DbInitializer
                         ALTER TABLE [dbo].[ShiftLogs] ADD [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '';
                     IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PosSalesSummaryId') IS NULL
                         ALTER TABLE [dbo].[ShiftLogs] ADD [PosSalesSummaryId] INT NULL;
+                    IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PosReportKey') IS NULL
+                        ALTER TABLE [dbo].[ShiftLogs] ADD [PosReportKey] NVARCHAR(200) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PosReportPath') IS NULL
+                        ALTER TABLE [dbo].[ShiftLogs] ADD [PosReportPath] NVARCHAR(500) NOT NULL DEFAULT '';
                     IF NOT EXISTS (
                         SELECT 1 FROM sys.indexes
                         WHERE name = 'UX_ShiftLogs_PosSalesSummaryId'
@@ -92,6 +96,13 @@ public static class DbInitializer
                         CREATE UNIQUE INDEX [UX_ShiftLogs_PosSalesSummaryId]
                             ON [dbo].[ShiftLogs] ([PosSalesSummaryId])
                             WHERE [PosSalesSummaryId] IS NOT NULL;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM sys.indexes
+                        WHERE name = 'UX_ShiftLogs_Store_PosReportKey'
+                          AND object_id = OBJECT_ID(N'[dbo].[ShiftLogs]'))
+                        CREATE UNIQUE INDEX [UX_ShiftLogs_Store_PosReportKey]
+                            ON [dbo].[ShiftLogs] ([StoreId], [PosReportKey])
+                            WHERE [PosReportKey] <> '';
                 END";
             await shiftCmd.ExecuteNonQueryAsync(ct);
 
@@ -170,11 +181,19 @@ public static class DbInitializer
                 await alterCmd.ExecuteNonQueryAsync(ct);
             }
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosSalesSummaryId", "INTEGER NULL", ct);
+            await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosReportKey", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosReportPath", "TEXT NOT NULL DEFAULT ''", ct);
             using (var shiftIndexCmd = conn.CreateCommand())
             {
                 shiftIndexCmd.CommandText =
                     "CREATE UNIQUE INDEX IF NOT EXISTS UX_ShiftLogs_PosSalesSummaryId ON ShiftLogs (PosSalesSummaryId)";
                 await shiftIndexCmd.ExecuteNonQueryAsync(ct);
+            }
+            using (var reportIndexCmd = conn.CreateCommand())
+            {
+                reportIndexCmd.CommandText =
+                    "CREATE UNIQUE INDEX IF NOT EXISTS UX_ShiftLogs_Store_PosReportKey ON ShiftLogs (StoreId, PosReportKey) WHERE PosReportKey <> ''";
+                await reportIndexCmd.ExecuteNonQueryAsync(ct);
             }
 
             using var settingsColumnCmd = conn.CreateCommand();

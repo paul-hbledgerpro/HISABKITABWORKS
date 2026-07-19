@@ -87,6 +87,10 @@ public sealed class AppDbContext : DbContext
 
         modelBuilder.Entity<ShiftLogEntry>().HasIndex(x => new { x.StoreId, x.Date });
         modelBuilder.Entity<ShiftLogEntry>().HasIndex(x => x.PosSalesSummaryId).IsUnique();
+        modelBuilder.Entity<ShiftLogEntry>()
+            .HasIndex(x => new { x.StoreId, x.PosReportKey })
+            .IsUnique()
+            .HasFilter("[PosReportKey] <> ''");
         modelBuilder.Entity<CashOnHandEntry>().HasIndex(x => new { x.StoreId, x.Date });
         modelBuilder.Entity<CheckPayout>().HasIndex(x => new { x.StoreId, x.Date });
         modelBuilder.Entity<PosSalesSummary>().HasIndex(x => new { x.StoreId, x.ReportFrom, x.ReportTo });

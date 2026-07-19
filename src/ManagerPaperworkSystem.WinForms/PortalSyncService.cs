@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
+using ManagerPaperworkSystem.UI.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using PuppeteerSharp;
@@ -14,6 +16,8 @@ internal sealed record PortalSyncRunResult(
     bool Success,
     bool Imported,
     string Message);
+
+internal sealed record ZReportImportOutcome(int Total, int Imported, int Updated);
 
 internal static class PortalSyncService
 {
@@ -222,6 +226,11 @@ internal static class PortalSyncService
         Directory.CreateDirectory(profile);
         Directory.CreateDirectory(downloadDirectory);
         DeleteOldDownloads(downloadDirectory);
+        var runDirectory = Path.Combine(downloadDirectory, $"run-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}");
+        var cashDownloadDirectory = Path.Combine(runDirectory, "cash-sales-summary");
+        var zDownloadDirectory = Path.Combine(runDirectory, "z-reports");
+        Directory.CreateDirectory(cashDownloadDirectory);
+        Directory.CreateDirectory(zDownloadDirectory);
 
         await using var browser = await Puppeteer.LaunchAsync(new LaunchOptions
         {
@@ -242,7 +251,8 @@ internal static class PortalSyncService
         var page = pages.FirstOrDefault() ?? await browser.NewPageAsync();
         page.DefaultTimeout = 45_000;
         await ConfigureDownloadsAsync(page, downloadDirectory);
-        string downloadedPath;
+        string cashSummaryPath;
+        string zReportsPath;
         try
         {
             await page.GoToAsync(settings.PortalUrl, WaitUntilNavigation.Networkidle2);
@@ -250,8 +260,19 @@ internal static class PortalSyncService
 
             await EnsureSignedInAsync(page, settings);
             await OpenCashAndSalesReportAsync(page);
-            downloadedPath = await GenerateReportAsync(
-                browser, page, downloadDirectory, targetDate, cancellationToken);
+            cashSummaryPath = await GenerateReportAsync(
+                browser, page, cashDownloadDirectory, targetDate, "Cash and Sales Summary",
+                downloaded =>
+                    CashSalesSummaryImportCoordinator.Validate(
+                        CashSalesSummaryPdfImporter.ImportAsync(downloaded, cancellationToken)
+                            .GetAwaiter().GetResult()),
+                cancellationToken);
+
+            await OpenZReportAsync(page);
+            zReportsPath = await GenerateReportAsync(
+                browser, page, zDownloadDirectory, targetDate, "Z Report",
+                downloaded => ValidateZReports(downloaded, settings.ExpectedDailyZReports, targetDate),
+                cancellationToken);
         }
         catch (Exception exception)
         {
@@ -281,13 +302,20 @@ internal static class PortalSyncService
         await EnsureTargetDatabaseReadyAsync(db, settings.BusinessName);
         var dataStoreId = await ResolveDataStoreIdAsync(db, settings.BusinessName, cancellationToken);
         var outcome = await CashSalesSummaryImportCoordinator.ImportAsync(
-            db, paths, dataStoreId, downloadedPath, 0, "Automatic POS Portal Sync", cancellationToken);
+            db, paths, dataStoreId, cashSummaryPath, 0, "Automatic POS Portal Sync", cancellationToken);
+        var zResult = await ImportZReportsAsync(
+            db, paths, dataStoreId, zReportsPath, settings.ExpectedDailyZReports, targetDate,
+            cancellationToken);
 
-        return outcome.Duplicate
-            ? new PortalSyncRunResult(settings.BusinessName, true, false,
-                $"The {targetDate:M/d/yyyy} POS report was already imported.")
-            : new PortalSyncRunResult(settings.BusinessName, true, true,
-                $"Imported the {targetDate:M/d/yyyy} POS Cash and Sales Summary.");
+        var imported = !outcome.Duplicate || zResult.Imported > 0;
+        return new PortalSyncRunResult(
+            settings.BusinessName,
+            true,
+            imported,
+            $"POS sync for {targetDate:M/d/yyyy}: " +
+            $"{(outcome.Duplicate ? "daily summary already present" : "daily summary imported")}; " +
+            $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s), " +
+            $"{zResult.Total} register report(s) verified.");
     }
 
     private static async Task EnsureSignedInAsync(IPage page, PortalStoreSyncSettings settings)
@@ -515,11 +543,82 @@ internal static class PortalSyncService
             throw new InvalidOperationException("Cash and Sales Summary is not available for this AdventPOS account.");
     }
 
+    private static async Task OpenZReportAsync(IPage page)
+    {
+        if (!await IsVisibleAsync(page, "#ReportModal"))
+        {
+            var reopened = await page.EvaluateExpressionAsync<bool>(
+                @"(() => {
+                    const reportModal = document.querySelector('#ReportModal');
+                    if (reportModal && window.jQuery && typeof window.jQuery.fn.modal === 'function') {
+                        window.jQuery(reportModal).modal('show');
+                        return true;
+                    }
+
+                    const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const adminReports = Array.from(
+                        document.querySelectorAll('a,button,[role=""button""]')).find(element =>
+                        normalize(element.textContent) === 'admin reports');
+                    if (!adminReports) return false;
+                    adminReports.click();
+                    return true;
+                })()");
+
+            if (!reopened)
+                throw new InvalidOperationException(
+                    "The AdventPOS Admin Reports control could not be reopened for the Z Report.");
+        }
+
+        await WaitUntilAsync(page,
+            async () =>
+                await HasCashReportFunctionsAsync(page) &&
+                await IsVisibleAsync(page, "#ReportModal"),
+            TimeSpan.FromSeconds(30),
+            "The AdventPOS Admin Reports window was not available for the Z Report.");
+
+        var selected = await page.EvaluateFunctionAsync<bool>(
+            @"() => {
+                if (!Array.isArray(window.SalesReports_Enum)) return false;
+                const salesTab = document.querySelector(
+                    'ul#ULReportTabs li[data-id=""0""] a, ul#ULReportTabs li[data-Id=""0""] a');
+                if (salesTab) {
+                    if (window.jQuery && typeof window.jQuery.fn.tab === 'function')
+                        window.jQuery(salesTab).tab('show');
+                    else
+                        salesTab.click();
+                }
+
+                const normalize = value => (value || '')
+                    .replace(/[^a-z0-9]/gi, '')
+                    .toLowerCase();
+                const index = window.SalesReports_Enum.findIndex(report => {
+                    if (!report) return false;
+                    const name = normalize(report.Name);
+                    const longName = normalize(report.LongName);
+                    return name === 'zreport' ||
+                           longName === 'zreport' ||
+                           name.includes('zreport') ||
+                           longName.includes('zreport');
+                });
+                if (index < 0) return false;
+                const selector = `#Div_tbRptSales [data-Id='${index}'], #Div_tbRptSales [data-id='${index}']`;
+                const item = document.querySelector(selector);
+                if (!item || typeof window.lstSales_SelectedIndexChanged !== 'function') return false;
+                window.lstSales_SelectedIndexChanged(item);
+                return true;
+            }");
+        if (!selected)
+            throw new InvalidOperationException(
+                "Z Report is not available in AdventPOS Admin Reports for this store.");
+    }
+
     private static async Task<string> GenerateReportAsync(
         IBrowser browser,
         IPage page,
         string downloadDirectory,
         DateOnly targetDate,
+        string reportName,
+        Action<string> validateDownload,
         CancellationToken cancellationToken)
     {
         var dateText = targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -575,8 +674,7 @@ internal static class PortalSyncService
             var downloaded = FindCompletedPdf(downloadDirectory);
             if (downloaded is not null)
             {
-                CashSalesSummaryImportCoordinator.Validate(
-                    await CashSalesSummaryPdfImporter.ImportAsync(downloaded, cancellationToken));
+                validateDownload(downloaded);
                 return downloaded;
             }
 
@@ -608,7 +706,7 @@ internal static class PortalSyncService
         }
 
         throw new InvalidOperationException(
-            "AdventPOS did not produce a valid Cash and Sales Summary PDF. The portal may have changed its report screen.");
+            $"AdventPOS did not produce a valid {reportName} PDF. The portal may have changed its report screen.");
     }
 
     private static async Task RequestActiveReportsPdfExportAsync(IPage reportPage)
@@ -662,6 +760,147 @@ internal static class PortalSyncService
             @"Array.from(document.querySelectorAll('.arjs-export-panel button'))
                 .find(button => button.title === 'Export')
                 .click()");
+    }
+
+    private static void ValidateZReports(
+        string path,
+        int expectedReportCount,
+        DateOnly targetDate)
+    {
+        var reports = new PosReportImportService().ImportZReports(path);
+        var valid = reports
+            .Where(report =>
+                report.ReportDate.HasValue &&
+                !string.IsNullOrWhiteSpace(report.ShiftOrBatch) &&
+                (report.CashTotal != 0m ||
+                 report.CardTotal != 0m ||
+                 report.NetSales != 0m ||
+                 report.TaxTotal != 0m))
+            .ToList();
+        if (valid.Count < Math.Max(1, expectedReportCount))
+            throw new InvalidOperationException(
+                $"The AdventPOS Z Report contained {valid.Count} valid register report(s); " +
+                $"{Math.Max(1, expectedReportCount)} were expected.");
+        if (valid.Any(report => report.ReportDate != targetDate))
+            throw new InvalidOperationException(
+                $"The AdventPOS Z Report did not contain only the requested shift date {targetDate:M/d/yyyy}.");
+    }
+
+    private static async Task<ZReportImportOutcome> ImportZReportsAsync(
+        AppDbContext db,
+        IAppPaths paths,
+        int storeId,
+        string sourcePath,
+        int expectedReportCount,
+        DateOnly targetDate,
+        CancellationToken cancellationToken)
+    {
+        ValidateZReports(sourcePath, expectedReportCount, targetDate);
+        var reports = new PosReportImportService().ImportZReports(sourcePath)
+            .Where(report => report.ReportDate == targetDate)
+            .OrderBy(report => report.ShiftOrBatch)
+            .ToList();
+
+        var sourceBytes = await File.ReadAllBytesAsync(sourcePath, cancellationToken);
+        var sourceHash = Convert.ToHexString(SHA256.HashData(sourceBytes));
+        var reportFolder = Path.Combine(
+            paths.AppDataDirectory,
+            "POS Z Reports",
+            storeId.ToString(CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(reportFolder);
+        var storedPath = Path.Combine(
+            reportFolder,
+            $"{targetDate:yyyyMMdd}_{sourceHash[..12]}.pdf");
+        if (!File.Exists(storedPath))
+            File.Copy(sourcePath, storedPath, false);
+
+        var imported = 0;
+        var updated = 0;
+        foreach (var report in reports)
+        {
+            var batch = report.ShiftOrBatch!.Trim();
+            var employee = string.IsNullOrWhiteSpace(report.Employee)
+                ? "POS User"
+                : report.Employee.Trim();
+            var reportKey = BuildZReportKey(targetDate, batch);
+            var shift = await db.ShiftLogs.FirstOrDefaultAsync(item =>
+                    item.StoreId == storeId &&
+                    (item.PosReportKey == reportKey ||
+                     (item.Date == targetDate &&
+                      item.ShiftNo == batch &&
+                      item.PosSalesSummaryId == null)),
+                cancellationToken);
+            if (shift is null)
+            {
+                shift = new ShiftLogEntry
+                {
+                    StoreId = storeId,
+                    Date = targetDate,
+                    ShiftNo = batch,
+                    Employee = employee,
+                    PosReportKey = reportKey,
+                    PosReportPath = storedPath,
+                    CreatedByUserId = 0,
+                    CreatedByName = "Automatic POS Portal Sync",
+                    CreatedUtc = DateTime.UtcNow
+                };
+                db.ShiftLogs.Add(shift);
+                imported++;
+            }
+            else
+            {
+                shift.PosReportKey = reportKey;
+                shift.PosReportPath = storedPath;
+                updated++;
+            }
+
+            // Keep any manager-entered cash drop, payout, and reason intact
+            // when a retry refreshes the source report totals.
+            shift.Date = targetDate;
+            shift.ShiftNo = batch;
+            shift.Employee = employee;
+            shift.CashTotal = report.CashTotal;
+            shift.CardTotal = report.CardTotal;
+            shift.NetSales = report.NetSales;
+            shift.Tax = report.TaxTotal;
+        }
+
+        // Z reports are the register-level source of truth for Shift Cash Drop.
+        // Remove the older consolidated daily ShiftLog projection to avoid
+        // counting the same sales a third time. The Cash & Sales Summary and
+        // its manager reconciliation remain intact in PosSalesSummaries.
+        var consolidated = await db.ShiftLogs
+            .Where(item =>
+                item.StoreId == storeId &&
+                item.Date == targetDate &&
+                item.PosSalesSummaryId != null)
+            .ToListAsync(cancellationToken);
+        if (consolidated.Count > 0)
+        {
+            var references = consolidated
+                .Select(item => $"SHIFTLOG:{item.Id}")
+                .ToList();
+            var linkedCashRows = await db.CashOnHand
+                .Where(item =>
+                    item.StoreId == storeId &&
+                    item.Reference != null &&
+                    references.Contains(item.Reference))
+                .ToListAsync(cancellationToken);
+            db.CashOnHand.RemoveRange(linkedCashRows);
+            db.ShiftLogs.RemoveRange(consolidated);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return new ZReportImportOutcome(reports.Count, imported, updated);
+    }
+
+    private static string BuildZReportKey(DateOnly date, string batch)
+    {
+        var safeBatch = new string(batch
+            .Where(character => char.IsLetterOrDigit(character) || character is '-' or '_')
+            .Select(char.ToUpperInvariant)
+            .ToArray());
+        return $"ADVENTPOS-Z|{date:yyyy-MM-dd}|{safeBatch}";
     }
 
     private static async Task ConfigureDownloadsAsync(IPage page, string downloadDirectory)

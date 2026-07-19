@@ -1551,7 +1551,24 @@ internal sealed partial class MainForm : Form
         {
             using var db = CreateDb();
             grid.DataSource = db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
-                .Select(x => new { x.Id, x.Date, Shift = x.ShiftNo, x.Employee, Cash = x.CashTotal, Card = x.CardTotal, Gross = x.GrossSales, Net = x.NetSales, Tax = x.Tax, Drop = x.CashDropReceived, Payout = x.RegisterPayout, x.PayoutReason, x.Variance })
+                .Select(x => new
+                {
+                    x.Id,
+                    x.Date,
+                    Shift = x.ShiftNo,
+                    x.Employee,
+                    Source = x.PosReportKey != "" ? "Automatic Z Report" :
+                        x.PosSalesSummaryId != null ? "Daily POS Summary" : "Manual",
+                    Cash = x.CashTotal,
+                    Card = x.CardTotal,
+                    Gross = x.GrossSales,
+                    Net = x.NetSales,
+                    Tax = x.Tax,
+                    Drop = x.CashDropReceived,
+                    Payout = x.RegisterPayout,
+                    x.PayoutReason,
+                    x.Variance
+                })
                 .ToList();
             HideId(grid);
         }
@@ -1768,6 +1785,59 @@ internal sealed partial class MainForm : Form
             refresh();
             MessageBox.Show(this, "Selected shift cash drop entry updated successfully.", "Shift Cash Drop", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
+        async Task saveImportedDropAsync()
+        {
+            var id = SelectedId(grid);
+            if (id is null)
+            {
+                MessageBox.Show(this,
+                    "Double-click an automatically imported Z Report row first.",
+                    "Shift Cash Drop",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            using var db = CreateDb();
+            var entry = await db.ShiftLogs
+                .FirstOrDefaultAsync(x => x.Id == id.Value && x.StoreId == _currentStoreId);
+            if (entry is null)
+                return;
+            if (string.IsNullOrWhiteSpace(entry.PosReportKey))
+            {
+                MessageBox.Show(this,
+                    "This is not an automatically imported Z Report. Use Update Selected for a manual correction.",
+                    "Shift Cash Drop",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            var payoutAmount = Money(payout.Text);
+            if (payoutAmount > 0m && string.IsNullOrWhiteSpace(reason.Text))
+            {
+                MessageBox.Show(this,
+                    "Enter the reason for the register payout.",
+                    "Shift Cash Drop",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                reason.Focus();
+                return;
+            }
+
+            entry.CashDropReceived = Money(drop.Text);
+            entry.RegisterPayout = payoutAmount;
+            entry.PayoutReason = reason.Text.Trim();
+            await db.SaveChangesAsync();
+            await SyncShiftLogCashDropsToCashOnHandAsync(entry.Date);
+            refresh();
+            clearAllShiftFields();
+            MessageBox.Show(this,
+                $"Cash drop saved for batch {entry.ShiftNo} on {entry.Date:M/d/yyyy}.",
+                "Shift Cash Drop",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
         void loadSelectedIntoForm()
         {
             if (suppressShiftSelectionLoad)
@@ -1787,10 +1857,26 @@ internal sealed partial class MainForm : Form
             drop.Text = entry.CashDropReceived.ToString("0.00", CultureInfo.CurrentCulture);
             payout.Text = entry.RegisterPayout.ToString("0.00", CultureInfo.CurrentCulture);
             reason.Text = entry.PayoutReason;
-            posReport.Text = "Selected entry loaded for correction";
-            posReport.ForeColor = WinTheme.Copper;
+            posReport.Text = string.IsNullOrWhiteSpace(entry.PosReportKey)
+                ? "Selected entry loaded for correction"
+                : "Imported: AdventPOS Z Report";
+            posReport.ForeColor = string.IsNullOrWhiteSpace(entry.PosReportKey)
+                ? WinTheme.Copper
+                : WinTheme.Green;
         }
         grid.SelectionChanged += (_, _) => loadSelectedIntoForm();
+        grid.CellDoubleClick += (_, eventArgs) =>
+        {
+            if (eventArgs.RowIndex < 0)
+                return;
+            grid.Rows[eventArgs.RowIndex].Selected = true;
+            grid.CurrentCell = grid.Rows[eventArgs.RowIndex].Cells
+                .Cast<DataGridViewCell>()
+                .First(cell => cell.Visible);
+            loadSelectedIntoForm();
+            drop.Focus();
+            drop.SelectAll();
+        };
 
         var dashboard = MockActionButton("", "Dashboard", width: 160);
         dashboard.Click += (_, _) => ShowModule("Dashboard");
@@ -1804,6 +1890,9 @@ internal sealed partial class MainForm : Form
         var correction = MockActionButton("", "Add Correction", width: 200);
         correction.Click += async (_, _) => await updateSelectedAsync();
         actions.Controls.Add(correction);
+        var saveDrop = MockActionButton("", "Save Imported Drop", true, 210);
+        saveDrop.Click += async (_, _) => await saveImportedDropAsync();
+        actions.Controls.Add(saveDrop);
         var add = MockActionButton("", "Add", true, 135);
         add.Click += async (_, _) =>
         {

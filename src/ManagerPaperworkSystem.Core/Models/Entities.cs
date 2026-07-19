@@ -178,6 +178,12 @@ public sealed class ShiftLogEntry : Entity
 
     public int? PosSalesSummaryId { get; set; }
 
+    [MaxLength(200)]
+    public string PosReportKey { get; set; } = "";
+
+    [MaxLength(500)]
+    public string PosReportPath { get; set; } = "";
+
     [NotMapped]
     public decimal GrossSales => CashTotal + CardTotal + Tax;
 
