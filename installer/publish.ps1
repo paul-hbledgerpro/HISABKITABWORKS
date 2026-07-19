@@ -116,16 +116,15 @@ try {
   & dotnet @publishArgs
   if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit code $LASTEXITCODE)." }
 
-  # Automatic updates target clients already running the framework-dependent
-  # 1.0.99+ application, so keep the GitHub asset compact and include every
-  # managed/native dependency as separate files. The full installer output
-  # remains self-contained in $outTemp for new installations.
+  # Publish the automatic update as self-contained multi-file output. This
+  # keeps it independent from a separately installed .NET runtime while still
+  # allowing ZIP compression to keep the GitHub release asset manageable.
   $updatePublishArgs = @(
     "publish", $projToBuild,
     "-c", $Configuration,
     "-r", $Runtime,
     "-o", $updateOutTemp,
-    "--self-contained", "false",
+    "--self-contained", "true",
     "--no-restore",
     "/p:PublishSingleFile=false",
     "/p:UseAppHost=true",
@@ -138,6 +137,31 @@ try {
 
   & dotnet @updatePublishArgs
   if ($LASTEXITCODE -ne 0) { throw "Automatic-update publish failed (exit code $LASTEXITCODE)." }
+
+  # Microsoft.WindowsDesktop.App ships both WinForms and WPF. This project
+  # references WinForms only, so omit the unreferenced WPF runtime payload from
+  # the update ZIP. The client remains fully self-contained for WinForms.
+  $unusedWpfFiles = @(
+    "DirectWriteForwarder.dll",
+    "PenImc_cor3.dll",
+    "PresentationCore.dll",
+    "PresentationFramework*.dll",
+    "PresentationNative_cor3.dll",
+    "PresentationUI.dll",
+    "ReachFramework.dll",
+    "System.Printing.dll",
+    "System.Windows.Controls.Ribbon.dll",
+    "System.Windows.Input.Manipulations.dll",
+    "System.Windows.Presentation.dll",
+    "System.Xaml.dll",
+    "WindowsBase.dll",
+    "WindowsFormsIntegration.dll",
+    "wpfgfx_cor3.dll"
+  )
+  foreach ($pattern in $unusedWpfFiles) {
+    Get-ChildItem -LiteralPath $updateOutTemp -Filter $pattern -File -ErrorAction SilentlyContinue |
+      Remove-Item -Force
+  }
 
   # Ensure an EXE exists; if produced with a different name, copy/rename it.
   $expectedExe = Join-Path $outTemp "HISAB KITAB.exe"
@@ -239,7 +263,7 @@ try {
         $releaseArchive,
         $file.FullName,
         $relativePath,
-        [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        [System.IO.Compression.CompressionLevel]::SmallestSize) | Out-Null
     }
   }
   finally {
