@@ -173,6 +173,17 @@ public static class DatabaseSchemaService
             await EnsureColumnAsync(conn, "ShiftLogs", "PosSalesSummaryId", "INT NULL");
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportKey", "NVARCHAR(200) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportPath", "NVARCHAR(500) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "ShiftLogs", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
+            await ExecuteSafe(conn, @"
+                UPDATE [dbo].[ShiftLogs]
+                SET [Employee] = COALESCE([Employee], ''),
+                    [ShiftNo] = COALESCE([ShiftNo], ''),
+                    [PayoutReason] = COALESCE([PayoutReason], ''),
+                    [PosReportKey] = COALESCE([PosReportKey], ''),
+                    [PosReportPath] = COALESCE([PosReportPath], ''),
+                    [CreatedByName] = COALESCE([CreatedByName], ''),
+                    [CreatedByUserId] = COALESCE([CreatedByUserId], 0),
+                    [CorrectionReason] = COALESCE([CorrectionReason], '')");
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (
                     SELECT 1 FROM sys.indexes

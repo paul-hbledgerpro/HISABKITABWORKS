@@ -990,7 +990,33 @@ internal sealed partial class MainForm : Form
     {
         var now = DateTime.Today;
         using var db = CreateDb();
-        var shiftRows = db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
+        // Select only dashboard fields and coalesce legacy nullable text values in
+        // SQL. This keeps one malformed/older ShiftLogs row from taking down the
+        // entire dashboard before the startup repair migration can normalize it.
+        var shiftRows = db.ShiftLogs.AsNoTracking()
+            .Where(x => x.StoreId == _currentStoreId)
+            .Select(x => new ShiftLogEntry
+            {
+                Id = x.Id,
+                StoreId = x.StoreId,
+                Date = x.Date,
+                Employee = x.Employee ?? "",
+                ShiftNo = x.ShiftNo ?? "",
+                CashTotal = x.CashTotal,
+                CardTotal = x.CardTotal,
+                NetSales = x.NetSales,
+                Tax = x.Tax,
+                CashDropReceived = x.CashDropReceived,
+                RegisterPayout = x.RegisterPayout,
+                PayoutReason = x.PayoutReason ?? "",
+                CreatedByUserId = x.CreatedByUserId,
+                CreatedByName = x.CreatedByName ?? "",
+                IsCorrection = x.IsCorrection,
+                CorrectsId = x.CorrectsId,
+                CorrectionReason = x.CorrectionReason ?? "",
+                CreatedUtc = x.CreatedUtc
+            })
+            .ToList();
         var shifts = EffectiveRows(shiftRows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
             .Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).ToList();
         var cashRows = db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();

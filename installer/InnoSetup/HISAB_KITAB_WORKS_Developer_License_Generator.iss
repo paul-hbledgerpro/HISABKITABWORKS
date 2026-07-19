@@ -1,5 +1,5 @@
 #define MyAppName "HISAB KITAB WORKS License Generator"
-#define MyAppVersion "1.0.105"
+#define MyAppVersion "1.0.106"
 #define MyAppPublisher "Hisab Kitab Works"
 #define MyAppExeName "HISAB KITAB WORKS License Generator.exe"
 #define MySourceDir "..\publish\license-generator-win-x64"
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\HISAB KITAB WORKS\Developer Tools\License Generator
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
-OutputBaseFilename=HISAB_KITAB_WORKS_License_Generator_Setup_1.0.105
+OutputBaseFilename=HISAB_KITAB_WORKS_License_Generator_Setup_1.0.106
 SetupIconFile=..\..\developer-only\HISAB-KITAB-LICENSE-GENERATOR\Assets\HisabKitab.ico
 Compression=lzma2
 SolidCompression=yes

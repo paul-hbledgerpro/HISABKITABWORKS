@@ -851,6 +851,7 @@ internal static class PortalSyncService
             {
                 shift.PosReportKey = reportKey;
                 shift.PosReportPath = storedPath;
+                shift.CreatedByName ??= "Automatic POS Portal Sync";
                 updated++;
             }
 
@@ -859,6 +860,8 @@ internal static class PortalSyncService
             shift.Date = targetDate;
             shift.ShiftNo = batch;
             shift.Employee = employee;
+            shift.PayoutReason ??= "";
+            shift.CorrectionReason ??= "";
             shift.CashTotal = report.CashTotal;
             shift.CardTotal = report.CardTotal;
             shift.NetSales = report.NetSales;
