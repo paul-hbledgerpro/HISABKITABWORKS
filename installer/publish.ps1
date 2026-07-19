@@ -34,6 +34,7 @@ $tempRoot = Join-Path $env:TEMP ("HISAB_KITAB_BUILD_" + ([Guid]::NewGuid().ToStr
 $workRoot = Join-Path $tempRoot "work"
 $srcCopy  = Join-Path $workRoot "src"
 $outTemp  = Join-Path $tempRoot "out"
+$updateOutTemp = Join-Path $tempRoot "update-out"
 $updaterOutTemp = Join-Path $tempRoot "updater-out"
 ## NOTE (permanent reliability):
 ## We do NOT override BaseOutputPath/BaseIntermediateOutputPath anymore.
@@ -49,6 +50,7 @@ try {
   if (Test-Path $tempRoot) { Remove-Item -Recurse -Force $tempRoot -ErrorAction SilentlyContinue }
   New-Item -ItemType Directory -Force -Path $srcCopy | Out-Null
   New-Item -ItemType Directory -Force -Path $outTemp | Out-Null
+  New-Item -ItemType Directory -Force -Path $updateOutTemp | Out-Null
   New-Item -ItemType Directory -Force -Path $updaterOutTemp | Out-Null
 
   # Copy source (exclude bin/obj)
@@ -114,6 +116,29 @@ try {
   & dotnet @publishArgs
   if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit code $LASTEXITCODE)." }
 
+  # Automatic updates target clients already running the framework-dependent
+  # 1.0.99+ application, so keep the GitHub asset compact and include every
+  # managed/native dependency as separate files. The full installer output
+  # remains self-contained in $outTemp for new installations.
+  $updatePublishArgs = @(
+    "publish", $projToBuild,
+    "-c", $Configuration,
+    "-r", $Runtime,
+    "-o", $updateOutTemp,
+    "--self-contained", "false",
+    "--no-restore",
+    "/p:PublishSingleFile=false",
+    "/p:UseAppHost=true",
+    "/p:PublishReadyToRun=false",
+    "/p:DebugType=None",
+    "/p:DebugSymbols=false",
+    "/p:BuildInParallel=false",
+    "/p:UseSharedCompilation=false"
+  )
+
+  & dotnet @updatePublishArgs
+  if ($LASTEXITCODE -ne 0) { throw "Automatic-update publish failed (exit code $LASTEXITCODE)." }
+
   # Ensure an EXE exists; if produced with a different name, copy/rename it.
   $expectedExe = Join-Path $outTemp "HISAB KITAB.exe"
   if (!(Test-Path $expectedExe)) {
@@ -166,6 +191,7 @@ try {
   if ([string]::IsNullOrWhiteSpace($appVersion)) { throw "Unable to determine the published application version." }
   $appVersion = ($appVersion -split '[+-]')[0]
   Set-Content -LiteralPath (Join-Path $outTemp "version.txt") -Value $appVersion -Encoding ascii
+  Set-Content -LiteralPath (Join-Path $updateOutTemp "version.txt") -Value $appVersion -Encoding ascii
 
   # Copy publish output back to installer\publish\<rid>
   if (Test-Path $finalOutDir) {
@@ -206,15 +232,8 @@ try {
     $releaseZip,
     [System.IO.Compression.ZipArchiveMode]::Create)
   try {
-    foreach ($file in Get-ChildItem -LiteralPath $finalOutDir -Recurse -File) {
-      $relativePath = [System.IO.Path]::GetRelativePath($finalOutDir, $file.FullName).Replace('\', '/')
-
-      # The application copies UpdaterPayload\Upgrade.exe to a temporary
-      # working directory before it exits. The root Upgrade.exe is retained
-      # for a fresh installer but is redundant in an automatic-update ZIP.
-      if ($relativePath.Equals("Upgrade.exe", [StringComparison]::OrdinalIgnoreCase)) {
-        continue
-      }
+    foreach ($file in Get-ChildItem -LiteralPath $updateOutTemp -Recurse -File) {
+      $relativePath = [System.IO.Path]::GetRelativePath($updateOutTemp, $file.FullName).Replace('\', '/')
 
       [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
         $releaseArchive,
@@ -229,6 +248,7 @@ try {
 
   Write-Host "Publish OK: $(Join-Path $finalOutDir 'HISAB KITAB.exe')" -ForegroundColor Green
   Write-Host "Bundled upgrader: $(Join-Path $finalOutDir 'Upgrade.exe')" -ForegroundColor Green
+  Write-Host "Compact automatic-update files: $updateOutTemp" -ForegroundColor Green
   Write-Host "GitHub release asset: $releaseZip" -ForegroundColor Green
 }
 finally {
