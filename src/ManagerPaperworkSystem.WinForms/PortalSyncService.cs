@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
@@ -370,6 +371,29 @@ internal static class PortalSyncService
                 $"{targetStatus.ZReportCount} register Z report(s) already present in Shift Cash Drop.");
         }
 
+        await using var db = CreateStoreDatabase(settings);
+        await EnsureTargetDatabaseReadyAsync(db, settings.BusinessName);
+        var dataStoreId = await ResolveDataStoreIdAsync(
+            db,
+            settings.BusinessName,
+            cancellationToken);
+        var zKeyPrefix = $"ADVENTPOS-Z|{targetDate:yyyy-MM-dd}|";
+        var existingZKeys = await db.ShiftLogs
+            .AsNoTracking()
+            .Where(item =>
+                item.StoreId == dataStoreId &&
+                item.PosReportKey != null &&
+                item.PosReportKey.StartsWith(zKeyPrefix))
+            .Select(item => item.PosReportKey!)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        var verifiedZBatches = new HashSet<string>(
+            existingZKeys
+                .Where(key => key.Length > zKeyPrefix.Length)
+                .Select(key => key[zKeyPrefix.Length..]),
+            StringComparer.OrdinalIgnoreCase);
+        var zResult = new ZReportImportOutcome(targetStatus.ZReportCount, 0, 0);
+
         Directory.CreateDirectory(profile);
         Directory.CreateDirectory(downloadDirectory);
         DeleteOldDownloads(downloadDirectory);
@@ -379,6 +403,7 @@ internal static class PortalSyncService
         Directory.CreateDirectory(cashDownloadDirectory);
         Directory.CreateDirectory(zDownloadDirectory);
 
+        await CloseDedicatedProfileBrowserAsync(profile, cancellationToken);
         await using var browser = await Puppeteer.LaunchAsync(new LaunchOptions
         {
             Headless = !visibleChrome,
@@ -400,7 +425,6 @@ internal static class PortalSyncService
         await ConfigureDownloadsAsync(page, downloadDirectory);
         string? cashSummaryPath = null;
         var zReportPaths = new List<string>();
-        var capturedZReports = new List<CapturedZReport>();
         var rejectedZReportDetails = new List<string>();
         Exception? cashSummaryError = null;
         Exception? zReportsError = null;
@@ -495,7 +519,8 @@ internal static class PortalSyncService
                                 Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.pdf"),
                                 Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.png"),
                                 cancellationToken,
-                                batch);
+                                batch,
+                                browserPdfFirst: true);
 
                             PosReportData? renderedReport = null;
                             if (!string.IsNullOrWhiteSpace(generated.PdfPath))
@@ -503,10 +528,23 @@ internal static class PortalSyncService
                                 try
                                 {
                                     ValidateZReportBatch(generated.PdfPath, targetDate, batch);
-                                    zReportPaths.Add(StoreZReportFeedFile(
+                                    var feedPath = StoreZReportFeedFile(
                                         settings,
                                         generated.PdfPath,
-                                        targetDate));
+                                        targetDate);
+                                    zReportPaths.Add(feedPath);
+                                    var result = await ImportZReportsAsync(
+                                        db,
+                                        paths,
+                                        dataStoreId,
+                                        feedPath,
+                                        targetDate,
+                                        cancellationToken);
+                                    zResult = new ZReportImportOutcome(
+                                        zResult.Total + result.Total,
+                                        zResult.Imported + result.Imported,
+                                        zResult.Updated + result.Updated);
+                                    verifiedZBatches.Add(batch);
                                 }
                                 catch
                                 {
@@ -526,12 +564,23 @@ internal static class PortalSyncService
 
                             if (renderedReport is not null)
                             {
-                                capturedZReports.Add(new CapturedZReport(
-                                    renderedReport,
-                                    generated.ScreenshotPath));
+                                var result = await ImportCapturedZReportAsync(
+                                    db,
+                                    paths,
+                                    dataStoreId,
+                                    new CapturedZReport(
+                                        renderedReport,
+                                        generated.ScreenshotPath),
+                                    targetDate,
+                                    cancellationToken);
+                                zResult = new ZReportImportOutcome(
+                                    zResult.Total + result.Total,
+                                    zResult.Imported + result.Imported,
+                                    zResult.Updated + result.Updated);
+                                verifiedZBatches.Add(batch);
                             }
 
-                            if (zReportPaths.Count + capturedZReports.Count >= expectedReports)
+                            if (verifiedZBatches.Count >= expectedReports)
                                 break;
                         }
                         catch (OperationCanceledException)
@@ -545,7 +594,7 @@ internal static class PortalSyncService
                         }
                     }
 
-                    if (zReportPaths.Count + capturedZReports.Count == 0)
+                    if (verifiedZBatches.Count == 0)
                     {
                         throw new InvalidOperationException(
                             $"None of the newest AdventPOS Close-Out batches had Start Date " +
@@ -608,9 +657,6 @@ internal static class PortalSyncService
             }
         }
 
-        await using var db = CreateStoreDatabase(settings);
-        await EnsureTargetDatabaseReadyAsync(db, settings.BusinessName);
-        var dataStoreId = await ResolveDataStoreIdAsync(db, settings.BusinessName, cancellationToken);
         var cashSummaryImported = false;
         if (!string.IsNullOrWhiteSpace(cashSummaryPath))
         {
@@ -623,36 +669,6 @@ internal static class PortalSyncService
                 "Automatic POS Portal Sync",
                 cancellationToken);
             cashSummaryImported = !outcome.Duplicate;
-        }
-
-        var zResult = new ZReportImportOutcome(targetStatus.ZReportCount, 0, 0);
-        foreach (var zReportsPath in zReportPaths)
-        {
-            var result = await ImportZReportsAsync(
-                db,
-                paths,
-                dataStoreId,
-                zReportsPath,
-                targetDate,
-                cancellationToken);
-            zResult = new ZReportImportOutcome(
-                zResult.Total + result.Total,
-                zResult.Imported + result.Imported,
-                zResult.Updated + result.Updated);
-        }
-        foreach (var captured in capturedZReports)
-        {
-            var result = await ImportCapturedZReportAsync(
-                db,
-                paths,
-                dataStoreId,
-                captured,
-                targetDate,
-                cancellationToken);
-            zResult = new ZReportImportOutcome(
-                zResult.Total + result.Total,
-                zResult.Imported + result.Imported,
-                zResult.Updated + result.Updated);
         }
 
         var finalStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
@@ -696,6 +712,64 @@ internal static class PortalSyncService
             $"{(cashSummaryImported ? "imported into Cash Sales Summary" : "already present")}; " +
             $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s), " +
             $"{finalStatus.ZReportCount} register report(s) verified in Shift Cash Drop.");
+    }
+
+    private static async Task CloseDedicatedProfileBrowserAsync(
+        string profileDirectory,
+        CancellationToken cancellationToken)
+    {
+        var portFile = Path.Combine(profileDirectory, "DevToolsActivePort");
+        if (!File.Exists(portFile))
+            return;
+
+        try
+        {
+            var lines = await File.ReadAllLinesAsync(portFile, cancellationToken);
+            if (lines.Length == 0 ||
+                !int.TryParse(lines[0], NumberStyles.None, CultureInfo.InvariantCulture, out var port))
+            {
+                return;
+            }
+
+            using var http = new HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(3)
+            };
+            var json = await http.GetStringAsync(
+                $"http://127.0.0.1:{port}/json/version",
+                cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty(
+                    "webSocketDebuggerUrl",
+                    out var endpointElement))
+            {
+                return;
+            }
+
+            var endpoint = endpointElement.GetString();
+            if (string.IsNullOrWhiteSpace(endpoint))
+                return;
+
+            await using var runningBrowser = await Puppeteer.ConnectAsync(
+                new ConnectOptions { BrowserWSEndpoint = endpoint });
+            await runningBrowser.CloseAsync();
+
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (File.Exists(portFile) && DateTime.UtcNow < deadline)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(250, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // A stale DevTools port file is harmless. Puppeteer will provide
+            // the actionable launch error if the dedicated profile is still locked.
+        }
     }
 
     private static string DescribeRejectedZReports(
@@ -1167,32 +1241,6 @@ internal static class PortalSyncService
                     select.dispatchEvent(new Event('input', { bubbles: true }));
                     select.dispatchEvent(new Event('change', { bubbles: true }));
                 }
-
-                // AdventPOS places a Select button beside the Batch dropdown.
-                // Choosing the option alone can leave the report bound to the
-                // previously selected batch, so confirm the closest Select action.
-                const selectRect = select.getBoundingClientRect();
-                const selectActions = Array.from(document.querySelectorAll(
-                        'button,input[type=""button""],input[type=""submit""],a'))
-                    .filter(candidate => {
-                        if (!visible(candidate)) return false;
-                        const text = (candidate.textContent || candidate.value || '')
-                            .replace(/\s+/g, ' ')
-                            .trim()
-                            .toLowerCase();
-                        return text === 'select';
-                    })
-                    .map(candidate => {
-                        const rect = candidate.getBoundingClientRect();
-                        const dx = (rect.left + rect.width / 2) -
-                                   (selectRect.left + selectRect.width / 2);
-                        const dy = (rect.top + rect.height / 2) -
-                                   (selectRect.top + selectRect.height / 2);
-                        return { candidate, distance: Math.sqrt(dx * dx + dy * dy) };
-                    })
-                    .sort((left, right) => left.distance - right.distance);
-                if (selectActions.length > 0 && selectActions[0].distance < 700)
-                    selectActions[0].candidate.click();
                 return (select.options[select.selectedIndex]?.textContent || '').trim() === batch;
             }",
             batch);
@@ -1223,7 +1271,8 @@ internal static class PortalSyncService
         string archivedPdfPath,
         string screenshotPath,
         CancellationToken cancellationToken,
-        string? batchNumber = null)
+        string? batchNumber = null,
+        bool browserPdfFirst = false)
     {
         var dateText = targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         await page.EvaluateFunctionAsync(
@@ -1312,6 +1361,12 @@ internal static class PortalSyncService
             throw new InvalidOperationException(
                 $"AdventPOS did not open the {reportName} report viewer.");
         }
+        if (!string.IsNullOrWhiteSpace(batchNumber) &&
+            !ReportPageMatchesBatch(reportPage.Url, batchNumber))
+        {
+            throw new InvalidOperationException(
+                $"AdventPOS opened a report viewer for a different batch instead of batch {batchNumber}.");
+        }
 
         try
         {
@@ -1338,6 +1393,39 @@ internal static class PortalSyncService
                 "(document.body && (document.body.innerText || document.body.textContent)) || ''");
 
             string? exportError = null;
+            if (browserPdfFirst)
+            {
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(archivedPdfPath)!);
+                    await reportPage.PdfAsync(
+                        archivedPdfPath,
+                        new PdfOptions
+                        {
+                            PrintBackground = true,
+                            Format = PaperFormat.Letter
+                        });
+                    if (File.Exists(archivedPdfPath) &&
+                        new FileInfo(archivedPdfPath).Length > 0)
+                    {
+                        return new GeneratedPortalReport(
+                            archivedPdfPath,
+                            screenshotPath,
+                            renderedText,
+                            null);
+                    }
+                    exportError = "Chrome produced an empty Z-report PDF.";
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    exportError = $"Chrome PDF capture: {FirstSentence(exception.Message)}";
+                }
+            }
+
             try
             {
                 await ConfigureDownloadsAsync(reportPage, downloadDirectory);
@@ -1426,6 +1514,18 @@ internal static class PortalSyncService
                 }
             }
         }
+    }
+
+    private static bool ReportPageMatchesBatch(string reportUrl, string batchNumber)
+    {
+        if (!Uri.TryCreate(reportUrl, UriKind.Absolute, out var uri))
+            return false;
+
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var batchId = query["BatchID"];
+        var batchName = query["BatchName"];
+        return string.Equals(batchId, batchNumber, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(batchName, batchNumber, StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task RequestActiveReportsPdfExportAsync(IPage reportPage)
