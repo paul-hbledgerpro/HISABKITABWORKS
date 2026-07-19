@@ -202,11 +202,30 @@ try {
     }
   }
   Add-Type -AssemblyName System.IO.Compression.FileSystem
-  [System.IO.Compression.ZipFile]::CreateFromDirectory(
-    $finalOutDir,
+  $releaseArchive = [System.IO.Compression.ZipFile]::Open(
     $releaseZip,
-    [System.IO.Compression.CompressionLevel]::Optimal,
-    $false)
+    [System.IO.Compression.ZipArchiveMode]::Create)
+  try {
+    foreach ($file in Get-ChildItem -LiteralPath $finalOutDir -Recurse -File) {
+      $relativePath = [System.IO.Path]::GetRelativePath($finalOutDir, $file.FullName).Replace('\', '/')
+
+      # The application copies UpdaterPayload\Upgrade.exe to a temporary
+      # working directory before it exits. The root Upgrade.exe is retained
+      # for a fresh installer but is redundant in an automatic-update ZIP.
+      if ($relativePath.Equals("Upgrade.exe", [StringComparison]::OrdinalIgnoreCase)) {
+        continue
+      }
+
+      [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+        $releaseArchive,
+        $file.FullName,
+        $relativePath,
+        [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    }
+  }
+  finally {
+    $releaseArchive.Dispose()
+  }
 
   Write-Host "Publish OK: $(Join-Path $finalOutDir 'HISAB KITAB.exe')" -ForegroundColor Green
   Write-Host "Bundled upgrader: $(Join-Path $finalOutDir 'Upgrade.exe')" -ForegroundColor Green
