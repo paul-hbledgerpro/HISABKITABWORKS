@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.102.3" />
+    <PackageReference Include="Google.Apis.Gmail.v1" Version="1.74.0.4162" />
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.8" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.8" />
@@ -56,6 +57,12 @@
 
   <ItemGroup>
     <Content Include="bank-sync-service.url">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <!-- This Desktop OAuth file is git-ignored. A private release build can
+         bundle it so clients only need to click CONNECT GMAIL. -->
+    <Content Include="gmail-oauth-client.json" Condition="Exists('gmail-oauth-client.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>

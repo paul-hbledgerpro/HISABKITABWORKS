@@ -12,6 +12,10 @@ internal sealed class InvoiceEmailSetupForm : Form
     private readonly CheckBox _ssl = new() { Text = "Use encrypted SSL connection", Checked = true, AutoSize = true };
     private readonly TextBox _email = WinTheme.TextBox();
     private readonly TextBox _password = WinTheme.TextBox();
+    private readonly FlowLayoutPanel _oauthActions = new();
+    private readonly Button _connectGmail = WinTheme.Button("CONNECT GMAIL", true);
+    private readonly Button _disconnectGmail = WinTheme.Button("DISCONNECT");
+    private readonly Button _importGoogleSetup = WinTheme.Button("IMPORT OAUTH SETUP");
     private readonly TextBox _folder = WinTheme.TextBox();
     private readonly DateTimePicker _invoiceMonth = WinTheme.DatePicker();
     private readonly CheckBox _enabled = new() { Text = "Automatically check this store's email for PDF invoices", AutoSize = true };
@@ -36,7 +40,14 @@ internal sealed class InvoiceEmailSetupForm : Form
         MinimumSize = new Size(800, 760);
         MaximizeBox = false;
 
-        _provider.Items.AddRange(new object[] { "Gmail", "Microsoft 365 / Outlook", "Yahoo", "Custom IMAP" });
+        _provider.Items.AddRange(new object[]
+        {
+            "Gmail (Google Sign-In)",
+            "Gmail (App Password - Legacy)",
+            "Microsoft 365 / Outlook",
+            "Yahoo",
+            "Custom IMAP"
+        });
         _password.UseSystemPasswordChar = true;
         _folder.Text = "INBOX";
         _invoiceMonth.Format = DateTimePickerFormat.Custom;
@@ -99,7 +110,32 @@ internal sealed class InvoiceEmailSetupForm : Form
         AddRow(form, 1, "IMAP SERVER", _server);
         AddRow(form, 2, "IMAP PORT", _port);
         AddRow(form, 3, "CLIENT EMAIL ADDRESS", _email);
-        AddRow(form, 4, "APP PASSWORD", _password);
+        _oauthActions.Dock = DockStyle.Fill;
+        _oauthActions.FlowDirection = FlowDirection.LeftToRight;
+        _oauthActions.WrapContents = false;
+        _oauthActions.Padding = new Padding(0, 4, 0, 2);
+        _oauthActions.BackColor = WinTheme.Panel;
+        foreach (var button in new[] { _connectGmail, _disconnectGmail, _importGoogleSetup })
+        {
+            button.AutoSize = false;
+            button.Height = 36;
+            button.Margin = new Padding(4, 2, 4, 2);
+        }
+        _connectGmail.Width = 150;
+        _disconnectGmail.Width = 120;
+        _importGoogleSetup.Width = 190;
+        _oauthActions.Controls.AddRange(new Control[]
+        {
+            _connectGmail,
+            _disconnectGmail,
+            _importGoogleSetup
+        });
+        var authenticationHost = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel };
+        _password.Dock = DockStyle.Fill;
+        _oauthActions.Dock = DockStyle.Fill;
+        authenticationHost.Controls.Add(_password);
+        authenticationHost.Controls.Add(_oauthActions);
+        AddRow(form, 4, "EMAIL AUTHORIZATION", authenticationHost);
         AddRow(form, 5, "MAIL FOLDER", _folder);
         AddRow(form, 6, "BACKFILL INVOICE MONTH", _invoiceMonth);
 
@@ -116,7 +152,7 @@ internal sealed class InvoiceEmailSetupForm : Form
         form.Controls.Add(options, 0, 7);
         form.SetColumnSpan(options, 2);
 
-        _status.Text = "For Gmail, use a Google App Password—not the normal mailbox password.";
+        _status.Text = "Gmail uses a secure Google sign-in. HISAB KITAB receives read-only mailbox access.";
         _status.ForeColor = WinTheme.Muted;
         _status.Font = WinTheme.BodyFont(9);
         _status.TextAlign = ContentAlignment.MiddleLeft;
@@ -141,6 +177,9 @@ internal sealed class InvoiceEmailSetupForm : Form
         root.Controls.Add(buttons, 0, 3);
 
         _provider.SelectedIndexChanged += (_, _) => ApplyProviderDefaults();
+        _connectGmail.Click += async (_, _) => await ConnectGmailAsync();
+        _disconnectGmail.Click += async (_, _) => await DisconnectGmailAsync();
+        _importGoogleSetup.Click += async (_, _) => await ImportGoogleSetupAsync();
         test.Click += async (_, _) => await SaveAsync(testOnly: true);
         save.Click += async (_, _) => await SaveAsync(testOnly: false, syncSelectedMonth: false);
         syncMonth.Click += async (_, _) => await SaveAsync(testOnly: false, syncSelectedMonth: true);
@@ -151,7 +190,10 @@ internal sealed class InvoiceEmailSetupForm : Form
     private void LoadSettings()
     {
         var settings = _service.GetSettings(_storeKey);
-        _provider.SelectedItem = settings.Provider;
+        var provider = settings.Provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase)
+            ? "Gmail (App Password - Legacy)"
+            : settings.Provider;
+        _provider.SelectedItem = provider;
         if (_provider.SelectedIndex < 0)
             _provider.SelectedIndex = 0;
         _server.Text = settings.ImapServer;
@@ -161,13 +203,38 @@ internal sealed class InvoiceEmailSetupForm : Form
         _password.Text = settings.PasswordOrAppPassword;
         _folder.Text = string.IsNullOrWhiteSpace(settings.MailFolder) ? "INBOX" : settings.MailFolder;
         _enabled.Checked = settings.Enabled;
+        if (InvoiceEmailSyncService.UsesGoogleOAuth(settings) && settings.OAuthAuthorized)
+        {
+            _status.Text = $"Gmail connected: {settings.EmailAddress}. Access is read-only.";
+            _status.ForeColor = WinTheme.Green;
+        }
     }
 
     private void ApplyProviderDefaults()
     {
+        var usesOAuth = _provider.Text.Equals(
+            "Gmail (Google Sign-In)",
+            StringComparison.OrdinalIgnoreCase);
+        _oauthActions.Visible = usesOAuth;
+        _importGoogleSetup.Visible = usesOAuth && !_service.GmailOAuth.IsClientConfigured;
+        _password.Visible = !usesOAuth;
+        _server.Enabled = !usesOAuth;
+        _port.Enabled = !usesOAuth;
+        _ssl.Enabled = !usesOAuth;
+        _folder.Enabled = !usesOAuth;
+        _email.ReadOnly = usesOAuth;
+
         switch (_provider.Text)
         {
-            case "Gmail":
+            case "Gmail (Google Sign-In)":
+                _server.Text = "gmail.googleapis.com";
+                _port.Value = 443;
+                _ssl.Checked = true;
+                _folder.Text = "All Mail (Gmail API)";
+                _status.Text = _service.GmailOAuth.ConfigurationDescription
+                               + " Click CONNECT GMAIL and approve read-only Gmail access.";
+                break;
+            case "Gmail (App Password - Legacy)":
                 _server.Text = "imap.gmail.com";
                 _port.Value = 993;
                 _ssl.Checked = true;
@@ -191,21 +258,125 @@ internal sealed class InvoiceEmailSetupForm : Form
         }
     }
 
-    private async Task SaveAsync(bool testOnly, bool syncSelectedMonth = false)
+    private InvoiceEmailSyncSettings BuildSettings()
     {
-        var settings = new InvoiceEmailSyncSettings
+        var previous = _service.GetSettings(_storeKey);
+        var usesOAuth = _provider.Text.Equals(
+            "Gmail (Google Sign-In)",
+            StringComparison.OrdinalIgnoreCase);
+        return new InvoiceEmailSyncSettings
         {
             Enabled = _enabled.Checked,
             Provider = _provider.Text,
+            AuthenticationMode = usesOAuth ? "GoogleOAuth" : "Password",
+            OAuthAuthorized = usesOAuth && previous.OAuthAuthorized,
             ImapServer = _server.Text.Trim(),
             ImapPort = (int)_port.Value,
             UseSsl = _ssl.Checked,
             EmailAddress = _email.Text.Trim(),
-            PasswordOrAppPassword = _password.Text,
+            PasswordOrAppPassword = usesOAuth ? "" : _password.Text,
             MailFolder = string.IsNullOrWhiteSpace(_folder.Text) ? "INBOX" : _folder.Text.Trim(),
-            LastSuccessfulSyncUtc = _service.GetSettings(_storeKey).LastSuccessfulSyncUtc,
-            ProcessedAttachmentHashes = _service.GetSettings(_storeKey).ProcessedAttachmentHashes
+            LastSuccessfulSyncUtc = previous.LastSuccessfulSyncUtc,
+            ProcessedAttachmentHashes = previous.ProcessedAttachmentHashes
         };
+    }
+
+    private async Task ConnectGmailAsync()
+    {
+        Enabled = false;
+        _status.ForeColor = WinTheme.Blue;
+        _status.Text = "Opening Google sign-in in your browser…";
+        try
+        {
+            var connectedEmail = await _service.GmailOAuth.ConnectAsync(
+                _storeKey,
+                string.IsNullOrWhiteSpace(_email.Text) ? null : _email.Text.Trim());
+            _email.Text = connectedEmail;
+            var settings = BuildSettings();
+            settings.AuthenticationMode = "GoogleOAuth";
+            settings.OAuthAuthorized = true;
+            settings.EmailAddress = connectedEmail;
+            settings.PasswordOrAppPassword = "";
+            _service.SaveSettings(_storeKey, settings);
+            _status.Text =
+                $"Connected to {connectedEmail}. Access is read-only and saved securely for this Windows user.";
+            _status.ForeColor = WinTheme.Green;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = $"Google connection failed: {AppBootstrap.RedactSensitiveText(ex.Message)}";
+            _status.ForeColor = WinTheme.Red;
+        }
+        finally
+        {
+            if (!IsDisposed)
+                Enabled = true;
+        }
+    }
+
+    private async Task DisconnectGmailAsync()
+    {
+        Enabled = false;
+        try
+        {
+            await _service.GmailOAuth.DisconnectAsync(_storeKey);
+            var settings = BuildSettings();
+            settings.OAuthAuthorized = false;
+            settings.EmailAddress = "";
+            settings.Enabled = false;
+            _service.SaveSettings(_storeKey, settings);
+            _email.Clear();
+            _enabled.Checked = false;
+            _status.Text = "Gmail disconnected from this store.";
+            _status.ForeColor = WinTheme.Muted;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = $"Could not disconnect Gmail: {AppBootstrap.RedactSensitiveText(ex.Message)}";
+            _status.ForeColor = WinTheme.Red;
+        }
+        finally
+        {
+            if (!IsDisposed)
+                Enabled = true;
+        }
+    }
+
+    private async Task ImportGoogleSetupAsync()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Select Google OAuth Desktop App JSON",
+            Filter = "Google OAuth JSON (*.json)|*.json|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        Enabled = false;
+        try
+        {
+            await _service.GmailOAuth.ImportClientConfigurationAsync(dialog.FileName);
+            _importGoogleSetup.Visible = false;
+            _status.Text = "Google sign-in setup imported securely. Click CONNECT GMAIL.";
+            _status.ForeColor = WinTheme.Green;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = $"OAuth setup import failed: {AppBootstrap.RedactSensitiveText(ex.Message)}";
+            _status.ForeColor = WinTheme.Red;
+        }
+        finally
+        {
+            if (!IsDisposed)
+                Enabled = true;
+        }
+    }
+
+    private async Task SaveAsync(bool testOnly, bool syncSelectedMonth = false)
+    {
+        var settings = BuildSettings();
         settings.PasswordOrAppPassword = InvoiceEmailSyncService.NormalizePassword(settings);
         _password.Text = settings.PasswordOrAppPassword;
 
@@ -214,7 +385,7 @@ internal sealed class InvoiceEmailSetupForm : Form
         _status.ForeColor = WinTheme.Blue;
         try
         {
-            await _service.TestConnectionAsync(settings);
+            await _service.TestConnectionAsync(_storeKey, settings);
             _service.SaveSettings(_storeKey, settings);
             _status.Text = settings.Enabled
                 ? "Email connection succeeded. Automatic invoice checks are enabled for this store."
