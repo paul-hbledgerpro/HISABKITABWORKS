@@ -490,6 +490,7 @@ internal sealed partial class MainForm : Form
 
         AddSection("MAIN");
         AddNav("Dashboard", "Dashboard", false);
+        AddNav("Cash & Sales Summary", "Cash & Sales Summary", false);
         AddNav("Shift Cash Drop", "Shift Cash Drop", false);
         AddNav("Cash On Hand", "Cash On Hand", false);
         AddNav("Check Payout", "Check Payout", false);
@@ -561,6 +562,7 @@ internal sealed partial class MainForm : Form
         => module switch
         {
             "Dashboard" => "\uE80F",
+            "Cash & Sales Summary" => "\uE9D2",
             "Shift Cash Drop" => "\uE8C7",
             "Cash On Hand" => "\uEAFD",
             "Check Payout" => "\uE8A1",
@@ -599,6 +601,7 @@ internal sealed partial class MainForm : Form
             var control = module switch
             {
                 "Dashboard" => BuildDashboard(),
+                "Cash & Sales Summary" => BuildCashSalesSummary(),
                 "Shift Cash Drop" => BuildShiftCashDrop(),
                 "Cash On Hand" => BuildCashOnHand(),
                 "Check Payout" => BuildCheckPayout(),

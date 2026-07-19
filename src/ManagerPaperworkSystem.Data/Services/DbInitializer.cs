@@ -172,6 +172,96 @@ public static class DbInitializer
                 alterCmd.CommandText = "ALTER TABLE AppSettings ADD COLUMN AutoEmailBankStatementOnFifth INTEGER NOT NULL DEFAULT 0";
                 await alterCmd.ExecuteNonQueryAsync(ct);
             }
+
+            // SQLite is used by local/test installations. Ensure the consolidated
+            // POS report tables are added even when EnsureCreated ran in an older build.
+            using var posSummaryCmd = conn.CreateCommand();
+            posSummaryCmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS PosSalesSummaries (
+                    Id INTEGER NOT NULL CONSTRAINT PK_PosSalesSummaries PRIMARY KEY AUTOINCREMENT,
+                    StoreId INTEGER NOT NULL DEFAULT 1,
+                    ReportFrom TEXT NOT NULL,
+                    ReportTo TEXT NOT NULL,
+                    SourceSystem TEXT NOT NULL DEFAULT 'AdventPOS',
+                    ReportedStoreName TEXT NOT NULL DEFAULT '',
+                    SourceFileName TEXT NOT NULL DEFAULT '',
+                    SourceFilePath TEXT NOT NULL DEFAULT '',
+                    SourceFileSha256 TEXT NOT NULL DEFAULT '',
+                    TenderTransactionCount INTEGER NOT NULL DEFAULT 0,
+                    GrossAmountReceived TEXT NOT NULL DEFAULT '0',
+                    GiftCardRedeemed TEXT NOT NULL DEFAULT '0',
+                    NonRevenueReceived TEXT NOT NULL DEFAULT '0',
+                    NonRevenueReturned TEXT NOT NULL DEFAULT '0',
+                    NonRevenueAmount TEXT NOT NULL DEFAULT '0',
+                    GrossSales TEXT NOT NULL DEFAULT '0',
+                    Taxes TEXT NOT NULL DEFAULT '0',
+                    NetSales TEXT NOT NULL DEFAULT '0',
+                    TaxableSales TEXT NOT NULL DEFAULT '0',
+                    NonTaxableSales TEXT NOT NULL DEFAULT '0',
+                    RoundingOffset TEXT NOT NULL DEFAULT '0',
+                    CashSales TEXT NOT NULL DEFAULT '0',
+                    CardSales TEXT NOT NULL DEFAULT '0',
+                    CustomerTransactionCount INTEGER NOT NULL DEFAULT 0,
+                    CustomerAverageSale TEXT NOT NULL DEFAULT '0',
+                    UserLoginCount INTEGER NOT NULL DEFAULT 0,
+                    DeleteVoidCount INTEGER NOT NULL DEFAULT 0,
+                    NoSaleCount INTEGER NOT NULL DEFAULT 0,
+                    VoidDeleteAmount TEXT NOT NULL DEFAULT '0',
+                    TotalDiscount TEXT NOT NULL DEFAULT '0',
+                    DepartmentQuantity TEXT NOT NULL DEFAULT '0',
+                    DepartmentSales TEXT NOT NULL DEFAULT '0',
+                    DepartmentCost TEXT NOT NULL DEFAULT '0',
+                    DepartmentProfit TEXT NOT NULL DEFAULT '0',
+                    DepartmentProfitPercent TEXT NOT NULL DEFAULT '0',
+                    ImportedByUserId INTEGER NOT NULL DEFAULT 0,
+                    ImportedByName TEXT NOT NULL DEFAULT '',
+                    ImportedUtc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS IX_PosSalesSummaries_Store_Period
+                    ON PosSalesSummaries (StoreId, ReportFrom, ReportTo);
+                CREATE UNIQUE INDEX IF NOT EXISTS UX_PosSalesSummaries_Store_Hash
+                    ON PosSalesSummaries (StoreId, SourceFileSha256);
+
+                CREATE TABLE IF NOT EXISTS PosSalesTenderLines (
+                    Id INTEGER NOT NULL CONSTRAINT PK_PosSalesTenderLines PRIMARY KEY AUTOINCREMENT,
+                    PosSalesSummaryId INTEGER NOT NULL,
+                    TenderType TEXT NOT NULL DEFAULT '',
+                    TransactionCount INTEGER NOT NULL DEFAULT 0,
+                    Amount TEXT NOT NULL DEFAULT '0',
+                    CONSTRAINT FK_PosSalesTenderLines_Summaries FOREIGN KEY (PosSalesSummaryId)
+                        REFERENCES PosSalesSummaries (Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS IX_PosSalesTenderLines_Summary
+                    ON PosSalesTenderLines (PosSalesSummaryId);
+
+                CREATE TABLE IF NOT EXISTS PosSalesHourlyLines (
+                    Id INTEGER NOT NULL CONSTRAINT PK_PosSalesHourlyLines PRIMARY KEY AUTOINCREMENT,
+                    PosSalesSummaryId INTEGER NOT NULL,
+                    TimePeriod TEXT NOT NULL DEFAULT '',
+                    TransactionCount INTEGER NOT NULL DEFAULT 0,
+                    Amount TEXT NOT NULL DEFAULT '0',
+                    CONSTRAINT FK_PosSalesHourlyLines_Summaries FOREIGN KEY (PosSalesSummaryId)
+                        REFERENCES PosSalesSummaries (Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS IX_PosSalesHourlyLines_Summary
+                    ON PosSalesHourlyLines (PosSalesSummaryId);
+
+                CREATE TABLE IF NOT EXISTS PosSalesDepartmentLines (
+                    Id INTEGER NOT NULL CONSTRAINT PK_PosSalesDepartmentLines PRIMARY KEY AUTOINCREMENT,
+                    PosSalesSummaryId INTEGER NOT NULL,
+                    Department TEXT NOT NULL DEFAULT '',
+                    Quantity TEXT NOT NULL DEFAULT '0',
+                    Sales TEXT NOT NULL DEFAULT '0',
+                    Cost TEXT NOT NULL DEFAULT '0',
+                    Profit TEXT NOT NULL DEFAULT '0',
+                    ProfitPercent TEXT NOT NULL DEFAULT '0',
+                    SalesPercent TEXT NOT NULL DEFAULT '0',
+                    CONSTRAINT FK_PosSalesDepartmentLines_Summaries FOREIGN KEY (PosSalesSummaryId)
+                        REFERENCES PosSalesSummaries (Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS IX_PosSalesDepartmentLines_Summary
+                    ON PosSalesDepartmentLines (PosSalesSummaryId);";
+            await posSummaryCmd.ExecuteNonQueryAsync(ct);
         }
         finally
         {

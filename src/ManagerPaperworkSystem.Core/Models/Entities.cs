@@ -277,6 +277,171 @@ public sealed class CheckPayout : Entity
 }
 
 // ==========================
+// POS Cash + Sales Summaries
+// ==========================
+
+public sealed class PosSalesSummary : Entity
+{
+    public int StoreId { get; set; } = 1;
+    public Store? Store { get; set; }
+
+    public DateOnly ReportFrom { get; set; }
+    public DateOnly ReportTo { get; set; }
+
+    [MaxLength(120)]
+    public string SourceSystem { get; set; } = "AdventPOS";
+
+    [MaxLength(200)]
+    public string ReportedStoreName { get; set; } = "";
+
+    [MaxLength(260)]
+    public string SourceFileName { get; set; } = "";
+
+    [MaxLength(500)]
+    public string SourceFilePath { get; set; } = "";
+
+    [MaxLength(64)]
+    public string SourceFileSha256 { get; set; } = "";
+
+    public int TenderTransactionCount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal GrossAmountReceived { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal GiftCardRedeemed { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal NonRevenueReceived { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal NonRevenueReturned { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal NonRevenueAmount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal GrossSales { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Taxes { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal NetSales { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal TaxableSales { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal NonTaxableSales { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal RoundingOffset { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal CashSales { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal CardSales { get; set; }
+
+    public int CustomerTransactionCount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal CustomerAverageSale { get; set; }
+
+    public int UserLoginCount { get; set; }
+    public int DeleteVoidCount { get; set; }
+    public int NoSaleCount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal VoidDeleteAmount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal TotalDiscount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal DepartmentQuantity { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal DepartmentSales { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal DepartmentCost { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal DepartmentProfit { get; set; }
+
+    [Column(TypeName = "decimal(9,4)")]
+    public decimal DepartmentProfitPercent { get; set; }
+
+    public int ImportedByUserId { get; set; }
+
+    [MaxLength(120)]
+    public string ImportedByName { get; set; } = "";
+
+    public DateTime ImportedUtc { get; set; } = DateTime.UtcNow;
+
+    public List<PosSalesTenderLine> TenderLines { get; set; } = new();
+    public List<PosSalesHourlyLine> HourlyLines { get; set; } = new();
+    public List<PosSalesDepartmentLine> DepartmentLines { get; set; } = new();
+}
+
+public sealed class PosSalesTenderLine : Entity
+{
+    public int PosSalesSummaryId { get; set; }
+    public PosSalesSummary? PosSalesSummary { get; set; }
+
+    [MaxLength(80)]
+    public string TenderType { get; set; } = "";
+
+    public int TransactionCount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Amount { get; set; }
+}
+
+public sealed class PosSalesHourlyLine : Entity
+{
+    public int PosSalesSummaryId { get; set; }
+    public PosSalesSummary? PosSalesSummary { get; set; }
+
+    [MaxLength(80)]
+    public string TimePeriod { get; set; } = "";
+
+    public int TransactionCount { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Amount { get; set; }
+}
+
+public sealed class PosSalesDepartmentLine : Entity
+{
+    public int PosSalesSummaryId { get; set; }
+    public PosSalesSummary? PosSalesSummary { get; set; }
+
+    [MaxLength(180)]
+    public string Department { get; set; } = "";
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Quantity { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Sales { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Cost { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Profit { get; set; }
+
+    [Column(TypeName = "decimal(9,4)")]
+    public decimal ProfitPercent { get; set; }
+
+    [Column(TypeName = "decimal(9,4)")]
+    public decimal SalesPercent { get; set; }
+}
+
+// ==========================
 // Purchases + Cost Tracking
 // ==========================
 

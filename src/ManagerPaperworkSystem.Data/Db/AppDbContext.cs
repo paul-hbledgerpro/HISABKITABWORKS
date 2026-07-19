@@ -19,6 +19,10 @@ public sealed class AppDbContext : DbContext
     public DbSet<ShiftLogEntry> ShiftLogs => Set<ShiftLogEntry>();
     public DbSet<CashOnHandEntry> CashOnHand => Set<CashOnHandEntry>();
     public DbSet<CheckPayout> CheckPayouts => Set<CheckPayout>();
+    public DbSet<PosSalesSummary> PosSalesSummaries => Set<PosSalesSummary>();
+    public DbSet<PosSalesTenderLine> PosSalesTenderLines => Set<PosSalesTenderLine>();
+    public DbSet<PosSalesHourlyLine> PosSalesHourlyLines => Set<PosSalesHourlyLine>();
+    public DbSet<PosSalesDepartmentLine> PosSalesDepartmentLines => Set<PosSalesDepartmentLine>();
 
     public DbSet<PurchaseInvoice> PurchaseInvoices => Set<PurchaseInvoice>();
     public DbSet<PurchaseInvoiceLine> PurchaseInvoiceLines => Set<PurchaseInvoiceLine>();
@@ -46,6 +50,10 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<ShiftLogEntry>().ToTable("ShiftLogs");
         modelBuilder.Entity<CashOnHandEntry>().ToTable("CashOnHand");
         modelBuilder.Entity<CheckPayout>().ToTable("CheckPayouts");
+        modelBuilder.Entity<PosSalesSummary>().ToTable("PosSalesSummaries");
+        modelBuilder.Entity<PosSalesTenderLine>().ToTable("PosSalesTenderLines");
+        modelBuilder.Entity<PosSalesHourlyLine>().ToTable("PosSalesHourlyLines");
+        modelBuilder.Entity<PosSalesDepartmentLine>().ToTable("PosSalesDepartmentLines");
         modelBuilder.Entity<PurchaseInvoice>().ToTable("PurchaseInvoices");
         modelBuilder.Entity<PurchaseInvoiceLine>().ToTable("PurchaseInvoiceLines");
         modelBuilder.Entity<ProductCost>().ToTable("ProductCosts");
@@ -67,6 +75,7 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<ShiftLogEntry>().Property(x => x.StoreId).HasDefaultValue(1);
         modelBuilder.Entity<CashOnHandEntry>().Property(x => x.StoreId).HasDefaultValue(1);
         modelBuilder.Entity<CheckPayout>().Property(x => x.StoreId).HasDefaultValue(1);
+        modelBuilder.Entity<PosSalesSummary>().Property(x => x.StoreId).HasDefaultValue(1);
         modelBuilder.Entity<PurchaseInvoice>().Property(x => x.StoreId).HasDefaultValue(1);
         modelBuilder.Entity<ProductCost>().Property(x => x.StoreId).HasDefaultValue(1);
         modelBuilder.Entity<PriceAlert>().Property(x => x.StoreId).HasDefaultValue(1);
@@ -78,6 +87,11 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<ShiftLogEntry>().HasIndex(x => new { x.StoreId, x.Date });
         modelBuilder.Entity<CashOnHandEntry>().HasIndex(x => new { x.StoreId, x.Date });
         modelBuilder.Entity<CheckPayout>().HasIndex(x => new { x.StoreId, x.Date });
+        modelBuilder.Entity<PosSalesSummary>().HasIndex(x => new { x.StoreId, x.ReportFrom, x.ReportTo });
+        modelBuilder.Entity<PosSalesSummary>().HasIndex(x => new { x.StoreId, x.SourceFileSha256 }).IsUnique();
+        modelBuilder.Entity<PosSalesTenderLine>().HasIndex(x => x.PosSalesSummaryId);
+        modelBuilder.Entity<PosSalesHourlyLine>().HasIndex(x => x.PosSalesSummaryId);
+        modelBuilder.Entity<PosSalesDepartmentLine>().HasIndex(x => x.PosSalesSummaryId);
 
         modelBuilder.Entity<Vendor>().HasIndex(x => new { x.StoreId, x.Name }).IsUnique();
         modelBuilder.Entity<Purpose>().HasIndex(x => new { x.StoreId, x.Name }).IsUnique();
@@ -126,6 +140,24 @@ public sealed class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(x => x.PurchaseInvoiceId)
             .OnDelete(DeleteBehavior.NoAction);
+
+        modelBuilder.Entity<PosSalesSummary>()
+            .HasMany(x => x.TenderLines)
+            .WithOne(x => x.PosSalesSummary)
+            .HasForeignKey(x => x.PosSalesSummaryId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<PosSalesSummary>()
+            .HasMany(x => x.HourlyLines)
+            .WithOne(x => x.PosSalesSummary)
+            .HasForeignKey(x => x.PosSalesSummaryId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<PosSalesSummary>()
+            .HasMany(x => x.DepartmentLines)
+            .WithOne(x => x.PosSalesSummary)
+            .HasForeignKey(x => x.PosSalesSummaryId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<EmployeeDocument>()
             .HasOne(x => x.Employee)

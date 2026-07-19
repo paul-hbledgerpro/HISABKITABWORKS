@@ -168,6 +168,110 @@ public static class DatabaseSchemaService
                     [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
                 )");
 
+            // Consolidated POS summaries are imported separately from register-level
+            // shift logs. This avoids inventing per-register cash drops from a store
+            // total while preserving the complete source report for reconciliation.
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[PosSalesSummaries]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[PosSalesSummaries] (
+                        [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                        [StoreId] INT NOT NULL DEFAULT 1,
+                        [ReportFrom] DATE NOT NULL,
+                        [ReportTo] DATE NOT NULL,
+                        [SourceSystem] NVARCHAR(120) NOT NULL DEFAULT 'AdventPOS',
+                        [ReportedStoreName] NVARCHAR(200) NOT NULL DEFAULT '',
+                        [SourceFileName] NVARCHAR(260) NOT NULL DEFAULT '',
+                        [SourceFilePath] NVARCHAR(500) NOT NULL DEFAULT '',
+                        [SourceFileSha256] NVARCHAR(64) NOT NULL DEFAULT '',
+                        [TenderTransactionCount] INT NOT NULL DEFAULT 0,
+                        [GrossAmountReceived] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [GiftCardRedeemed] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [NonRevenueReceived] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [NonRevenueReturned] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [NonRevenueAmount] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [GrossSales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [Taxes] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [NetSales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [TaxableSales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [NonTaxableSales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [RoundingOffset] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [CashSales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [CardSales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [CustomerTransactionCount] INT NOT NULL DEFAULT 0,
+                        [CustomerAverageSale] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [UserLoginCount] INT NOT NULL DEFAULT 0,
+                        [DeleteVoidCount] INT NOT NULL DEFAULT 0,
+                        [NoSaleCount] INT NOT NULL DEFAULT 0,
+                        [VoidDeleteAmount] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [TotalDiscount] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [DepartmentQuantity] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [DepartmentSales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [DepartmentCost] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [DepartmentProfit] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [DepartmentProfitPercent] DECIMAL(9,4) NOT NULL DEFAULT 0,
+                        [ImportedByUserId] INT NOT NULL DEFAULT 0,
+                        [ImportedByName] NVARCHAR(120) NOT NULL DEFAULT '',
+                        [ImportedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+                    );
+                    CREATE INDEX [IX_PosSalesSummaries_Store_Period]
+                        ON [dbo].[PosSalesSummaries] ([StoreId], [ReportFrom], [ReportTo]);
+                    CREATE UNIQUE INDEX [UX_PosSalesSummaries_Store_Hash]
+                        ON [dbo].[PosSalesSummaries] ([StoreId], [SourceFileSha256]);
+                END");
+
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[PosSalesTenderLines]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[PosSalesTenderLines] (
+                        [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                        [PosSalesSummaryId] INT NOT NULL,
+                        [TenderType] NVARCHAR(80) NOT NULL DEFAULT '',
+                        [TransactionCount] INT NOT NULL DEFAULT 0,
+                        [Amount] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        CONSTRAINT [FK_PosSalesTenderLines_Summaries] FOREIGN KEY ([PosSalesSummaryId])
+                            REFERENCES [dbo].[PosSalesSummaries]([Id]) ON DELETE CASCADE
+                    );
+                    CREATE INDEX [IX_PosSalesTenderLines_Summary]
+                        ON [dbo].[PosSalesTenderLines] ([PosSalesSummaryId]);
+                END");
+
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[PosSalesHourlyLines]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[PosSalesHourlyLines] (
+                        [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                        [PosSalesSummaryId] INT NOT NULL,
+                        [TimePeriod] NVARCHAR(80) NOT NULL DEFAULT '',
+                        [TransactionCount] INT NOT NULL DEFAULT 0,
+                        [Amount] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        CONSTRAINT [FK_PosSalesHourlyLines_Summaries] FOREIGN KEY ([PosSalesSummaryId])
+                            REFERENCES [dbo].[PosSalesSummaries]([Id]) ON DELETE CASCADE
+                    );
+                    CREATE INDEX [IX_PosSalesHourlyLines_Summary]
+                        ON [dbo].[PosSalesHourlyLines] ([PosSalesSummaryId]);
+                END");
+
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[PosSalesDepartmentLines]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[PosSalesDepartmentLines] (
+                        [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                        [PosSalesSummaryId] INT NOT NULL,
+                        [Department] NVARCHAR(180) NOT NULL DEFAULT '',
+                        [Quantity] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [Sales] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [Cost] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [Profit] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [ProfitPercent] DECIMAL(9,4) NOT NULL DEFAULT 0,
+                        [SalesPercent] DECIMAL(9,4) NOT NULL DEFAULT 0,
+                        CONSTRAINT [FK_PosSalesDepartmentLines_Summaries] FOREIGN KEY ([PosSalesSummaryId])
+                            REFERENCES [dbo].[PosSalesSummaries]([Id]) ON DELETE CASCADE
+                    );
+                    CREATE INDEX [IX_PosSalesDepartmentLines_Summary]
+                        ON [dbo].[PosSalesDepartmentLines] ([PosSalesSummaryId]);
+                END");
+
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Vendors')
                 CREATE TABLE [Vendors] (
