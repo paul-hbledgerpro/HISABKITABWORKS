@@ -190,10 +190,14 @@ public static class DatabaseSchemaService
                     [Id] INT IDENTITY(1,1) PRIMARY KEY,
                     [StoreId] INT NOT NULL DEFAULT 1,
                     [VendorId] INT NULL,
+                    [VendorName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [InvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
                     [InvoiceDate] DATE NOT NULL,
                     [Total] DECIMAL(18,2) NOT NULL DEFAULT 0,
-                    [Notes] NVARCHAR(1000) NOT NULL DEFAULT '',
+                    [FilePath] NVARCHAR(500) NOT NULL DEFAULT '',
+                    [Notes] NVARCHAR(500) NOT NULL DEFAULT '',
+                    [CreatedByUserId] INT NOT NULL DEFAULT 0,
+                    [CreatedByName] NVARCHAR(120) NOT NULL DEFAULT '',
                     [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
                 )");
 
@@ -201,26 +205,110 @@ public static class DatabaseSchemaService
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PurchaseInvoiceLines')
                 CREATE TABLE [PurchaseInvoiceLines] (
                     [Id] INT IDENTITY(1,1) PRIMARY KEY,
-                    [InvoiceId] INT NOT NULL,
-                    [ProductName] NVARCHAR(300) NOT NULL DEFAULT '',
+                    [InvoiceId] INT NULL,
+                    [PurchaseInvoiceId] INT NULL,
+                    [ProductName] NVARCHAR(260) NOT NULL DEFAULT '',
+                    [ItemCode] NVARCHAR(80) NOT NULL DEFAULT '',
+                    [OrdQuantity] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                    [ShipQuantity] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                    [VolumeMl] INT NULL,
+                    [Tax] DECIMAL(18,2) NULL,
+                    [Price] DECIMAL(18,2) NULL,
+                    [Amount] DECIMAL(18,2) NULL,
                     [Quantity] DECIMAL(18,2) NOT NULL DEFAULT 0,
-                    [UnitCost] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                    [UnitCost] DECIMAL(18,4) NOT NULL DEFAULT 0,
                     [Total] DECIMAL(18,2) NOT NULL DEFAULT 0,
                     CONSTRAINT FK_InvoiceLines_Invoice FOREIGN KEY ([InvoiceId])
                         REFERENCES [PurchaseInvoices]([Id]) ON DELETE CASCADE
                 )");
+
+            // Purchase tables have existed in two compatible generations. Keep the
+            // legacy columns in place for deployed WPF clients, while adding the
+            // current WinForms columns and synchronizing the two invoice FK names.
+            await EnsureColumnAsync(conn, "PurchaseInvoices", "VendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PurchaseInvoices", "FilePath", "NVARCHAR(500) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PurchaseInvoices", "CreatedByUserId", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "PurchaseInvoices", "CreatedByName", "NVARCHAR(120) NOT NULL DEFAULT ''");
+
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "PurchaseInvoiceId",
+                "INT NULL",
+                "IF COL_LENGTH(N'[dbo].[PurchaseInvoiceLines]', N'InvoiceId') IS NOT NULL UPDATE [dbo].[PurchaseInvoiceLines] SET [PurchaseInvoiceId] = [InvoiceId] WHERE [PurchaseInvoiceId] IS NULL");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "InvoiceId",
+                "INT NULL",
+                "UPDATE [dbo].[PurchaseInvoiceLines] SET [InvoiceId] = [PurchaseInvoiceId] WHERE [InvoiceId] IS NULL");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "ItemCode", "NVARCHAR(80) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "OrdQuantity",
+                "DECIMAL(18,2) NOT NULL DEFAULT 0",
+                "UPDATE [dbo].[PurchaseInvoiceLines] SET [OrdQuantity] = [Quantity] WHERE [OrdQuantity] = 0");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "ShipQuantity",
+                "DECIMAL(18,2) NOT NULL DEFAULT 0",
+                "UPDATE [dbo].[PurchaseInvoiceLines] SET [ShipQuantity] = [Quantity] WHERE [ShipQuantity] = 0");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "VolumeMl", "INT NULL");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "Tax", "DECIMAL(18,2) NULL");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "Price",
+                "DECIMAL(18,2) NULL",
+                "UPDATE [dbo].[PurchaseInvoiceLines] SET [Price] = CONVERT(DECIMAL(18,2), [UnitCost]) WHERE [Price] IS NULL");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "Amount",
+                "DECIMAL(18,2) NULL",
+                "IF COL_LENGTH(N'[dbo].[PurchaseInvoiceLines]', N'Total') IS NOT NULL UPDATE [dbo].[PurchaseInvoiceLines] SET [Amount] = [Total] WHERE [Amount] IS NULL");
+            await EnsureColumnAsync(conn, "PurchaseInvoiceLines", "Total",
+                "DECIMAL(18,2) NOT NULL DEFAULT 0",
+                "UPDATE [dbo].[PurchaseInvoiceLines] SET [Total] = COALESCE([Amount], [Quantity] * [UnitCost], 0) WHERE [Total] = 0");
+
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[PurchaseInvoiceLines]', N'U') IS NOT NULL
+                BEGIN
+                    UPDATE [dbo].[PurchaseInvoiceLines]
+                    SET [PurchaseInvoiceId] = COALESCE([PurchaseInvoiceId], [InvoiceId]),
+                        [InvoiceId] = COALESCE([InvoiceId], [PurchaseInvoiceId])
+                    WHERE [PurchaseInvoiceId] IS NULL OR [InvoiceId] IS NULL;
+
+                    ALTER TABLE [dbo].[PurchaseInvoiceLines] ALTER COLUMN [InvoiceId] INT NULL;
+                END
+
+                IF OBJECT_ID(N'[dbo].[PurchaseInvoiceLines]', N'U') IS NOT NULL
+                EXEC(N'CREATE OR ALTER TRIGGER [dbo].[TR_PurchaseInvoiceLines_SyncInvoiceKeys]
+                    ON [dbo].[PurchaseInvoiceLines]
+                    AFTER INSERT, UPDATE
+                    AS
+                    BEGIN
+                        SET NOCOUNT ON;
+                        UPDATE target
+                        SET [PurchaseInvoiceId] = COALESCE(target.[PurchaseInvoiceId], target.[InvoiceId]),
+                            [InvoiceId] = COALESCE(target.[InvoiceId], target.[PurchaseInvoiceId])
+                        FROM [dbo].[PurchaseInvoiceLines] target
+                        INNER JOIN inserted source ON source.[Id] = target.[Id]
+                        WHERE target.[PurchaseInvoiceId] IS NULL OR target.[InvoiceId] IS NULL;
+                    END')");
 
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ProductCosts')
                 CREATE TABLE [ProductCosts] (
                     [Id] INT IDENTITY(1,1) PRIMARY KEY,
                     [StoreId] INT NOT NULL DEFAULT 1,
-                    [ProductName] NVARCHAR(300) NOT NULL DEFAULT '',
-                    [LatestUnitCost] DECIMAL(18,2) NOT NULL DEFAULT 0,
-                    [PreviousUnitCost] DECIMAL(18,2) NOT NULL DEFAULT 0,
-                    [VendorId] INT NULL,
-                    [LastUpdatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+                    [ProductKey] NVARCHAR(260) NOT NULL DEFAULT '',
+                    [ProductName] NVARCHAR(260) NOT NULL DEFAULT '',
+                    [Sku] NVARCHAR(80) NOT NULL DEFAULT '',
+                    [LastUnitCost] DECIMAL(18,4) NOT NULL DEFAULT 0,
+                    [LastInvoiceDate] DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME()),
+                    [LastVendorName] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [LastInvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
+                    [UpdatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
                 )");
+
+            await EnsureColumnAsync(conn, "ProductCosts", "ProductKey",
+                "NVARCHAR(260) NOT NULL DEFAULT ''",
+                "UPDATE [dbo].[ProductCosts] SET [ProductKey] = UPPER(LTRIM(RTRIM([ProductName]))) WHERE [ProductKey] = ''");
+            await EnsureColumnAsync(conn, "ProductCosts", "Sku", "NVARCHAR(80) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "ProductCosts", "LastUnitCost",
+                "DECIMAL(18,4) NOT NULL DEFAULT 0",
+                "IF COL_LENGTH(N'[dbo].[ProductCosts]', N'LatestUnitCost') IS NOT NULL UPDATE [dbo].[ProductCosts] SET [LastUnitCost] = CONVERT(DECIMAL(18,4), [LatestUnitCost])");
+            await EnsureColumnAsync(conn, "ProductCosts", "LastInvoiceDate", "DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME())");
+            await EnsureColumnAsync(conn, "ProductCosts", "LastVendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "ProductCosts", "LastInvoiceNumber", "NVARCHAR(100) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "ProductCosts", "UpdatedUtc",
+                "DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()",
+                "IF COL_LENGTH(N'[dbo].[ProductCosts]', N'LastUpdatedUtc') IS NOT NULL UPDATE [dbo].[ProductCosts] SET [UpdatedUtc] = [LastUpdatedUtc]");
 
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PriceAlerts')

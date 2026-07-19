@@ -3,6 +3,7 @@ using System.Data.Common;
 using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Net.Mail;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClosedXML.Excel;
@@ -2406,6 +2407,8 @@ internal sealed partial class MainForm : Form
     {
         var snapshot = LoadOperationsHubSnapshot();
         var now = DateTime.Today;
+        var toolbarHeight = DpiScale(76);
+        var cardRowHeight = DpiScale(324);
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -2414,7 +2417,7 @@ internal sealed partial class MainForm : Form
             BackColor = WinTheme.Bg,
             Padding = new Padding(2, 0, 2, 4)
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, toolbarHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var toolbar = WinTheme.BorderedPanel(10);
@@ -2456,16 +2459,18 @@ internal sealed partial class MainForm : Form
 
         var grid = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             ColumnCount = 4,
             RowCount = 2,
             BackColor = WinTheme.Bg,
-            Margin = Padding.Empty
+            Margin = Padding.Empty,
+            Height = cardRowHeight * 2,
+            MinimumSize = new Size(DpiScale(1320), cardRowHeight * 2)
         };
         for (var i = 0; i < 4; i++)
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, cardRowHeight));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, cardRowHeight));
 
         var shiftCard = BuildOperationsCommandCard(
             "\uE8C7", "Shift Cash Log", "Daily register and cash-drop activity", "TODAY",
@@ -2550,7 +2555,15 @@ internal sealed partial class MainForm : Form
             trend: snapshot.PriceAlertTrend, trendCaption: "7-DAY ALERT ACTIVITY");
         grid.Controls.Add(alertsCard.Card, 3, 1);
 
-        root.Controls.Add(grid, 0, 1);
+        var gridViewport = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            AutoScroll = true,
+            Margin = Padding.Empty
+        };
+        gridViewport.Controls.Add(grid);
+        root.Controls.Add(gridViewport, 0, 1);
         root.HandleCreated += async (_, _) =>
         {
             try
@@ -2733,27 +2746,28 @@ internal sealed partial class MainForm : Form
     {
         var card = WinTheme.BorderedPanel(0);
         card.Dock = DockStyle.Fill;
-        card.Margin = new Padding(6);
+        card.Margin = new Padding(DpiScale(6));
+        card.MinimumSize = new Size(DpiScale(320), DpiScale(306));
 
-        var stripe = new Panel { Dock = DockStyle.Left, Width = 5, BackColor = WinTheme.Copper };
+        var stripe = new Panel { Dock = DockStyle.Left, Width = DpiScale(5), BackColor = WinTheme.Copper };
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 5,
             BackColor = Color.White,
-            Padding = new Padding(14, 10, 12, 9)
+            Padding = new Padding(DpiScale(14), DpiScale(10), DpiScale(12), DpiScale(9))
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale(62)));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale(68)));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale(52)));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale(50)));
 
         var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Color.White };
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, DpiScale(48)));
         heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, DpiScale(104)));
         var iconHost = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 245, 234), Margin = new Padding(0, 0, 8, 8) };
         iconHost.Controls.Add(new Label
         {
@@ -2764,20 +2778,40 @@ internal sealed partial class MainForm : Form
             TextAlign = ContentAlignment.MiddleCenter
         });
         heading.Controls.Add(iconHost, 0, 0);
-        heading.Controls.Add(new Label
+        var headingText = new TableLayoutPanel
         {
-            Text = $"{title}\r\n{subtitle}",
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Color.White,
+            Margin = new Padding(0, 0, DpiScale(4), 0)
+        };
+        headingText.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale(26)));
+        headingText.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        headingText.Controls.Add(new Label
+        {
+            Text = title,
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,
             Font = WinTheme.BoldFont(11),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
+        }, 0, 0);
+        headingText.Controls.Add(new Label
+        {
+            Text = subtitle,
+            Dock = DockStyle.Fill,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BodyFont(8.5f),
             TextAlign = ContentAlignment.TopLeft,
             AutoEllipsis = true
-        }, 1, 0);
+        }, 0, 1);
+        heading.Controls.Add(headingText, 1, 0);
         heading.Controls.Add(new Label
         {
             Text = badge,
             Dock = DockStyle.Fill,
-            Margin = new Padding(4, 4, 0, 18),
+            Margin = new Padding(DpiScale(4), DpiScale(7), 0, DpiScale(15)),
             BackColor = Color.FromArgb(232, 247, 239),
             ForeColor = WinTheme.Green,
             Font = WinTheme.BoldFont(8),
@@ -2787,7 +2821,7 @@ internal sealed partial class MainForm : Form
         layout.Controls.Add(heading, 0, 0);
 
         var metricPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.White };
-        metricPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        metricPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale(24)));
         metricPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         metricPanel.Controls.Add(new Label
         {
@@ -2865,11 +2899,11 @@ internal sealed partial class MainForm : Form
         return new OperationsCommandCard(card, metricValue, left.Value, right.Value, trendControl);
     }
 
-    private static (Control Panel, Label Value) BuildOperationsFact(string caption, string value)
+    private (Control Panel, Label Value) BuildOperationsFact(string caption, string value)
     {
         var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = WinTheme.Panel2 };
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale(22)));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         panel.Controls.Add(new Label
         {
             Text = caption,
@@ -2891,6 +2925,9 @@ internal sealed partial class MainForm : Form
         panel.Controls.Add(valueLabel, 0, 1);
         return (panel, valueLabel);
     }
+
+    private int DpiScale(int logicalPixels)
+        => Math.Max(logicalPixels, (int)Math.Ceiling(logicalPixels * DeviceDpi / 96f));
 
     private void ConfigureOperationsAction(Button button, string section, Func<Task> action)
     {
@@ -5646,6 +5683,9 @@ internal sealed partial class MainForm : Form
                 }
             };
 
+        if (!ConfirmPurchaseInvoiceImport(result, imported, dialog.FileName))
+            return;
+
         var count = 0;
         foreach (var invoice in imported)
         {
@@ -5670,6 +5710,71 @@ internal sealed partial class MainForm : Form
         MessageBox.Show(this, $"Imported {count} invoice(s).", "Import Invoice", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
+    private bool ConfirmPurchaseInvoiceImport(
+        InvoiceImportResult result,
+        IReadOnlyCollection<ImportedInvoice> invoices,
+        string sourceFile)
+    {
+        var invalid = invoices
+            .Where(invoice =>
+                string.IsNullOrWhiteSpace(invoice.VendorName)
+                || invoice.VendorName.Equals("Unknown", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(invoice.InvoiceNumber)
+                || invoice.InvoiceDate is null
+                || invoice.Total is null or <= 0m
+                || invoice.Lines.Count == 0)
+            .ToList();
+
+        if (invalid.Count > 0)
+        {
+            MessageBox.Show(
+                this,
+                "This invoice was not saved because one or more required values could not be verified.\n\n" +
+                "Required: vendor, invoice number, invoice date, positive invoice total, and at least one line item.\n" +
+                "Please review the original PDF or use a supported vendor template.",
+                "Invoice Requires Review",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return false;
+        }
+
+        var summary = new StringBuilder();
+        summary.AppendLine("Review the extracted invoice information before it is saved:");
+        summary.AppendLine();
+
+        foreach (var invoice in invoices.Take(10))
+        {
+            summary.AppendLine($"{invoice.VendorName}  |  Invoice {invoice.InvoiceNumber}");
+            summary.AppendLine(
+                $"Date: {invoice.InvoiceDate:MM/dd/yyyy}  |  Rows: {invoice.Lines.Count}  |  Total: {invoice.Total:C}");
+            summary.AppendLine();
+        }
+
+        if (invoices.Count > 10)
+            summary.AppendLine($"+ {invoices.Count - 10} additional invoice(s)");
+
+        if (result.Warnings.Count > 0)
+        {
+            summary.AppendLine("Parser notes:");
+            foreach (var warning in result.Warnings.Take(5))
+                summary.AppendLine($"• {warning}");
+            summary.AppendLine();
+        }
+
+        summary.AppendLine($"Source: {Path.GetFileName(sourceFile)}");
+        summary.AppendLine();
+        summary.Append("Does this match the PDF?");
+
+        return MessageBox.Show(
+                   this,
+                   summary.ToString(),
+                   "Confirm Invoice Import",
+                   MessageBoxButtons.YesNo,
+                   MessageBoxIcon.Question,
+                   MessageBoxDefaultButton.Button2)
+               == DialogResult.Yes;
+    }
+
     private async Task ImportProductCostsAsync(Func<Task> refreshAsync)
     {
         using var dialog = new OpenFileDialog
@@ -5688,12 +5793,61 @@ internal sealed partial class MainForm : Form
             return;
         }
 
+        if (!ConfirmProductCostImport(result, dialog.FileName))
+            return;
+
         var vendorName = string.IsNullOrWhiteSpace(result.VendorName) ? Path.GetFileNameWithoutExtension(dialog.FileName) : result.VendorName;
         var invoiceNumber = string.IsNullOrWhiteSpace(result.InvoiceNumber) ? $"IMPORT-{DateTime.Now:yyyyMMdd-HHmm}" : result.InvoiceNumber;
         var invoiceDate = result.InvoiceDate ?? DateOnly.FromDateTime(DateTime.Today);
         var (upserts, alerts) = await _purchaseService.ImportProductCostsAsync(_currentStoreId, vendorName, invoiceNumber, invoiceDate, result.Lines);
         await refreshAsync();
         MessageBox.Show(this, $"Updated {upserts} product cost(s).\nCreated {alerts} price alert(s).", "Product Costs", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private bool ConfirmProductCostImport(InvoiceImportResult result, string sourceFile)
+    {
+        if (result.Lines.Any(line => string.IsNullOrWhiteSpace(line.ProductName) || line.UnitCost <= 0m))
+        {
+            MessageBox.Show(
+                this,
+                "Product costs were not updated because one or more rows are missing a product description or positive unit cost.",
+                "Invoice Requires Review",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return false;
+        }
+
+        var summary = new StringBuilder();
+        summary.AppendLine("Review these extracted product costs before updating price history:");
+        summary.AppendLine();
+        summary.AppendLine($"Vendor: {result.VendorName}");
+        summary.AppendLine($"Invoice: {result.InvoiceNumber}");
+        summary.AppendLine($"Rows: {result.Lines.Count}");
+        summary.AppendLine();
+
+        foreach (var line in result.Lines.Take(6))
+        {
+            var code = string.IsNullOrWhiteSpace(line.ItemCode) ? "(no SKU)" : line.ItemCode;
+            var name = line.ProductName.Length > 48 ? $"{line.ProductName[..48]}…" : line.ProductName;
+            summary.AppendLine($"{code}  |  {name}  |  {line.UnitCost:C}");
+        }
+
+        if (result.Lines.Count > 6)
+            summary.AppendLine($"+ {result.Lines.Count - 6} additional product(s)");
+
+        summary.AppendLine();
+        summary.AppendLine($"Source: {Path.GetFileName(sourceFile)}");
+        summary.AppendLine();
+        summary.Append("Update product costs and create price alerts?");
+
+        return MessageBox.Show(
+                   this,
+                   summary.ToString(),
+                   "Confirm Product Cost Import",
+                   MessageBoxButtons.YesNo,
+                   MessageBoxIcon.Question,
+                   MessageBoxDefaultButton.Button2)
+               == DialogResult.Yes;
     }
 
     private async Task PrintSelectedCheckAsync(DataGridView grid)

@@ -110,10 +110,9 @@ public sealed class InvoiceImportService
     private static InvoiceImportResult ImportCostsFromPdf(string filePath)
     {
         var (rawByPage, linesByPage) = ExtractPdfByPage(filePath);
-        var combinedRaw = string.Join("\n\n", rawByPage);
-        var textLinesByPage = rawByPage
-            .Select(p => (p ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList())
-            .ToList();
+        var textLinesByPage = linesByPage;
+        var layoutRawByPage = textLinesByPage.Select(page => string.Join("\n", page)).ToList();
+        var combinedRaw = string.Join("\n\n", layoutRawByPage);
 
         var invoices = new List<ImportedInvoice>();
         var warnings = new List<string>();
@@ -121,6 +120,64 @@ public sealed class InvoiceImportService
         // Detect vendor from combined text
         var isAkWholesale = IsAkWholesale(combinedRaw);
         var isAmericanDistributors = IsAmericanDistributors(combinedRaw);
+
+        // Real vendor templates are parsed deterministically before the universal heuristic.
+        // Product-cost imports feed price alerts, so a known layout must not be guessed.
+        ImportedInvoice? knownInvoice = null;
+        if (isAkWholesale)
+            knownInvoice = ParseAkWholesaleInvoiceFromPdf(filePath);
+        else if (IsDemandVape(combinedRaw))
+            knownInvoice = ParseDemandVapeInvoice(combinedRaw, textLinesByPage.SelectMany(x => x).ToList());
+        else if (IsSkygate(combinedRaw))
+            knownInvoice = ParseSkygateWholesaleInvoice(combinedRaw, textLinesByPage.SelectMany(x => x).ToList());
+        else if (Is1OakWholesale(combinedRaw))
+            knownInvoice = Parse1OakWholesaleInvoice(combinedRaw, textLinesByPage.SelectMany(x => x).ToList());
+
+        if (knownInvoice is not null && knownInvoice.Lines.Count > 0)
+        {
+            return new InvoiceImportResult
+            {
+                Success = true,
+                VendorName = knownInvoice.VendorName,
+                InvoiceNumber = knownInvoice.InvoiceNumber,
+                InvoiceDate = knownInvoice.InvoiceDate,
+                Total = knownInvoice.Total,
+                Lines = knownInvoice.Lines,
+                Invoices = new List<ImportedInvoice> { knownInvoice },
+                RawText = combinedRaw,
+                Warnings = warnings
+            };
+        }
+
+        if (isAmericanDistributors)
+        {
+            var americanPages = new List<ImportedInvoice>();
+            for (var i = 0; i < rawByPage.Count; i++)
+            {
+                var parsed = ParseAmericanDistributorsInvoice(layoutRawByPage[i], textLinesByPage[i], i + 1);
+                if (parsed.Lines.Count > 0 || parsed.Total is > 0m || !string.IsNullOrWhiteSpace(parsed.InvoiceNumber))
+                    americanPages.Add(parsed);
+            }
+
+            var americanInvoices = MergeAmericanDistributorsInvoices(americanPages);
+            var americanLines = americanInvoices.SelectMany(x => x.Lines).ToList();
+            if (americanLines.Count > 0)
+            {
+                var firstAmerican = americanInvoices[0];
+                return new InvoiceImportResult
+                {
+                    Success = true,
+                    VendorName = firstAmerican.VendorName,
+                    InvoiceNumber = firstAmerican.InvoiceNumber,
+                    InvoiceDate = firstAmerican.InvoiceDate,
+                    Total = firstAmerican.Total,
+                    Lines = americanLines,
+                    Invoices = americanInvoices,
+                    RawText = combinedRaw,
+                    Warnings = warnings
+                };
+            }
+        }
 
         // Try the universal PDF line item extractor first (works for most invoice formats)
         var universalLines = ExtractInvoiceLineItemsUniversal(filePath, combinedRaw);
@@ -201,7 +258,7 @@ public sealed class InvoiceImportService
                 var allLines = new List<PurchaseInvoiceLine>();
                 for (int i = 0; i < rawByPage.Count; i++)
                 {
-                    var parsed = ParseAmericanDistributorsInvoice(rawByPage[i], textLinesByPage[i], pageNumber: i + 1);
+                    var parsed = ParseAmericanDistributorsInvoice(layoutRawByPage[i], textLinesByPage[i], pageNumber: i + 1);
                     if (parsed.Lines.Count > 0)
                     {
                         allLines.AddRange(parsed.Lines);
@@ -211,6 +268,7 @@ public sealed class InvoiceImportService
                         }
                     }
                 }
+                invoices = MergeAmericanDistributorsInvoices(invoices);
                 if (allLines.Count > 0)
                 {
                     var first = invoices.FirstOrDefault() ?? new ImportedInvoice { VendorName = "American Distributors LLC" };
@@ -449,13 +507,11 @@ public sealed class InvoiceImportService
     {
         // Read PDF text by page (better for multi-invoice PDFs).
         var (rawByPage, linesByPage) = ExtractPdfByPage(filePath);
-        // Prefer PDF "logical" line breaks from page.Text for vendor templates.
-        // ReconstructLines() stays as a fallback for PDFs that don't preserve line breaks well.
-        var textLinesByPage = rawByPage
-            .Select(p => (p ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList())
-            .ToList();
-
-        var raw = string.Join("\n\n", rawByPage);
+        // Vendor templates depend on visual rows. PdfPig's page.Text can concatenate
+        // columns in content-stream order, so use position-reconstructed rows instead.
+        var textLinesByPage = linesByPage;
+        var layoutRawByPage = textLinesByPage.Select(page => string.Join("\n", page)).ToList();
+        var raw = string.Join("\n\n", layoutRawByPage);
         var linesText = textLinesByPage.SelectMany(x => x).ToList();
 
         var warnings = new List<string>();
@@ -472,11 +528,12 @@ public sealed class InvoiceImportService
                     var invoices = new List<ImportedInvoice>();
                     for (int i = 0; i < rawByPage.Count; i++)
                     {
-                        var parsed = ParseAmericanDistributorsInvoice(rawByPage[i], textLinesByPage[i], pageNumber: i + 1);
+                        var parsed = ParseAmericanDistributorsInvoice(layoutRawByPage[i], textLinesByPage[i], pageNumber: i + 1);
                         if (parsed.Lines.Count == 0 && parsed.Total is null && string.IsNullOrWhiteSpace(parsed.InvoiceNumber))
                             continue;
                         invoices.Add(parsed);
                     }
+                    invoices = MergeAmericanDistributorsInvoices(invoices);
 
                     var first = invoices.FirstOrDefault() ?? new ImportedInvoice { VendorName = "American Distributors LLC" };
                     return new InvoiceImportResult
@@ -546,6 +603,12 @@ public sealed class InvoiceImportService
                     };
                 }
 
+                if (selectedKey == VendorKeyDemandVape)
+                {
+                    var inv = ParseDemandVapeInvoice(raw, linesText);
+                    return CreateSingleInvoiceResult(inv, raw, warnings);
+                }
+
                 if (selectedKey == VendorKeySafa)
                 {
                     var inv = ParseSafaGoodsInvoice(raw, linesText);
@@ -609,11 +672,12 @@ public sealed class InvoiceImportService
             {
                 // IMPORTANT: American Distributors PDFs preserve line breaks in page.Text much better than
                 // word-position reconstruction. Use the page.Text split-lines for accurate table parsing.
-                var parsed = ParseAmericanDistributorsInvoice(rawByPage[i], textLinesByPage[i], pageNumber: i + 1);
+                var parsed = ParseAmericanDistributorsInvoice(layoutRawByPage[i], textLinesByPage[i], pageNumber: i + 1);
                 if (parsed.Lines.Count == 0 && parsed.Total is null && string.IsNullOrWhiteSpace(parsed.InvoiceNumber))
                     continue;
                 invoices.Add(parsed);
             }
+            invoices = MergeAmericanDistributorsInvoices(invoices);
 
             if (invoices.Count == 0)
                 warnings.Add("American Distributors invoice detected, but line items could not be extracted.");
@@ -634,6 +698,30 @@ public sealed class InvoiceImportService
                     ? warnings.Append($"Multiple invoices detected ({invoices.Count}). You can import them all at once.").ToList()
                     : warnings
             };
+        }
+
+        if (IsDemandVape(raw))
+        {
+            var inv = ParseDemandVapeInvoice(raw, linesText);
+            return CreateSingleInvoiceResult(inv, raw, warnings);
+        }
+
+        if (IsSkygate(raw))
+        {
+            var inv = ParseSkygateWholesaleInvoice(raw, linesText);
+            return CreateSingleInvoiceResult(inv, raw, warnings);
+        }
+
+        if (Is1OakWholesale(raw))
+        {
+            var inv = Parse1OakWholesaleInvoice(raw, linesText);
+            return CreateSingleInvoiceResult(inv, raw, warnings);
+        }
+
+        if (IsSafaGoods(raw))
+        {
+            var inv = ParseSafaGoodsInvoice(raw, linesText);
+            return CreateSingleInvoiceResult(inv, raw, warnings);
         }
 
         string? vendor;
@@ -710,10 +798,36 @@ public sealed class InvoiceImportService
         };
     }
 
+    private static InvoiceImportResult CreateSingleInvoiceResult(
+        ImportedInvoice invoice,
+        string raw,
+        List<string> warnings)
+    {
+        if (invoice.Lines.Count == 0)
+            warnings.Add($"{invoice.VendorName} was recognized, but no line items were extracted. Review the PDF before saving.");
+
+        if (invoice.Total is null or <= 0m)
+            warnings.Add($"{invoice.VendorName} was recognized, but the original invoice total could not be confirmed.");
+
+        return new InvoiceImportResult
+        {
+            Success = true,
+            VendorName = invoice.VendorName,
+            InvoiceNumber = invoice.InvoiceNumber,
+            InvoiceDate = invoice.InvoiceDate,
+            Total = invoice.Total,
+            Lines = invoice.Lines,
+            Invoices = new List<ImportedInvoice> { invoice },
+            RawText = raw,
+            Warnings = warnings
+        };
+    }
+
     private static bool IsAkWholesale(string text)
     {
         var t = (text ?? "").ToUpperInvariant();
-        return t.Contains("AK WHOLESALE") || t.Contains("AKWHOLESALE.COM");
+        return t.Contains("AK WHOLESALE")
+               || Regex.IsMatch(t, @"\bAKWHOLESALE\.COM\b");
     }
 
     private static bool IsAmericanDistributors(string text)
@@ -752,6 +866,21 @@ public sealed class InvoiceImportService
         return t.Contains("SKYGATE WHOLESALE") || t.Contains("SKYGATEWHOLESALE.COM");
     }
 
+    private static bool Is1OakWholesale(string text)
+    {
+        var t = (text ?? "").ToUpperInvariant();
+        return t.Contains("1 OAK WHOLESALE")
+               || t.Contains("1OAK WHOLESALE")
+               || t.Contains("1OAKWHOLESALE");
+    }
+
+    private static bool IsDemandVape(string text)
+    {
+        var t = (text ?? "").ToUpperInvariant();
+        return t.Contains("DEMANDVAPE.COM")
+               || (t.Contains("INVOICE NUMBER") && t.Contains("CUSTOMER#") && t.Contains("PARTNER STATUS"));
+    }
+
     private static string DetectVendorName(string text)
     {
         if (IsAkWholesale(text)) return "AK Wholesale Inc";
@@ -759,6 +888,8 @@ public sealed class InvoiceImportService
         if (IsHsWholesale(text)) return "HS Wholesale";
         if (IsSafaGoods(text)) return "SAFA Goods";
         if (IsSkygate(text)) return "Skygate Wholesale";
+        if (Is1OakWholesale(text)) return "1 Oak Wholesale";
+        if (IsDemandVape(text)) return "DemandVape";
         return GuessVendorName(text) ?? "Unknown";
     }
 
@@ -1119,7 +1250,7 @@ public sealed class InvoiceImportService
     private static ImportedInvoice ParseAkWholesaleInvoiceFromPdf(string filePath)
     {
         var (rawByPage, linesByPage) = ExtractPdfByPage(filePath);
-        var raw = string.Join("\n\n", rawByPage);
+        var raw = string.Join("\n\n", linesByPage.Select(page => string.Join("\n", page)));
         var allLines = linesByPage.SelectMany(x => x).ToList();
 
         // Vendor + header fields
@@ -1158,9 +1289,13 @@ public sealed class InvoiceImportService
             return Regex.IsMatch(s, @"^[A-Z0-9\-]{4,}$", RegexOptions.IgnoreCase);
         }
 
-        // First try a direct raw-text match.
-        var mNo = Regex.Match(raw, @"Invoice\s*No\.?\s*[:#\-]?\s*([A-Z0-9\-]{4,})", RegexOptions.IgnoreCase);
-        var invNo = mNo.Success ? mNo.Groups[1].Value.Trim() : "";
+        // AK invoice numbers use the stable S###### format. Searching that token avoids
+        // mistaking the address line beneath the "Invoice No" heading for the number.
+        var stableNumber = Regex.Match(
+            string.Join("\n", allLines.Take(20)),
+            @"\b(S\d{5,})\b",
+            RegexOptions.IgnoreCase);
+        var invNo = stableNumber.Success ? stableNumber.Groups[1].Value.Trim() : "";
         if (string.IsNullOrWhiteSpace(invNo))
         {
             // Fallback: locate label row in reconstructed lines then read value row.
@@ -1234,6 +1369,9 @@ public sealed class InvoiceImportService
             // ignore; fallback below
         }
 
+        var layoutLines = ParseAkWholesaleLineItemsFromLayout(allLines);
+        if (layoutLines.Count > parsedLines.Count)
+            parsedLines = layoutLines;
 
         // Fallback to text-based parser if needed (AK invoices often wrap each row across multiple lines)
         if (parsedLines.Count == 0)
@@ -1273,6 +1411,81 @@ public sealed class InvoiceImportService
     }
 
     private sealed record AkWord(string Text, double X, double Y);
+
+    private static List<PurchaseInvoiceLine> ParseAkWholesaleLineItemsFromLayout(List<string> lines)
+    {
+        var items = new List<PurchaseInvoiceLine>();
+        var rowPattern = new Regex(
+            @"^\s*\d+\s+" +
+            @"(?<upc>\d{8,14})\s+" +
+            @"(?<ordered>\d+(?:\.\d+)?)\s+" +
+            @"(?<shipped>\d+(?:\.\d+)?)\s+" +
+            @"(?<unit>[A-Z]+)\s+" +
+            @"(?<description>.+?)\s+" +
+            @"(?<volume>\d[\d,]*\.\d{2})\s+" +
+            @"(?<totalVolume>\d[\d,]*\.\d{2})\s+" +
+            @"(?<tax>\*|\$?\d[\d,]*\.\d{2})\s+" +
+            @"\$?(?<price>\d[\d,]*\.\d{2})\s+" +
+            @"\$?(?<amount>\d[\d,]*\.\d{2})\s*$",
+            RegexOptions.IgnoreCase);
+
+        PurchaseInvoiceLine? current = null;
+        foreach (var rawLine in lines)
+        {
+            var line = Regex.Replace((rawLine ?? "").Trim(), @"\s+", " ");
+            var upper = line.ToUpperInvariant();
+
+            if (upper.Contains("SUB-TOTAL")
+                || upper.Contains("SUBTOTAL")
+                || upper.StartsWith("BALANCE")
+                || upper.Contains("TAXABLE QTY"))
+                break;
+
+            var match = rowPattern.Match(line);
+            if (match.Success)
+            {
+                _ = TryParseDecimal(match.Groups["ordered"].Value, out var ordered);
+                _ = TryParseDecimal(match.Groups["shipped"].Value, out var shipped);
+                var price = MoneyOrNull(match.Groups["price"].Value);
+                var amount = MoneyOrNull(match.Groups["amount"].Value);
+                var tax = match.Groups["tax"].Value == "*" ? null : MoneyOrNull(match.Groups["tax"].Value);
+                var quantity = shipped > 0m ? shipped : ordered;
+                _ = decimal.TryParse(
+                    match.Groups["volume"].Value.Replace(",", ""),
+                    NumberStyles.Number,
+                    CultureInfo.InvariantCulture,
+                    out var volume);
+
+                current = new PurchaseInvoiceLine
+                {
+                    ItemCode = match.Groups["upc"].Value.Trim(),
+                    ProductName = match.Groups["description"].Value.Trim(),
+                    OrdQuantity = ordered,
+                    ShipQuantity = shipped,
+                    Quantity = quantity,
+                    VolumeMl = volume > 0m && volume <= int.MaxValue ? (int)Math.Round(volume) : null,
+                    Tax = tax,
+                    Price = price,
+                    Amount = amount,
+                    UnitCost = ComputeUnitCost(price, amount, quantity)
+                };
+                items.Add(current);
+                continue;
+            }
+
+            if (current is not null
+                && !string.IsNullOrWhiteSpace(line)
+                && !upper.Contains("PAGE ")
+                && !upper.Contains("ORDER DATE")
+                && !upper.Contains("UPC ORD SHIP")
+                && !Regex.IsMatch(line, @"^\d+\.\d{2}\s+LBS"))
+            {
+                current.ProductName = $"{current.ProductName} {line}".Trim();
+            }
+        }
+
+        return items;
+    }
 
     private static List<PurchaseInvoiceLine> ParseAkWholesaleLineItemsFromPage(UglyToad.PdfPig.Content.Page page)
     {
@@ -2217,8 +2430,15 @@ public sealed class InvoiceImportService
 
         decimal? total = null;
 
-        // Prefer totals from reconstructed lines, because some templates place the value on the next line.
-        total = FindLabeledMoney(lines, "total amount", "invoice balance", "amount due", "balance due", "grand total", "total");
+        // The same row may contain both state tax and the invoice balance. Capture the
+        // value following INVOICE BALANCE specifically so the tax is never used as total.
+        var balanceMatch = Regex.Match(
+            raw,
+            @"INVOICE\s+BALANCE\s+\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})",
+            RegexOptions.IgnoreCase);
+        if (balanceMatch.Success)
+            total = MoneyOrNull(balanceMatch.Groups[1].Value);
+        total ??= FindLabeledMoney(lines, "invoice balance", "total amount", "amount due", "balance due", "grand total");
         total ??= GuessTotal(raw);
 
         var parsedLines = ParseAmericanDistributorsLineItems(lines);
@@ -2232,6 +2452,37 @@ public sealed class InvoiceImportService
             Total = total,
             Lines = parsedLines
         };
+    }
+
+    private static List<ImportedInvoice> MergeAmericanDistributorsInvoices(IEnumerable<ImportedInvoice> pages)
+    {
+        var merged = new List<ImportedInvoice>();
+
+        foreach (var group in pages
+                     .Where(x => !string.IsNullOrWhiteSpace(x.InvoiceNumber))
+                     .GroupBy(x => x.InvoiceNumber, StringComparer.OrdinalIgnoreCase))
+        {
+            var ordered = group.OrderBy(x => x.PageNumber ?? int.MaxValue).ToList();
+            var first = ordered[0];
+            var total = ordered
+                .Where(x => x.Total is > 0m)
+                .Select(x => x.Total)
+                .LastOrDefault();
+
+            merged.Add(new ImportedInvoice
+            {
+                PageNumber = first.PageNumber,
+                VendorName = first.VendorName,
+                InvoiceNumber = first.InvoiceNumber,
+                InvoiceDate = ordered.Select(x => x.InvoiceDate).FirstOrDefault(x => x.HasValue),
+                Total = total,
+                Lines = ordered.SelectMany(x => x.Lines).ToList()
+            });
+        }
+
+        // Keep any page that truly has no transaction number visible rather than silently discarding it.
+        merged.AddRange(pages.Where(x => string.IsNullOrWhiteSpace(x.InvoiceNumber)));
+        return merged.OrderBy(x => x.PageNumber ?? int.MaxValue).ToList();
     }
 
     private static List<PurchaseInvoiceLine> ParseAmericanDistributorsLineItems(List<string> lines)
@@ -3169,6 +3420,7 @@ public sealed class InvoiceImportService
     private const string VendorKeyHS = "HS";
     private const string VendorKeySkygate = "SKYGATE";
     private const string VendorKey1Oak = "1OAK";
+    private const string VendorKeyDemandVape = "DEMANDVAPE";
     private const string VendorKeySafa = "SAFA";
     private const string VendorKeyTriState = "TRISTATE";
 
@@ -3185,6 +3437,7 @@ public sealed class InvoiceImportService
         if (s.Contains("HS") && s.Contains("WHOLE")) return VendorKeyHS;
         if (s.Contains("SKYGATE")) return VendorKeySkygate;
         if (s.Contains("1OAK") || s.Contains("ONEOAK") || s.Contains("1OAKWHOLESALE")) return VendorKey1Oak;
+        if (s.Contains("DEMAND") && s.Contains("VAPE")) return VendorKeyDemandVape;
         if (s.Contains("SAFA")) return VendorKeySafa;
         if (s.Contains("TRISTATE") || (s.Contains("TRI") && s.Contains("STATE"))) return VendorKeyTriState;
 
@@ -3205,9 +3458,10 @@ public sealed class InvoiceImportService
     {
         var vendor = "SKYGATE WHOLESALE";
 
-        var mInv = Regex.Match(raw, @"\bINVOICE\s*NO\.?\s*[:#]?\s*([A-Z0-9]{3,})", RegexOptions.IgnoreCase);
-        if (!mInv.Success)
-            mInv = Regex.Match(raw, @"\bINVOICE\s*NO\.?\s*\n\s*([A-Z0-9]{3,})", RegexOptions.IgnoreCase);
+        var mInv = Regex.Match(
+            string.Join("\n", lines.Take(15)),
+            @"\b(S\d{5,})\b",
+            RegexOptions.IgnoreCase);
         var invNo = mInv.Success ? mInv.Groups[1].Value.Trim() : "";
 
         DateOnly? invDate = null;
@@ -3215,7 +3469,14 @@ public sealed class InvoiceImportService
         if (mDate.Success && TryParseDate(mDate.Groups[1].Value, out var d)) invDate = d;
         invDate ??= GuessInvoiceDate(raw);
 
-        var total = FindLabeledMoney(lines, "balance", "total");
+        decimal? total = null;
+        var balanceMatch = Regex.Match(
+            raw,
+            @"(?m)^\s*Balance\s+\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})\s*$",
+            RegexOptions.IgnoreCase);
+        if (balanceMatch.Success)
+            total = MoneyOrNull(balanceMatch.Groups[1].Value);
+        total ??= FindLabeledMoney(lines, "balance", "total");
         total ??= GuessTotal(raw);
 
         var items = new List<PurchaseInvoiceLine>();
@@ -3284,6 +3545,127 @@ public sealed class InvoiceImportService
     }
 
     // ===========================
+    // DEMANDVAPE
+    // ===========================
+    private static ImportedInvoice ParseDemandVapeInvoice(string raw, List<string> lines)
+    {
+        var invoiceNumberMatch = Regex.Match(
+            raw,
+            @"\bInvoice\s+Number\s*:\s*([A-Z0-9\-]+)",
+            RegexOptions.IgnoreCase);
+        var invoiceNumber = invoiceNumberMatch.Success
+            ? invoiceNumberMatch.Groups[1].Value.Trim()
+            : "";
+
+        DateOnly? invoiceDate = null;
+        var invoiceDateMatch = Regex.Match(
+            raw,
+            @"\bInvoice\s+Date\s*:\s*(\d{1,2}/\d{1,2}/\d{4})",
+            RegexOptions.IgnoreCase);
+        if (invoiceDateMatch.Success && TryParseDate(invoiceDateMatch.Groups[1].Value, out var parsedDate))
+            invoiceDate = parsedDate;
+        invoiceDate ??= GuessInvoiceDate(raw);
+
+        var subtotal = FindLabeledMoney(lines, "subtotal");
+        var freight = FindLabeledMoney(lines, "freight");
+        var tax = FindLabeledMoney(lines, "illinois 45% tax");
+        var payment = FindLabeledMoney(lines, "payments");
+
+        decimal? total = null;
+        if (subtotal is > 0m)
+            total = subtotal.Value + (freight ?? 0m) + (tax ?? 0m);
+        else if (payment is > 0m)
+            total = payment;
+
+        var normalized = lines
+            .Select(line => Regex.Replace((line ?? "").Trim(), @"\s+", " "))
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToList();
+
+        var items = new List<PurchaseInvoiceLine>();
+        var rowPattern = new Regex(
+            @"^(?<line>\d{4})\s+" +
+            @"(?<ordered>\d+(?:\.\d+)?)\s+" +
+            @"(?<shipped>\d+(?:\.\d+)?)\s+" +
+            @"(?<sku>[A-Z0-9\-]{4,})\s+" +
+            @"(?<description>.+?)\s+" +
+            @"(?<price>\d[\d,]*\.\d{2})\s+" +
+            @"(?<extension>\d[\d,]*\.\d{2})$",
+            RegexOptions.IgnoreCase);
+
+        for (var i = 0; i < normalized.Count; i++)
+        {
+            var match = rowPattern.Match(normalized[i]);
+            if (!match.Success)
+                continue;
+
+            _ = TryParseDecimal(match.Groups["ordered"].Value, out var ordered);
+            _ = TryParseDecimal(match.Groups["shipped"].Value, out var shipped);
+            var price = MoneyOrNull(match.Groups["price"].Value);
+            var extension = MoneyOrNull(match.Groups["extension"].Value);
+            var description = new StringBuilder(match.Groups["description"].Value.Trim());
+
+            var next = i + 1;
+            while (next < normalized.Count)
+            {
+                var continuation = normalized[next];
+                var upper = continuation.ToUpperInvariant();
+
+                if (rowPattern.IsMatch(continuation)
+                    || upper.StartsWith("SUBTOTAL")
+                    || upper.StartsWith("FREIGHT")
+                    || upper.Contains("ILLINOIS 45% TAX")
+                    || upper.StartsWith("PAYMENTS")
+                    || upper.StartsWith("TOTAL USD")
+                    || upper.StartsWith("ALL SALES")
+                    || upper.StartsWith("NO RETURNS")
+                    || upper.StartsWith("THE SALE")
+                    || upper.StartsWith("PAGE:")
+                    || upper == "INVOICE"
+                    || upper.Contains("LINE ORDER SHIP ITEM"))
+                {
+                    break;
+                }
+
+                if (!upper.StartsWith("**SINGLE")
+                    && !Regex.IsMatch(continuation, @"^\d+$")
+                    && !upper.StartsWith("CONTINUED ON NEXT PAGE"))
+                {
+                    description.Append(' ');
+                    description.Append(continuation);
+                }
+
+                next++;
+            }
+
+            var quantity = shipped > 0m ? shipped : ordered;
+            var unitCost = ComputeUnitCost(price, extension, quantity);
+            items.Add(new PurchaseInvoiceLine
+            {
+                ItemCode = match.Groups["sku"].Value.Trim(),
+                ProductName = Regex.Replace(description.ToString(), @"\s+", " ").Trim(),
+                OrdQuantity = ordered,
+                ShipQuantity = shipped,
+                Quantity = quantity,
+                Price = price,
+                Amount = extension,
+                UnitCost = unitCost
+            });
+
+            i = next - 1;
+        }
+
+        return new ImportedInvoice
+        {
+            VendorName = "DemandVape",
+            InvoiceNumber = invoiceNumber,
+            InvoiceDate = invoiceDate,
+            Total = total,
+            Lines = items
+        };
+    }
+
+    // ===========================
     // 1 OAK WHOLESALE
     // ===========================
     private static ImportedInvoice Parse1OakWholesaleInvoice(string raw, List<string> lines)
@@ -3298,8 +3680,14 @@ public sealed class InvoiceImportService
         if (mDate.Success && TryParseDate(mDate.Groups[1].Value, out var d)) invDate = d;
         invDate ??= GuessInvoiceDate(raw);
 
-        // 1OAK shows "Amount: $..." near header, but also has totals later
-        var total = FindLabeledMoney(lines, "amount", "balance", "grand total", "total");
+        decimal? total = null;
+        var grandTotalMatch = Regex.Match(
+            raw,
+            @"Grand\s+Total\s+\(Incl\.?\s*Tax\)\s+\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})",
+            RegexOptions.IgnoreCase);
+        if (grandTotalMatch.Success)
+            total = MoneyOrNull(grandTotalMatch.Groups[1].Value);
+        total ??= FindLabeledMoney(lines, "grand total", "amount", "balance", "total");
         total ??= GuessTotal(raw);
 
         var items = new List<PurchaseInvoiceLine>();
