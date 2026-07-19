@@ -5,6 +5,8 @@ namespace ManagerPaperworkSystem.WinForms;
 internal sealed class PortalSyncSetupForm : Form
 {
     private readonly IAppPaths _paths;
+    private readonly CancellationTokenSource _syncCancellation = new();
+    private bool _syncRunning;
     private readonly ComboBox _business = WinTheme.ComboBox();
     private readonly TextBox _portalUrl = WinTheme.TextBox();
     private readonly TextBox _portalStore = WinTheme.TextBox();
@@ -72,6 +74,17 @@ internal sealed class PortalSyncSetupForm : Form
         _business.SelectedIndexChanged += (_, _) => LoadSelectedBusiness();
         if (_business.Items.Count > 0)
             LoadSelectedBusiness();
+
+        FormClosing += (_, _) =>
+        {
+            if (_syncRunning)
+                _syncCancellation.Cancel();
+        };
+        FormClosed += (_, _) =>
+        {
+            if (!_syncRunning)
+                _syncCancellation.Dispose();
+        };
     }
 
     private Control BuildContent()
@@ -206,14 +219,25 @@ internal sealed class PortalSyncSetupForm : Form
             try
             {
                 SaveSettings(showConfirmation: false);
+                _syncRunning = true;
                 ToggleActions(actions, false);
                 _status.Text = "Opening the protected Chrome profile and requesting yesterday's report...";
-                var results = await PortalSyncService.RunDueAsync(_paths, true, true);
+                var results = await PortalSyncService.RunDueAsync(
+                    _paths,
+                    true,
+                    true,
+                    cancellationToken: _syncCancellation.Token);
+                if (!CanUpdateWindow())
+                    return;
                 _status.Text = results.Count == 0
                     ? "No enabled store configuration was found."
                     : string.Join("  ", results.Select(result => result.Message));
                 if (results.Any(result => !result.Success))
                     MessageBox.Show(this, _status.Text, "POS Auto Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (OperationCanceledException)
+            {
+                // Closing this setup window intentionally cancels its visible test run.
             }
             catch (Exception exception)
             {
@@ -221,7 +245,11 @@ internal sealed class PortalSyncSetupForm : Form
             }
             finally
             {
-                ToggleActions(actions, true);
+                _syncRunning = false;
+                if (CanUpdateWindow())
+                    ToggleActions(actions, true);
+                else
+                    _syncCancellation.Dispose();
             }
         };
         close.Click += (_, _) => Close();
@@ -315,9 +343,14 @@ internal sealed class PortalSyncSetupForm : Form
 
     private void ShowError(Exception exception)
     {
+        if (!CanUpdateWindow())
+            return;
         _status.Text = AppBootstrap.RedactSensitiveText(exception.Message);
         MessageBox.Show(this, _status.Text, "POS Auto Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
+
+    private bool CanUpdateWindow() =>
+        !IsDisposed && !Disposing && IsHandleCreated;
 
     private static void ToggleActions(Control root, bool enabled)
     {

@@ -360,8 +360,20 @@ internal static class PortalSyncService
         var profile = PortalSyncSettingsStore.ProfileDirectory(settings.Id);
         var downloadDirectory = PortalSyncSettingsStore.DownloadDirectory(settings.Id);
         var targetStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
-        var needsCashSummary = !targetStatus.CashSummaryPresent;
-        var needsZReports = targetStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports);
+        var cashFeedPath = Path.Combine(
+            PortalSyncSettingsStore.CashSalesSummaryFeedDirectory(settings.Id),
+            $"{targetDate:yyyy-MM-dd}.pdf");
+        var zFeedDirectory = PortalSyncSettingsStore.ZReportFeedDirectory(settings.Id);
+        var zFeedPresent = Directory.Exists(zFeedDirectory) &&
+                           Directory.EnumerateFiles(
+                                   zFeedDirectory,
+                                   $"*_{targetDate:yyyy-MM-dd}.pdf",
+                                   SearchOption.TopDirectoryOnly)
+                               .Any();
+        var needsCashSummary = !targetStatus.CashSummaryPresent || !File.Exists(cashFeedPath);
+        var needsZReports =
+            targetStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports) ||
+            !zFeedPresent;
         if (!needsCashSummary && !needsZReports)
         {
             return new PortalSyncRunResult(
@@ -402,6 +414,8 @@ internal static class PortalSyncService
         await ConfigureDownloadsAsync(page, downloadDirectory);
         string? cashSummaryPath = null;
         string? zReportsPath = null;
+        Exception? cashSummaryError = null;
+        Exception? zReportsError = null;
         try
         {
             await page.GoToAsync(settings.PortalUrl, WaitUntilNavigation.Networkidle2);
@@ -410,27 +424,58 @@ internal static class PortalSyncService
             await EnsureSignedInAsync(page, settings);
             if (needsCashSummary)
             {
-                await OpenCashAndSalesReportAsync(page);
-                cashSummaryPath = await GenerateReportAsync(
-                    browser, page, cashDownloadDirectory, targetDate, "Cash and Sales Summary",
-                    downloaded =>
-                        CashSalesSummaryImportCoordinator.Validate(
-                            CashSalesSummaryPdfImporter.ImportAsync(downloaded, cancellationToken)
-                                .GetAwaiter().GetResult()),
-                    cancellationToken);
+                try
+                {
+                    await OpenCashAndSalesReportAsync(page);
+                    var downloaded = await GenerateReportAsync(
+                        browser, page, cashDownloadDirectory, targetDate, "Cash and Sales Summary",
+                        source =>
+                            CashSalesSummaryImportCoordinator.Validate(
+                                CashSalesSummaryPdfImporter.ImportAsync(source, cancellationToken)
+                                    .GetAwaiter().GetResult()),
+                        cancellationToken);
+                    cashSummaryPath = StoreCashSummaryFeedFile(
+                        settings,
+                        downloaded,
+                        targetDate);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    cashSummaryError = exception;
+                }
             }
 
             if (needsZReports)
             {
-                await OpenZReportByPeriodAsync(page);
-                zReportsPath = await GenerateReportAsync(
-                    browser, page, zDownloadDirectory, targetDate, "Z Report by Period",
-                    downloaded => ValidateZReports(
+                try
+                {
+                    await OpenZReportByPeriodAsync(page);
+                    var downloaded = await GenerateReportAsync(
+                        browser, page, zDownloadDirectory, targetDate, "Z Report by Period",
+                        source => ValidateZReports(source, targetDate),
+                        cancellationToken);
+                    zReportsPath = StoreZReportFeedFile(
+                        settings,
                         downloaded,
-                        settings.ExpectedDailyZReports,
-                        targetDate),
-                    cancellationToken);
+                        targetDate);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    zReportsError = exception;
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception exception)
         {
@@ -454,6 +499,23 @@ internal static class PortalSyncService
                     ? exception.Message
                     : $"{exception.Message} Portal state: {diagnostic}",
                 exception);
+        }
+
+        if (cashSummaryError is not null || zReportsError is not null)
+        {
+            var screenshotPath = Path.Combine(
+                AppBootstrap.AppDataPath,
+                "Logs",
+                $"pos-portal-sync-{settings.Id:N}.png");
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(screenshotPath)!);
+                await page.ScreenshotAsync(screenshotPath, new ScreenshotOptions { FullPage = true });
+            }
+            catch
+            {
+                // A screenshot is diagnostic only; successfully downloaded feeds must still import.
+            }
         }
 
         await using var db = CreateStoreDatabase(settings);
@@ -481,18 +543,27 @@ internal static class PortalSyncService
                 paths,
                 dataStoreId,
                 zReportsPath,
-                settings.ExpectedDailyZReports,
                 targetDate,
                 cancellationToken);
         }
 
         var finalStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
         if (!finalStatus.IsComplete(settings.ExpectedDailyZReports))
+        {
+            var reportErrors = new List<string>();
+            if (cashSummaryError is not null)
+                reportErrors.Add($"Cash & Sales Summary: {cashSummaryError.Message}");
+            if (zReportsError is not null)
+                reportErrors.Add($"Z Report: {zReportsError.Message}");
             throw new InvalidOperationException(
                 $"POS sync did not complete for {targetDate:M/d/yyyy}. " +
                 $"Cash & Sales Summary present: {finalStatus.CashSummaryPresent}; " +
                 $"register Z reports: {finalStatus.ZReportCount} of " +
-                $"{Math.Max(1, settings.ExpectedDailyZReports)}.");
+                $"{Math.Max(1, settings.ExpectedDailyZReports)}." +
+                (reportErrors.Count == 0
+                    ? ""
+                    : $" {string.Join(" ", reportErrors)}"));
+        }
 
         var imported = cashSummaryImported || zResult.Imported > 0;
         return new PortalSyncRunResult(
@@ -947,10 +1018,61 @@ internal static class PortalSyncService
                 .click()");
     }
 
-    private static void ValidateZReports(
-        string path,
-        int expectedReportCount,
+    private static string StoreCashSummaryFeedFile(
+        PortalStoreSyncSettings settings,
+        string sourcePath,
         DateOnly targetDate)
+    {
+        var directory = PortalSyncSettingsStore.CashSalesSummaryFeedDirectory(settings.Id);
+        Directory.CreateDirectory(directory);
+        var destination = Path.Combine(directory, $"{targetDate:yyyy-MM-dd}.pdf");
+        File.Copy(sourcePath, destination, true);
+        return destination;
+    }
+
+    private static string StoreZReportFeedFile(
+        PortalStoreSyncSettings settings,
+        string sourcePath,
+        DateOnly targetDate)
+    {
+        var matchingBatches = new PosReportImportService()
+            .ImportZReports(sourcePath)
+            .Where(report =>
+                report.ReportDate == targetDate &&
+                !string.IsNullOrWhiteSpace(report.ShiftOrBatch))
+            .Select(report => SafeFilePart(report.ShiftOrBatch!))
+            .Where(batch => !string.IsNullOrWhiteSpace(batch))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(batch => batch, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (matchingBatches.Count == 0)
+            throw new InvalidOperationException(
+                $"No Z-report batch for {targetDate:M/d/yyyy} was available to store.");
+
+        var directory = PortalSyncSettingsStore.ZReportFeedDirectory(settings.Id);
+        Directory.CreateDirectory(directory);
+        var batchLabel = matchingBatches.Count == 1
+            ? $"Batch-{matchingBatches[0]}"
+            : $"Batches-{string.Join("-", matchingBatches)}";
+        var destination = Path.Combine(
+            directory,
+            $"{batchLabel}_{targetDate:yyyy-MM-dd}.pdf");
+        File.Copy(sourcePath, destination, true);
+        return destination;
+    }
+
+    private static string SafeFilePart(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(value
+                .Trim()
+                .Where(character => !invalid.Contains(character))
+                .Select(character => char.IsWhiteSpace(character) ? '-' : character)
+                .ToArray())
+            .Trim('-', '.', ' ');
+    }
+
+    private static void ValidateZReports(string path, DateOnly targetDate)
     {
         var reports = new PosReportImportService().ImportZReports(path);
         var valid = reports
@@ -969,15 +1091,10 @@ internal static class PortalSyncService
                 StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();
-        if (uniqueBatches.Count < Math.Max(1, expectedReportCount))
+        if (uniqueBatches.Count == 0)
             throw new InvalidOperationException(
-                $"The AdventPOS Z Report by Period contained {uniqueBatches.Count} unique batch report(s) " +
-                $"whose Start Date is {targetDate:M/d/yyyy}; " +
-                $"{Math.Max(1, expectedReportCount)} were expected.");
-        if (valid.Any(report => report.ReportDate != targetDate))
-            throw new InvalidOperationException(
-                $"The AdventPOS Z Report contained a batch whose Start Date is not " +
-                $"{targetDate:M/d/yyyy}. Nothing was imported.");
+                $"The AdventPOS Z Report by Period did not contain a valid batch whose Start Date is " +
+                $"{targetDate:M/d/yyyy}. Other report pages were preserved but will not be imported.");
     }
 
     private static async Task<PortalTargetStatus> GetTargetStatusAsync(
@@ -1025,11 +1142,10 @@ internal static class PortalSyncService
         IAppPaths paths,
         int storeId,
         string sourcePath,
-        int expectedReportCount,
         DateOnly targetDate,
         CancellationToken cancellationToken)
     {
-        ValidateZReports(sourcePath, expectedReportCount, targetDate);
+        ValidateZReports(sourcePath, targetDate);
         var reports = new PosReportImportService().ImportZReports(sourcePath)
             .Where(report => report.ReportDate == targetDate)
             .OrderBy(report => report.ShiftOrBatch)

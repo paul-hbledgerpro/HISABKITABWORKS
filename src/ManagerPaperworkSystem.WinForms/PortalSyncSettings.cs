@@ -53,6 +53,19 @@ internal static class PortalSyncSettingsStore
     public static string DownloadDirectory(Guid id) =>
         ResolveAutomationDirectory(id, "Downloads", "Downloads");
 
+    public static string ReportFeedDirectory(Guid id) =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HisabKitabPOS",
+            "ReportFeeds",
+            id.ToString("N"));
+
+    public static string CashSalesSummaryFeedDirectory(Guid id) =>
+        Path.Combine(ReportFeedDirectory(id), "Cash Sales Summary");
+
+    public static string ZReportFeedDirectory(Guid id) =>
+        Path.Combine(ReportFeedDirectory(id), "Z Reports");
+
     public static PortalSyncSettingsDocument Load()
     {
         try
