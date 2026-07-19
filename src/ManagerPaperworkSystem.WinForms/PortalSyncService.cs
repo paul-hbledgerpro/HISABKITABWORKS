@@ -11,6 +11,7 @@ using ManagerPaperworkSystem.UI.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using PuppeteerSharp;
+using PuppeteerSharp.Media;
 
 namespace ManagerPaperworkSystem.WinForms;
 
@@ -21,6 +22,12 @@ internal sealed record PortalSyncRunResult(
     string Message);
 
 internal sealed record ZReportImportOutcome(int Total, int Imported, int Updated);
+internal sealed record GeneratedPortalReport(
+    string? PdfPath,
+    string ScreenshotPath,
+    string RenderedText,
+    string? ExportError);
+internal sealed record CapturedZReport(PosReportData Report, string SourcePath);
 internal sealed record PortalTargetStatus(bool CashSummaryPresent, int ZReportCount)
 {
     public bool IsComplete(int expectedZReports) =>
@@ -363,17 +370,9 @@ internal static class PortalSyncService
         var cashFeedPath = Path.Combine(
             PortalSyncSettingsStore.CashSalesSummaryFeedDirectory(settings.Id),
             $"{targetDate:yyyy-MM-dd}.pdf");
-        var zFeedDirectory = PortalSyncSettingsStore.ZReportFeedDirectory(settings.Id);
-        var zFeedPresent = Directory.Exists(zFeedDirectory) &&
-                           Directory.EnumerateFiles(
-                                   zFeedDirectory,
-                                   $"*_{targetDate:yyyy-MM-dd}.pdf",
-                                   SearchOption.TopDirectoryOnly)
-                               .Any();
         var needsCashSummary = !targetStatus.CashSummaryPresent || !File.Exists(cashFeedPath);
         var needsZReports =
-            targetStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports) ||
-            !zFeedPresent;
+            targetStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports);
         if (!needsCashSummary && !needsZReports)
         {
             return new PortalSyncRunResult(
@@ -414,6 +413,7 @@ internal static class PortalSyncService
         await ConfigureDownloadsAsync(page, downloadDirectory);
         string? cashSummaryPath = null;
         var zReportPaths = new List<string>();
+        var capturedZReports = new List<CapturedZReport>();
         var rejectedZReportDetails = new List<string>();
         Exception? cashSummaryError = null;
         Exception? zReportsError = null;
@@ -428,16 +428,33 @@ internal static class PortalSyncService
                 try
                 {
                     await OpenCashAndSalesReportAsync(page);
-                    var downloaded = await GenerateReportAsync(
-                        browser, page, cashDownloadDirectory, targetDate, "Cash and Sales Summary",
-                        source =>
-                            CashSalesSummaryImportCoordinator.Validate(
-                                CashSalesSummaryPdfImporter.ImportAsync(source, cancellationToken)
-                                    .GetAwaiter().GetResult()),
+                    var archiveDirectory =
+                        PortalSyncSettingsStore.CashSalesSummaryArchiveDirectory(settings);
+                    Directory.CreateDirectory(archiveDirectory);
+                    var generated = await GenerateReportAsync(
+                        browser,
+                        page,
+                        cashDownloadDirectory,
+                        targetDate,
+                        "Cash and Sales Summary",
+                        Path.Combine(archiveDirectory, $"{targetDate:yyyy-MM-dd}.pdf"),
+                        Path.Combine(archiveDirectory, $"{targetDate:yyyy-MM-dd}.png"),
                         cancellationToken);
+                    if (string.IsNullOrWhiteSpace(generated.PdfPath))
+                    {
+                        throw new InvalidOperationException(
+                            "The Cash and Sales Summary was displayed and its screenshot was saved, " +
+                            "but AdventPOS did not provide a readable PDF." +
+                            FormatExportError(generated.ExportError));
+                    }
+                    CashSalesSummaryImportCoordinator.Validate(
+                        CashSalesSummaryPdfImporter.ImportAsync(
+                                generated.PdfPath,
+                                cancellationToken)
+                            .GetAwaiter().GetResult());
                     cashSummaryPath = StoreCashSummaryFeedFile(
                         settings,
-                        downloaded,
+                        generated.PdfPath,
                         targetDate);
                 }
                 catch (OperationCanceledException)
@@ -476,20 +493,55 @@ internal static class PortalSyncService
                         Directory.CreateDirectory(batchDownloadDirectory);
                         try
                         {
-                            var downloaded = await GenerateReportAsync(
+                            var archiveDirectory =
+                                PortalSyncSettingsStore.ZReportArchiveDirectory(settings);
+                            Directory.CreateDirectory(archiveDirectory);
+                            var generated = await GenerateReportAsync(
                                 browser,
                                 page,
                                 batchDownloadDirectory,
                                 targetDate,
                                 $"Close-Out Z Report batch {batch}",
-                                source => ValidateZReportBatch(source, targetDate, batch),
+                                Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.pdf"),
+                                Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.png"),
                                 cancellationToken,
                                 batch);
-                            zReportPaths.Add(StoreZReportFeedFile(
-                                settings,
-                                downloaded,
-                                targetDate));
-                            if (zReportPaths.Count >= expectedReports)
+
+                            PosReportData? renderedReport = null;
+                            if (!string.IsNullOrWhiteSpace(generated.PdfPath))
+                            {
+                                try
+                                {
+                                    ValidateZReportBatch(generated.PdfPath, targetDate, batch);
+                                    zReportPaths.Add(StoreZReportFeedFile(
+                                        settings,
+                                        generated.PdfPath,
+                                        targetDate));
+                                }
+                                catch
+                                {
+                                    renderedReport = ParseRenderedZReport(
+                                        generated.RenderedText,
+                                        targetDate,
+                                        batch);
+                                }
+                            }
+                            else
+                            {
+                                renderedReport = ParseRenderedZReport(
+                                    generated.RenderedText,
+                                    targetDate,
+                                    batch);
+                            }
+
+                            if (renderedReport is not null)
+                            {
+                                capturedZReports.Add(new CapturedZReport(
+                                    renderedReport,
+                                    generated.ScreenshotPath));
+                            }
+
+                            if (zReportPaths.Count + capturedZReports.Count >= expectedReports)
                                 break;
                         }
                         catch (OperationCanceledException)
@@ -503,7 +555,7 @@ internal static class PortalSyncService
                         }
                     }
 
-                    if (zReportPaths.Count == 0)
+                    if (zReportPaths.Count + capturedZReports.Count == 0)
                     {
                         throw new InvalidOperationException(
                             $"None of the newest AdventPOS Close-Out batches had Start Date " +
@@ -598,6 +650,20 @@ internal static class PortalSyncService
                 zResult.Imported + result.Imported,
                 zResult.Updated + result.Updated);
         }
+        foreach (var captured in capturedZReports)
+        {
+            var result = await ImportCapturedZReportAsync(
+                db,
+                paths,
+                dataStoreId,
+                captured,
+                targetDate,
+                cancellationToken);
+            zResult = new ZReportImportOutcome(
+                zResult.Total + result.Total,
+                zResult.Imported + result.Imported,
+                zResult.Updated + result.Updated);
+        }
 
         var finalStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
         if (!finalStatus.IsComplete(settings.ExpectedDailyZReports))
@@ -681,6 +747,9 @@ internal static class PortalSyncService
         var separator = compact.IndexOf(". ", StringComparison.Ordinal);
         return separator < 0 ? compact.TrimEnd('.') : compact[..separator].TrimEnd('.');
     }
+
+    private static string FormatExportError(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "" : $" Portal export error: {value}";
 
     private static async Task EnsureSignedInAsync(IPage page, PortalStoreSyncSettings settings)
     {
@@ -1129,13 +1198,14 @@ internal static class PortalSyncService
             $"AdventPOS did not retain batch {batch} in the Close-Out report selector.");
     }
 
-    private static async Task<string> GenerateReportAsync(
+    private static async Task<GeneratedPortalReport> GenerateReportAsync(
         IBrowser browser,
         IPage page,
         string downloadDirectory,
         DateOnly targetDate,
         string reportName,
-        Action<string> validateDownload,
+        string archivedPdfPath,
+        string screenshotPath,
         CancellationToken cancellationToken,
         string? batchNumber = null)
     {
@@ -1184,50 +1254,162 @@ internal static class PortalSyncService
         if (!string.IsNullOrWhiteSpace(batchNumber))
             await SelectBatchAsync(page, batchNumber, cancellationToken);
 
-        var knownPages = (await browser.PagesAsync()).ToHashSet();
-        await page.EvaluateExpressionAsync("ViewReport(true, true, false);");
+        // AdventPOS sometimes reuses an earlier report popup. Close stale
+        // report viewers first so every batch starts from a known page.
+        foreach (var stalePage in (await browser.PagesAsync()).Where(candidate =>
+                     !ReferenceEquals(candidate, page) &&
+                     candidate.Url.Contains(
+                         "/Report/ViewReportResult",
+                         StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                await stalePage.CloseAsync();
+            }
+            catch
+            {
+                // A stale popup may already be closing.
+            }
+        }
 
-        var deadline = DateTime.UtcNow.AddSeconds(75);
-        var exportRequested = false;
-        while (DateTime.UtcNow < deadline)
+        await page.EvaluateExpressionAsync("ViewReport(true, true, false);");
+        IPage? reportPage = null;
+        var pageDeadline = DateTime.UtcNow.AddSeconds(35);
+        while (DateTime.UtcNow < pageDeadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var downloaded = FindCompletedPdf(downloadDirectory);
-            if (downloaded is not null)
+            reportPage = page.Url.Contains(
+                "/Report/ViewReportResult",
+                StringComparison.OrdinalIgnoreCase)
+                ? page
+                : (await browser.PagesAsync()).LastOrDefault(candidate =>
+                    candidate.Url.Contains(
+                        "/Report/ViewReportResult",
+                        StringComparison.OrdinalIgnoreCase));
+            if (reportPage is not null)
+                break;
+            await Task.Delay(500, cancellationToken);
+        }
+
+        if (reportPage is null)
+        {
+            throw new InvalidOperationException(
+                $"AdventPOS did not open the {reportName} report viewer.");
+        }
+
+        try
+        {
+            try
             {
-                validateDownload(downloaded);
-                return downloaded;
+                await reportPage.WaitForNetworkIdleAsync(new WaitForNetworkIdleOptions
+                {
+                    IdleTime = 1000,
+                    Timeout = 30_000
+                });
+            }
+            catch
+            {
+                // ActiveReports can keep a background connection open.
             }
 
-            var reportPage = page.Url.Contains(
-                    "/Report/ViewReportResult",
-                    StringComparison.OrdinalIgnoreCase)
-                ? page
-                : (await browser.PagesAsync())
-                    .FirstOrDefault(candidate => !knownPages.Contains(candidate));
-            if (reportPage is not null && !exportRequested)
+            await Task.Delay(1500, cancellationToken);
+            Directory.CreateDirectory(Path.GetDirectoryName(screenshotPath)!);
+            await reportPage.ScreenshotAsync(
+                screenshotPath,
+                new ScreenshotOptions { FullPage = true });
+
+            var renderedText = await reportPage.EvaluateExpressionAsync<string>(
+                "(document.body && (document.body.innerText || document.body.textContent)) || ''");
+
+            string? exportError = null;
+            try
+            {
+                await ConfigureDownloadsAsync(reportPage, downloadDirectory);
+                await RequestActiveReportsPdfExportAsync(reportPage);
+                var downloadDeadline = DateTime.UtcNow.AddSeconds(45);
+                while (DateTime.UtcNow < downloadDeadline)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var downloaded = FindCompletedPdf(downloadDirectory);
+                    if (downloaded is not null)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(archivedPdfPath)!);
+                        File.Copy(downloaded, archivedPdfPath, true);
+                        return new GeneratedPortalReport(
+                            archivedPdfPath,
+                            screenshotPath,
+                            renderedText,
+                            null);
+                    }
+                    await Task.Delay(750, cancellationToken);
+                }
+                exportError = "The portal's PDF export timed out.";
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                exportError = FirstSentence(exception.Message);
+            }
+
+            // If the ActiveReports download control fails, ask Chrome to print
+            // the already-rendered report page to PDF. This preserves a usable
+            // report artifact on portal versions whose Export UI changed.
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(archivedPdfPath)!);
+                await reportPage.PdfAsync(
+                    archivedPdfPath,
+                    new PdfOptions
+                    {
+                        PrintBackground = true,
+                        Format = PaperFormat.Letter
+                    });
+                if (File.Exists(archivedPdfPath) &&
+                    new FileInfo(archivedPdfPath).Length > 0)
+                {
+                    return new GeneratedPortalReport(
+                        archivedPdfPath,
+                        screenshotPath,
+                        renderedText,
+                        exportError);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                exportError = string.IsNullOrWhiteSpace(exportError)
+                    ? FirstSentence(exception.Message)
+                    : $"{exportError}; Chrome PDF fallback: {FirstSentence(exception.Message)}";
+            }
+
+            // The rendered page and screenshot remain useful even when the
+            // third-party report viewer refuses to download its PDF.
+            return new GeneratedPortalReport(
+                null,
+                screenshotPath,
+                renderedText,
+                exportError);
+        }
+        finally
+        {
+            if (!ReferenceEquals(reportPage, page))
             {
                 try
                 {
-                    await reportPage.WaitForNetworkIdleAsync(new WaitForNetworkIdleOptions
-                    {
-                        IdleTime = 1000,
-                        Timeout = 30_000
-                    });
+                    await reportPage.CloseAsync();
                 }
                 catch
                 {
-                    // Some report viewers keep a background connection open.
+                    // The portal may close its report popup after export.
                 }
-                await ConfigureDownloadsAsync(reportPage, downloadDirectory);
-                await RequestActiveReportsPdfExportAsync(reportPage);
-                exportRequested = true;
             }
-            await Task.Delay(1000, cancellationToken);
         }
-
-        throw new InvalidOperationException(
-            $"AdventPOS did not produce a valid {reportName} PDF. The portal may have changed its report screen.");
     }
 
     private static async Task RequestActiveReportsPdfExportAsync(IPage reportPage)
@@ -1394,6 +1576,30 @@ internal static class PortalSyncService
                 : $"batch {expectedBatch} has Start Date {string.Join(", ", actualDates)}, not {targetDate:M/d/yyyy}");
     }
 
+    private static PosReportData ParseRenderedZReport(
+        string renderedText,
+        DateOnly targetDate,
+        string expectedBatch)
+    {
+        var report = new PosReportImportService().ImportRenderedZReport(renderedText);
+        if (!string.Equals(
+                report.ShiftOrBatch?.Trim(),
+                expectedBatch.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"the rendered report did not contain selected batch {expectedBatch}");
+        }
+        if (report.ReportDate != targetDate)
+        {
+            throw new InvalidOperationException(
+                report.ReportDate.HasValue
+                    ? $"batch {expectedBatch} has Start Date {report.ReportDate:M/d/yyyy}, not {targetDate:M/d/yyyy}"
+                    : $"batch {expectedBatch} did not expose a valid Start Date");
+        }
+        return report;
+    }
+
     private static async Task<PortalTargetStatus> GetTargetStatusAsync(
         PortalStoreSyncSettings settings,
         DateOnly targetDate,
@@ -1461,6 +1667,63 @@ internal static class PortalSyncService
         if (!File.Exists(storedPath))
             File.Copy(sourcePath, storedPath, false);
 
+        return await UpsertZReportsAsync(
+            db,
+            storeId,
+            reports,
+            storedPath,
+            targetDate,
+            cancellationToken);
+    }
+
+    private static async Task<ZReportImportOutcome> ImportCapturedZReportAsync(
+        AppDbContext db,
+        IAppPaths paths,
+        int storeId,
+        CapturedZReport captured,
+        DateOnly targetDate,
+        CancellationToken cancellationToken)
+    {
+        if (captured.Report.ReportDate != targetDate ||
+            string.IsNullOrWhiteSpace(captured.Report.ShiftOrBatch))
+        {
+            throw new InvalidOperationException(
+                $"The captured Z report was not valid for {targetDate:M/d/yyyy}.");
+        }
+
+        var sourceBytes = await File.ReadAllBytesAsync(captured.SourcePath, cancellationToken);
+        var sourceHash = Convert.ToHexString(SHA256.HashData(sourceBytes));
+        var reportFolder = Path.Combine(
+            paths.AppDataDirectory,
+            "POS Z Reports",
+            storeId.ToString(CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(reportFolder);
+        var extension = Path.GetExtension(captured.SourcePath);
+        if (string.IsNullOrWhiteSpace(extension))
+            extension = ".png";
+        var storedPath = Path.Combine(
+            reportFolder,
+            $"{targetDate:yyyyMMdd}_{sourceHash[..12]}{extension}");
+        if (!File.Exists(storedPath))
+            File.Copy(captured.SourcePath, storedPath, false);
+
+        return await UpsertZReportsAsync(
+            db,
+            storeId,
+            [captured.Report],
+            storedPath,
+            targetDate,
+            cancellationToken);
+    }
+
+    private static async Task<ZReportImportOutcome> UpsertZReportsAsync(
+        AppDbContext db,
+        int storeId,
+        IReadOnlyList<PosReportData> reports,
+        string storedPath,
+        DateOnly targetDate,
+        CancellationToken cancellationToken)
+    {
         var imported = 0;
         var updated = 0;
         foreach (var report in reports)

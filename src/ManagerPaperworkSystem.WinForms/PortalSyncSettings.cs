@@ -66,6 +66,33 @@ internal static class PortalSyncSettingsStore
     public static string ZReportFeedDirectory(Guid id) =>
         Path.Combine(ReportFeedDirectory(id), "Z Reports");
 
+    public static string StoreReportArchiveDirectory(PortalStoreSyncSettings settings)
+    {
+        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        if (string.IsNullOrWhiteSpace(documents))
+        {
+            documents = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "Documents");
+        }
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var storeName = new string((settings.BusinessName ?? "")
+            .Trim()
+            .Where(character => !invalid.Contains(character))
+            .ToArray());
+        if (string.IsNullOrWhiteSpace(storeName))
+            storeName = "HISAB KITAB Store";
+
+        return Path.Combine(documents, $"{storeName} Reports");
+    }
+
+    public static string CashSalesSummaryArchiveDirectory(PortalStoreSyncSettings settings) =>
+        Path.Combine(StoreReportArchiveDirectory(settings), "Cash and Sales Summary Reports");
+
+    public static string ZReportArchiveDirectory(PortalStoreSyncSettings settings) =>
+        Path.Combine(StoreReportArchiveDirectory(settings), "Z Reports");
+
     public static PortalSyncSettingsDocument Load()
     {
         try

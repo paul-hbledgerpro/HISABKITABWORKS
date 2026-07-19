@@ -73,6 +73,13 @@ public sealed class PosReportImportService
             .ToList();
     }
 
+    /// <summary>
+    /// Parses the text rendered by the POS report viewer. This is used when the
+    /// portal displays a valid Z report but blocks or fails its PDF download.
+    /// </summary>
+    public PosReportData ImportRenderedZReport(string renderedText) =>
+        ParseZReportFromText(renderedText ?? "");
+
     private PosReportData ImportXlsx(string filePath)
     {
         using var wb = new XLWorkbook(filePath);
