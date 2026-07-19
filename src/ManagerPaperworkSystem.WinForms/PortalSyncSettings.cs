@@ -29,6 +29,8 @@ internal sealed class PortalStoreSyncSettings
     public DateTime? LastAttemptUtc { get; set; }
     public DateTime? LastSuccessUtc { get; set; }
     public DateOnly? LastImportedReportDate { get; set; }
+    public DateOnly? LastCashSummaryReportDate { get; set; }
+    public DateOnly? LastZReportDate { get; set; }
     public string LastStatus { get; set; } = "Not run yet";
 }
 

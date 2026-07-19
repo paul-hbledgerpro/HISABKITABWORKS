@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "1.0.108"
+    [string]$Version = "1.0.109"
 )
 
 $ErrorActionPreference = "Stop"
@@ -127,20 +127,15 @@ function New-ClientUpdatePackage([string]$Version) {
     }
 
     $entries = [Collections.Generic.List[object]]::new()
-    foreach ($name in @(
-        "HISAB KITAB.exe",
-        "HISAB KITAB.dll",
-        "HISAB KITAB.deps.json",
-        "HISAB KITAB.runtimeconfig.json",
-        "ManagerPaperworkSystem.Core.dll",
-        "ManagerPaperworkSystem.Data.dll",
-        "ManagerPaperworkSystem.Reports.dll",
-        "bank-sync-service.url",
-        "version.txt"
-    )) {
+
+    # Include every published top-level runtime file. A hand-maintained
+    # allowlist previously omitted newly added dependencies such as MailKit,
+    # MimeKit, and BouncyCastle from automatic updates even though the full
+    # installer contained them.
+    foreach ($file in Get-ChildItem -LiteralPath $clientPublish -File) {
         $entries.Add([pscustomobject]@{
-            Source = Join-Path $clientPublish $name
-            Entry = $name
+            Source = $file.FullName
+            Entry = $file.Name
         })
     }
 

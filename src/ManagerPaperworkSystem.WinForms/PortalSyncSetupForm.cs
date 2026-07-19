@@ -134,7 +134,7 @@ internal sealed class PortalSyncSetupForm : Form
 
         AddField(form, "LICENSED HISAB KITAB STORE *", _business, 0, 0, 2);
         AddField(form, "DAILY RUN TIME", _runTime, 2, 0, 1);
-        AddField(form, "DAILY Z REPORTS", _expectedZReports, 3, 0, 1);
+        AddField(form, "EXPECTED REGISTER Z REPORTS", _expectedZReports, 3, 0, 1);
         AddField(form, "ADVENTPOS WEB PORTAL", _portalUrl, 0, 1, 4);
         AddField(form, "PORTAL EMAIL *", _email, 0, 2, 2);
         AddField(form, "PORTAL PASSWORD *", _portalPassword, 2, 2, 2);
@@ -153,7 +153,9 @@ internal sealed class PortalSyncSetupForm : Form
                 "1. Save the settings.  2. Open the dedicated Chrome profile.  " +
                 "3. Complete any AdventPOS verification and select the correct store.  " +
                 "4. Close Chrome and use TEST / SYNC NOW.\n\n" +
-                "After that, Windows downloads the Cash & Sales Summary and every expected register Z Report together. " +
+                "After that, Windows imports one Cash & Sales Summary into CASH SALES SUMMARY and " +
+                "the expected register Z Reports into SHIFT CASH DROP. " +
+                "Only Z-report batches whose Start Date matches the prior day are accepted. " +
                 "If the PC is off, HISAB KITAB catches up the next time it opens.",
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,

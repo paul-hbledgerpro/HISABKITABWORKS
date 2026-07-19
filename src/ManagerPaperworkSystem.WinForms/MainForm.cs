@@ -1918,9 +1918,17 @@ internal sealed partial class MainForm : Form
         var dashboard = MockActionButton("", "Dashboard", width: 160);
         dashboard.Click += (_, _) => ShowModule("Dashboard");
         actions.Controls.Add(dashboard);
-        var upload = MockActionButton("", "Upload POS Report", width: 215);
+        var upload = MockActionButton("", "Import Z Report", width: 190);
         upload.Click += (_, _) => UploadPosReport(date, employee, shift, cash, card, net, tax, drop, posReport);
         actions.Controls.Add(upload);
+        var posAutoSync = MockActionButton("", "POS Auto Sync", width: 175);
+        posAutoSync.Click += (_, _) =>
+        {
+            using var autoSyncForm = _services.GetRequiredService<PortalSyncSetupForm>();
+            autoSyncForm.ShowDialog(this);
+            refresh();
+        };
+        actions.Controls.Add(posAutoSync);
         var clear = MockActionButton("", "Clear Imported", width: 190);
         clear.Click += (_, _) => clearImported();
         actions.Controls.Add(clear);
