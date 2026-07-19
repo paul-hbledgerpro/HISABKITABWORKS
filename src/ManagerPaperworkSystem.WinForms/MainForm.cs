@@ -485,8 +485,6 @@ internal sealed partial class MainForm : Form
         };
         var file = new ToolStripMenuItem("File") { ForeColor = Color.White };
         file.DropDownItems.Add(MenuItem("Reports (PDF)...", (_, _) => ShowModule("Reports")));
-        file.DropDownItems.Add(MenuItem("Open Database Folder", (_, _) => Process.Start("explorer.exe", _paths.AppDataDirectory)));
-        file.DropDownItems.Add(MenuItem("Copy Database Path", (_, _) => Clipboard.SetText(_paths.DatabasePath)));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MenuItem("Logout", (_, _) => Close()));
         file.DropDownItems.Add(MenuItem("Exit", (_, _) => Close()));
@@ -496,7 +494,6 @@ internal sealed partial class MainForm : Form
         settings.DropDownItems.Add(new ToolStripSeparator());
         settings.DropDownItems.Add(MenuItem("Change Password...", (_, _) => OpenForm<ChangePasswordForm>()));
         settings.DropDownItems.Add(MenuItem("User Accounts...", (_, _) => OpenAdminForm<UserAccountsForm>()));
-        settings.DropDownItems.Add(MenuItem("Database Connection...", (_, _) => OpenAdminForm<DatabaseSettingsForm>()));
 
         var help = new ToolStripMenuItem("Help") { ForeColor = Color.White };
         help.DropDownItems.Add(MenuItem("Check for Updates...", async (_, _) => await AppUpdateStartupService.CheckManuallyAsync(this)));
@@ -587,7 +584,6 @@ internal sealed partial class MainForm : Form
         AddSection("ADMIN");
         AddNav("Stores", "Stores", true);
         AddNav("User Accounts", "User Accounts", true);
-        AddNav("Database Settings", "Database Settings", true);
 
         return panel;
     }
@@ -628,7 +624,6 @@ internal sealed partial class MainForm : Form
             }
             if (module == "Stores") OpenAdminForm<StoreManagerForm>();
             else if (module == "User Accounts") OpenAdminForm<UserAccountsForm>();
-            else if (module == "Database Settings") OpenAdminForm<DatabaseSettingsForm>();
             else ShowModule(module);
         };
         _navButtons[module] = button;
@@ -655,7 +650,6 @@ internal sealed partial class MainForm : Form
             "Reports" => "\uE749",
             "Stores" => "\uE719",
             "User Accounts" => "\uE77B",
-            "Database Settings" => "\uE950",
             _ => "\uE10F"
         };
 

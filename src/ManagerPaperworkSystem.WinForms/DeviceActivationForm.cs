@@ -770,10 +770,10 @@ internal sealed class DeviceActivationForm : Form
     {
         try
         {
-            if (!File.Exists(AppBootstrap.ConnectionSettingsPath))
-                return "";
-
-            var settings = JsonSerializer.Deserialize<DatabaseConnectionSettings>(File.ReadAllText(AppBootstrap.ConnectionSettingsPath));
+            var settings = DeviceLicenseService.LoadProtectedConnection();
+            if (settings is null && File.Exists(AppBootstrap.ConnectionSettingsPath))
+                settings = JsonSerializer.Deserialize<DatabaseConnectionSettings>(
+                    File.ReadAllText(AppBootstrap.ConnectionSettingsPath));
             if (!string.IsNullOrWhiteSpace(settings?.Database))
                 return settings.Database.Trim();
             if (!string.IsNullOrWhiteSpace(settings?.ConnectionString))

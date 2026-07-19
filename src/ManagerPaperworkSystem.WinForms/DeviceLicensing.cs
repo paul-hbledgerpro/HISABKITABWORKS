@@ -474,7 +474,29 @@ internal static class DeviceLicenseService
             return null;
         var protectedBytes = File.ReadAllBytes(ProtectedConnectionPath);
         var clear = ProtectedData.Unprotect(protectedBytes, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        return JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+        try
+        {
+            return JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
+    }
+
+    internal static void SaveProtectedConnection(DatabaseConnectionSettings settings)
+    {
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
+        try
+        {
+            var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(ProtectedConnectionPath, protectedBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
     }
 
     private static DeviceIdentityRecord CreateIdentity()
@@ -569,10 +591,7 @@ internal static class DeviceLicenseService
             payload.EncryptedConnection,
             payload.ConnectionNonce,
             payload.ConnectionTag);
-        var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
-        var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        File.WriteAllBytes(ProtectedConnectionPath, protectedBytes);
-        CryptographicOperations.ZeroMemory(clear);
+        SaveProtectedConnection(settings);
     }
 
     internal static DatabaseConnectionSettings DecryptConnectionPayload(

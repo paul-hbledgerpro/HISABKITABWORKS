@@ -61,7 +61,6 @@ internal static class AppBootstrap
         services.AddTransient<SetupForm>();
         services.AddTransient<StoreManagerForm>();
         services.AddTransient<UserAccountsForm>();
-        services.AddTransient<DatabaseSettingsForm>();
         services.AddTransient<CreateAccountForm>();
         services.AddTransient<ChangePasswordForm>();
         services.AddTransient<ResetPasswordForm>();
@@ -173,13 +172,33 @@ internal static class AppBootstrap
         {
             var protectedSettings = DeviceLicenseService.LoadProtectedConnection();
             if (protectedSettings is not null)
+            {
+                // A current device license stores the SQL connection using Windows DPAPI.
+                // Remove any legacy plaintext JSON that an older build left behind.
+                TryDelete(ConnectionSettingsPath);
                 return BuildConnectionString(protectedSettings);
+            }
 
             if (File.Exists(ConnectionSettingsPath))
             {
                 var settings = JsonSerializer.Deserialize<DatabaseConnectionSettings>(File.ReadAllText(ConnectionSettingsPath));
                 if (settings is not null)
-                    return BuildConnectionString(settings);
+                {
+                    // One-time migration for older installations. Keep compatibility while
+                    // ensuring database credentials are no longer readable as plain text.
+                    var connection = BuildConnectionString(settings);
+                    try
+                    {
+                        DeviceLicenseService.SaveProtectedConnection(settings);
+                        TryDelete(ConnectionSettingsPath);
+                    }
+                    catch
+                    {
+                        // Do not strand a legacy installation if Windows cannot protect the
+                        // settings yet. The next startup will retry the secure migration.
+                    }
+                    return connection;
+                }
             }
         }
         catch
