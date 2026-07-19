@@ -176,6 +176,8 @@ public sealed class ShiftLogEntry : Entity
     [MaxLength(300)]
     public string PayoutReason { get; set; } = "";
 
+    public int? PosSalesSummaryId { get; set; }
+
     [NotMapped]
     public decimal GrossSales => CashTotal + CardTotal + Tax;
 
@@ -373,6 +375,26 @@ public sealed class PosSalesSummary : Entity
 
     [Column(TypeName = "decimal(9,4)")]
     public decimal DepartmentProfitPercent { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal CashDropReceived { get; set; }
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal RegisterPayout { get; set; }
+
+    [MaxLength(300)]
+    public string PayoutReason { get; set; } = "";
+
+    public bool IsReconciled { get; set; }
+    public int? ReconciledByUserId { get; set; }
+
+    [MaxLength(120)]
+    public string ReconciledByName { get; set; } = "";
+
+    public DateTime? ReconciledUtc { get; set; }
+
+    [NotMapped]
+    public decimal CashVariance => CashDropReceived + RegisterPayout - CashSales;
 
     public int ImportedByUserId { get; set; }
 

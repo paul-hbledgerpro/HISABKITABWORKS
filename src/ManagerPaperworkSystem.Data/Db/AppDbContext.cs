@@ -55,7 +55,8 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<PosSalesHourlyLine>().ToTable("PosSalesHourlyLines");
         modelBuilder.Entity<PosSalesDepartmentLine>().ToTable("PosSalesDepartmentLines");
         modelBuilder.Entity<PurchaseInvoice>().ToTable("PurchaseInvoices");
-        modelBuilder.Entity<PurchaseInvoiceLine>().ToTable("PurchaseInvoiceLines");
+        modelBuilder.Entity<PurchaseInvoiceLine>()
+            .ToTable("PurchaseInvoiceLines", table => table.UseSqlOutputClause(false));
         modelBuilder.Entity<ProductCost>().ToTable("ProductCosts");
         modelBuilder.Entity<PriceAlert>().ToTable("PriceAlerts");
         modelBuilder.Entity<Employee>().ToTable("Employees");
@@ -85,6 +86,7 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<UserAccount>().HasIndex(x => x.Role);
 
         modelBuilder.Entity<ShiftLogEntry>().HasIndex(x => new { x.StoreId, x.Date });
+        modelBuilder.Entity<ShiftLogEntry>().HasIndex(x => x.PosSalesSummaryId).IsUnique();
         modelBuilder.Entity<CashOnHandEntry>().HasIndex(x => new { x.StoreId, x.Date });
         modelBuilder.Entity<CheckPayout>().HasIndex(x => new { x.StoreId, x.Date });
         modelBuilder.Entity<PosSalesSummary>().HasIndex(x => new { x.StoreId, x.ReportFrom, x.ReportTo });

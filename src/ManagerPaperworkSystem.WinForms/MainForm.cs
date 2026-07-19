@@ -87,6 +87,7 @@ internal sealed partial class MainForm : Form
             ShowModule("Dashboard");
             _ = BeginMonthlyReportDeliveryAsync();
             _ = BeginMonthlyBankStatementDeliveryAsync();
+            _ = BeginDuePosPortalSyncAsync();
             _monthlyDeliveryTimer.Start();
         };
         FormClosed += (_, _) =>
@@ -94,6 +95,21 @@ internal sealed partial class MainForm : Form
             _monthlyDeliveryTimer.Stop();
             _monthlyDeliveryTimer.Dispose();
         };
+    }
+
+    private async Task BeginDuePosPortalSyncAsync()
+    {
+        try
+        {
+            var results = await PortalSyncService.RunDueAsync(_paths, force: false, visibleChrome: false);
+            var message = results.LastOrDefault()?.Message;
+            if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
+                BeginInvoke(() => _status.Text = message);
+        }
+        catch
+        {
+            // The scheduled task and the next app startup retry automatically.
+        }
     }
 
     private async Task BeginMonthlyReportDeliveryAsync()

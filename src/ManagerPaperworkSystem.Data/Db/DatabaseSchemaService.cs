@@ -126,6 +126,7 @@ public static class DatabaseSchemaService
                     [CashDropReceived] DECIMAL(18,2) NOT NULL DEFAULT 0,
                     [RegisterPayout] DECIMAL(18,2) NOT NULL DEFAULT 0,
                     [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '',
+                    [PosSalesSummaryId] INT NULL,
                     [IsCorrection] BIT NOT NULL DEFAULT 0,
                     [CorrectsId] INT NULL,
                     [CreatedByUserId] INT NULL,
@@ -168,9 +169,19 @@ public static class DatabaseSchemaService
                     [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
                 )");
 
-            // Consolidated POS summaries are imported separately from register-level
-            // shift logs. This avoids inventing per-register cash drops from a store
-            // total while preserving the complete source report for reconciliation.
+            await EnsureColumnAsync(conn, "ShiftLogs", "PosSalesSummaryId", "INT NULL");
+            await ExecuteSafe(conn, @"
+                IF NOT EXISTS (
+                    SELECT 1 FROM sys.indexes
+                    WHERE name = 'UX_ShiftLogs_PosSalesSummaryId'
+                      AND object_id = OBJECT_ID(N'[dbo].[ShiftLogs]'))
+                    CREATE UNIQUE INDEX [UX_ShiftLogs_PosSalesSummaryId]
+                        ON [dbo].[ShiftLogs] ([PosSalesSummaryId])
+                        WHERE [PosSalesSummaryId] IS NOT NULL;");
+
+            // Consolidated POS summaries retain the source report details and can be
+            // reconciled into one accounting shift entry after a manager enters the
+            // physical drop and any register payout.
             await ExecuteSafe(conn, @"
                 IF OBJECT_ID(N'[dbo].[PosSalesSummaries]', N'U') IS NULL
                 BEGIN
@@ -210,6 +221,13 @@ public static class DatabaseSchemaService
                         [DepartmentCost] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [DepartmentProfit] DECIMAL(18,2) NOT NULL DEFAULT 0,
                         [DepartmentProfitPercent] DECIMAL(9,4) NOT NULL DEFAULT 0,
+                        [CashDropReceived] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [RegisterPayout] DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '',
+                        [IsReconciled] BIT NOT NULL DEFAULT 0,
+                        [ReconciledByUserId] INT NULL,
+                        [ReconciledByName] NVARCHAR(120) NOT NULL DEFAULT '',
+                        [ReconciledUtc] DATETIME2 NULL,
                         [ImportedByUserId] INT NOT NULL DEFAULT 0,
                         [ImportedByName] NVARCHAR(120) NOT NULL DEFAULT '',
                         [ImportedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
@@ -219,6 +237,14 @@ public static class DatabaseSchemaService
                     CREATE UNIQUE INDEX [UX_PosSalesSummaries_Store_Hash]
                         ON [dbo].[PosSalesSummaries] ([StoreId], [SourceFileSha256]);
                 END");
+
+            await EnsureColumnAsync(conn, "PosSalesSummaries", "CashDropReceived", "DECIMAL(18,2) NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "PosSalesSummaries", "RegisterPayout", "DECIMAL(18,2) NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "PosSalesSummaries", "PayoutReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PosSalesSummaries", "IsReconciled", "BIT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "PosSalesSummaries", "ReconciledByUserId", "INT NULL");
+            await EnsureColumnAsync(conn, "PosSalesSummaries", "ReconciledByName", "NVARCHAR(120) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PosSalesSummaries", "ReconciledUtc", "DATETIME2 NULL");
 
             await ExecuteSafe(conn, @"
                 IF OBJECT_ID(N'[dbo].[PosSalesTenderLines]', N'U') IS NULL

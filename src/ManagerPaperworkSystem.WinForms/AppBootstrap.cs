@@ -65,6 +65,7 @@ internal static class AppBootstrap
         services.AddTransient<CreateAccountForm>();
         services.AddTransient<ChangePasswordForm>();
         services.AddTransient<ResetPasswordForm>();
+        services.AddTransient<PortalSyncSetupForm>();
 
         return services.BuildServiceProvider();
     }

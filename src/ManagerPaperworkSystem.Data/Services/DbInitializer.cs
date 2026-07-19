@@ -80,11 +80,41 @@ public static class DbInitializer
             using var shiftCmd = conn.CreateCommand();
             shiftCmd.CommandText = @"
                 IF OBJECT_ID(N'[dbo].[ShiftLogs]', N'U') IS NOT NULL
-                AND COL_LENGTH(N'[dbo].[ShiftLogs]', N'PayoutReason') IS NULL
                 BEGIN
-                    ALTER TABLE [dbo].[ShiftLogs] ADD [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PayoutReason') IS NULL
+                        ALTER TABLE [dbo].[ShiftLogs] ADD [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PosSalesSummaryId') IS NULL
+                        ALTER TABLE [dbo].[ShiftLogs] ADD [PosSalesSummaryId] INT NULL;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM sys.indexes
+                        WHERE name = 'UX_ShiftLogs_PosSalesSummaryId'
+                          AND object_id = OBJECT_ID(N'[dbo].[ShiftLogs]'))
+                        CREATE UNIQUE INDEX [UX_ShiftLogs_PosSalesSummaryId]
+                            ON [dbo].[ShiftLogs] ([PosSalesSummaryId])
+                            WHERE [PosSalesSummaryId] IS NOT NULL;
                 END";
             await shiftCmd.ExecuteNonQueryAsync(ct);
+
+            using var posSummaryMigrationCmd = conn.CreateCommand();
+            posSummaryMigrationCmd.CommandText = @"
+                IF OBJECT_ID(N'[dbo].[PosSalesSummaries]', N'U') IS NOT NULL
+                BEGIN
+                    IF COL_LENGTH(N'[dbo].[PosSalesSummaries]', N'CashDropReceived') IS NULL
+                        ALTER TABLE [dbo].[PosSalesSummaries] ADD [CashDropReceived] DECIMAL(18,2) NOT NULL DEFAULT 0;
+                    IF COL_LENGTH(N'[dbo].[PosSalesSummaries]', N'RegisterPayout') IS NULL
+                        ALTER TABLE [dbo].[PosSalesSummaries] ADD [RegisterPayout] DECIMAL(18,2) NOT NULL DEFAULT 0;
+                    IF COL_LENGTH(N'[dbo].[PosSalesSummaries]', N'PayoutReason') IS NULL
+                        ALTER TABLE [dbo].[PosSalesSummaries] ADD [PayoutReason] NVARCHAR(300) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[PosSalesSummaries]', N'IsReconciled') IS NULL
+                        ALTER TABLE [dbo].[PosSalesSummaries] ADD [IsReconciled] BIT NOT NULL DEFAULT 0;
+                    IF COL_LENGTH(N'[dbo].[PosSalesSummaries]', N'ReconciledByUserId') IS NULL
+                        ALTER TABLE [dbo].[PosSalesSummaries] ADD [ReconciledByUserId] INT NULL;
+                    IF COL_LENGTH(N'[dbo].[PosSalesSummaries]', N'ReconciledByName') IS NULL
+                        ALTER TABLE [dbo].[PosSalesSummaries] ADD [ReconciledByName] NVARCHAR(120) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[PosSalesSummaries]', N'ReconciledUtc') IS NULL
+                        ALTER TABLE [dbo].[PosSalesSummaries] ADD [ReconciledUtc] DATETIME2 NULL;
+                END";
+            await posSummaryMigrationCmd.ExecuteNonQueryAsync(ct);
 
             using var settingsCmd = conn.CreateCommand();
             settingsCmd.CommandText = @"
@@ -138,6 +168,13 @@ public static class DbInitializer
                 using var alterCmd = conn.CreateCommand();
                 alterCmd.CommandText = "ALTER TABLE ShiftLogs ADD COLUMN PayoutReason TEXT NOT NULL DEFAULT ''";
                 await alterCmd.ExecuteNonQueryAsync(ct);
+            }
+            await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosSalesSummaryId", "INTEGER NULL", ct);
+            using (var shiftIndexCmd = conn.CreateCommand())
+            {
+                shiftIndexCmd.CommandText =
+                    "CREATE UNIQUE INDEX IF NOT EXISTS UX_ShiftLogs_PosSalesSummaryId ON ShiftLogs (PosSalesSummaryId)";
+                await shiftIndexCmd.ExecuteNonQueryAsync(ct);
             }
 
             using var settingsColumnCmd = conn.CreateCommand();
@@ -213,6 +250,13 @@ public static class DbInitializer
                     DepartmentCost TEXT NOT NULL DEFAULT '0',
                     DepartmentProfit TEXT NOT NULL DEFAULT '0',
                     DepartmentProfitPercent TEXT NOT NULL DEFAULT '0',
+                    CashDropReceived TEXT NOT NULL DEFAULT '0',
+                    RegisterPayout TEXT NOT NULL DEFAULT '0',
+                    PayoutReason TEXT NOT NULL DEFAULT '',
+                    IsReconciled INTEGER NOT NULL DEFAULT 0,
+                    ReconciledByUserId INTEGER NULL,
+                    ReconciledByName TEXT NOT NULL DEFAULT '',
+                    ReconciledUtc TEXT NULL,
                     ImportedByUserId INTEGER NOT NULL DEFAULT 0,
                     ImportedByName TEXT NOT NULL DEFAULT '',
                     ImportedUtc TEXT NOT NULL
@@ -262,10 +306,48 @@ public static class DbInitializer
                 CREATE INDEX IF NOT EXISTS IX_PosSalesDepartmentLines_Summary
                     ON PosSalesDepartmentLines (PosSalesSummaryId);";
             await posSummaryCmd.ExecuteNonQueryAsync(ct);
+
+            await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "CashDropReceived", "TEXT NOT NULL DEFAULT '0'", ct);
+            await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "RegisterPayout", "TEXT NOT NULL DEFAULT '0'", ct);
+            await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "PayoutReason", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "IsReconciled", "INTEGER NOT NULL DEFAULT 0", ct);
+            await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "ReconciledByUserId", "INTEGER NULL", ct);
+            await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "ReconciledByName", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "ReconciledUtc", "TEXT NULL", ct);
         }
         finally
         {
             await conn.CloseAsync();
         }
+    }
+
+    private static async Task EnsureSqliteColumnAsync(
+        System.Data.Common.DbConnection connection,
+        string tableName,
+        string columnName,
+        string definition,
+        CancellationToken ct)
+    {
+        using var tableCheck = connection.CreateCommand();
+        tableCheck.CommandText =
+            $"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{tableName.Replace("'", "''")}'";
+        if (Convert.ToInt32(await tableCheck.ExecuteScalarAsync(ct) ?? 0) == 0)
+            return;
+
+        using var columnCheck = connection.CreateCommand();
+        columnCheck.CommandText = $"PRAGMA table_info('{tableName.Replace("'", "''")}')";
+        await using (var reader = await columnCheck.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                if (string.Equals(reader["name"]?.ToString(), columnName, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText =
+            $"ALTER TABLE \"{tableName.Replace("\"", "\"\"")}\" ADD COLUMN \"{columnName.Replace("\"", "\"\"")}\" {definition}";
+        await alter.ExecuteNonQueryAsync(ct);
     }
 }
