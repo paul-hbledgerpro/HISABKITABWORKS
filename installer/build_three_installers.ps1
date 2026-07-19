@@ -244,6 +244,9 @@ function New-DeveloperUpdatePackage(
                     throw "Refusing to package a file outside the developer publish folder: $($file.FullName)"
                 }
                 $relative = $file.FullName.Substring($publishPrefix.Length).Replace('\', '/')
+                if ($relative.StartsWith("UpdaterPayload/", [StringComparison]::OrdinalIgnoreCase)) {
+                    continue
+                }
                 [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                     $archive,
                     $file.FullName,
