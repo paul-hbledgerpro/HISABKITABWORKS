@@ -1412,6 +1412,35 @@ public sealed class InvoiceImportService
 
     private sealed record AkWord(string Text, double X, double Y);
 
+    private static bool IsAkHeaderOrFooterText(string? value)
+    {
+        var text = Regex.Replace((value ?? "").Trim(), @"\s+", " ").ToUpperInvariant();
+        if (text.Length == 0)
+            return false;
+
+        return text.StartsWith("AK WHOLESALE")
+               || text.StartsWith("DATE INVOICE")
+               || text.StartsWith("INVOICE NO")
+               || text.StartsWith("ORDER DATE")
+               || text.StartsWith("CREATED BY")
+               || text.StartsWith("SOLD TO")
+               || text.StartsWith("SHIP TO")
+               || text.StartsWith("TEL:")
+               || text.StartsWith("TEL :")
+               || text.StartsWith("FAX:")
+               || text.StartsWith("WEB ORD")
+               || text.StartsWith("HTTP://")
+               || text.StartsWith("HTTPS://")
+               || text.StartsWith("TOLL FREE")
+               || text.StartsWith("10 GATEWAY ROAD")
+               || text.Contains("BENSENVILLE IL")
+               || text.Contains("UPC ORD SHIP")
+               || text.Contains("TAXABLE QTY")
+               || Regex.IsMatch(text, @"^PAGE\s+\d+")
+               || Regex.IsMatch(text, @"^\d{1,2}/\d{1,2}/\d{2,4}\s+[A-Z]\d{4,}")
+               || Regex.IsMatch(text, @"^\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}/\d{1,2}/\d{4}");
+    }
+
     private static List<PurchaseInvoiceLine> ParseAkWholesaleLineItemsFromLayout(List<string> lines)
     {
         var items = new List<PurchaseInvoiceLine>();
@@ -1440,6 +1469,12 @@ public sealed class InvoiceImportService
                 || upper.StartsWith("BALANCE")
                 || upper.Contains("TAXABLE QTY"))
                 break;
+
+            if (IsAkHeaderOrFooterText(line))
+            {
+                current = null;
+                continue;
+            }
 
             var match = rowPattern.Match(line);
             if (match.Success)
@@ -1589,6 +1624,11 @@ public sealed class InvoiceImportService
             var rowTextUp = string.Join(" ", rowWords.Select(w => w.Text)).ToUpperInvariant();
             if (rowTextUp.StartsWith("SUB-TOTAL") || rowTextUp.StartsWith("SUBTOTAL") || rowTextUp.StartsWith("TOTAL") || rowTextUp.Contains("BALANCE"))
                 break;
+            if (IsAkHeaderOrFooterText(rowTextUp))
+            {
+                current = null;
+                continue;
+            }
 
             var buckets = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var b in bounds) buckets[b.key] = new List<string>();
@@ -1613,7 +1653,8 @@ public sealed class InvoiceImportService
             // ends up in the first bucket (UPC) depending on how the PDF was authored.
             var hasKeyFields = !string.IsNullOrWhiteSpace(ordRaw) || !string.IsNullOrWhiteSpace(shipRaw) || !string.IsNullOrWhiteSpace(priceRaw) || !string.IsNullOrWhiteSpace(amtRaw);
             var possibleContinuationText = !string.IsNullOrWhiteSpace(desc) ? desc : upcRaw;
-            if (!hasKeyFields && current is not null && !string.IsNullOrWhiteSpace(possibleContinuationText))
+            if (!hasKeyFields && current is not null && !string.IsNullOrWhiteSpace(possibleContinuationText)
+                && !IsAkHeaderOrFooterText(possibleContinuationText))
             {
                 current.ProductName = (current.ProductName + " " + possibleContinuationText).Trim();
                 continue;

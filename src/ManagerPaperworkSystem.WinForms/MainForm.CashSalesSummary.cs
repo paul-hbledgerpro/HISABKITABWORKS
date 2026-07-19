@@ -119,7 +119,7 @@ internal sealed partial class MainForm
         var registerPayout = SectionTextBox("0.00", rightAlign: true);
         var payoutReason = SectionTextBox();
         var variance = SectionTextBox("$0.00", readOnly: true, rightAlign: true);
-        var saveReconciliation = WinTheme.Button("SAVE", true);
+        var saveReconciliation = WinTheme.Button("SAVE / UPDATE", true);
         var resetReconciliation = WinTheme.Button("RESET");
         AddReconciliationField(reconcile, "EXPECTED CASH", expectedCash, 0);
         AddReconciliationField(reconcile, "CASH DROP", cashDrop, 1);
@@ -414,6 +414,26 @@ internal sealed partial class MainForm
                 id == selectedSummaryId)
                 return;
             await LoadDetailAsync(id);
+        };
+        reportsGrid.CellDoubleClick += async (_, eventArgs) =>
+        {
+            if (eventArgs.RowIndex < 0 ||
+                reportsGrid.Rows[eventArgs.RowIndex].Cells["Id"].Value is not { } rawId ||
+                !int.TryParse(rawId.ToString(), out var id))
+                return;
+
+            reportsGrid.Rows[eventArgs.RowIndex].Selected = true;
+            reportsGrid.CurrentCell = reportsGrid.Rows[eventArgs.RowIndex].Cells
+                .Cast<DataGridViewCell>()
+                .First(cell => cell.Visible);
+            await LoadDetailAsync(id);
+            tabs.SelectedIndex = 0;
+            cashDrop.Focus();
+            cashDrop.SelectAll();
+
+            var reportDate = reportsGrid.Rows[eventArgs.RowIndex].Cells["To"].Value;
+            status.Text = $"Editing the cash reconciliation for {reportDate}. Enter the cash drop and click SAVE / UPDATE. " +
+                          "The linked Shift Cash Drop record will update automatically.";
         };
 
         cashDrop.TextChanged += (_, _) => UpdateVariance(Money(expectedCash.Text));

@@ -385,6 +385,19 @@ public static class DatabaseSchemaService
                 "DECIMAL(18,2) NOT NULL DEFAULT 0",
                 "UPDATE [dbo].[PurchaseInvoiceLines] SET [Total] = COALESCE([Amount], [Quantity] * [UnitCost], 0) WHERE [Total] = 0");
 
+            // Some deployed databases were created by an older WPF release with
+            // much shorter invoice-line text columns. Widening is non-destructive
+            // and remains compatible with those clients while preventing valid
+            // vendor descriptions from failing during a WinForms import.
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[PurchaseInvoiceLines]', N'U') IS NOT NULL
+                BEGIN
+                    UPDATE [dbo].[PurchaseInvoiceLines] SET [ProductName] = N'' WHERE [ProductName] IS NULL;
+                    UPDATE [dbo].[PurchaseInvoiceLines] SET [ItemCode] = N'' WHERE [ItemCode] IS NULL;
+                    ALTER TABLE [dbo].[PurchaseInvoiceLines] ALTER COLUMN [ProductName] NVARCHAR(260) NOT NULL;
+                    ALTER TABLE [dbo].[PurchaseInvoiceLines] ALTER COLUMN [ItemCode] NVARCHAR(80) NOT NULL;
+                END");
+
             await ExecuteSafe(conn, @"
                 IF OBJECT_ID(N'[dbo].[PurchaseInvoiceLines]', N'U') IS NOT NULL
                 BEGIN
@@ -439,6 +452,16 @@ public static class DatabaseSchemaService
             await EnsureColumnAsync(conn, "ProductCosts", "UpdatedUtc",
                 "DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()",
                 "IF COL_LENGTH(N'[dbo].[ProductCosts]', N'LastUpdatedUtc') IS NOT NULL UPDATE [dbo].[ProductCosts] SET [UpdatedUtc] = [LastUpdatedUtc]");
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[ProductCosts]', N'U') IS NOT NULL
+                BEGIN
+                    UPDATE [dbo].[ProductCosts] SET [ProductName] = N'' WHERE [ProductName] IS NULL;
+                    UPDATE [dbo].[ProductCosts] SET [ProductKey] = N'' WHERE [ProductKey] IS NULL;
+                    UPDATE [dbo].[ProductCosts] SET [Sku] = N'' WHERE [Sku] IS NULL;
+                    ALTER TABLE [dbo].[ProductCosts] ALTER COLUMN [ProductName] NVARCHAR(260) NOT NULL;
+                    ALTER TABLE [dbo].[ProductCosts] ALTER COLUMN [ProductKey] NVARCHAR(260) NOT NULL;
+                    ALTER TABLE [dbo].[ProductCosts] ALTER COLUMN [Sku] NVARCHAR(80) NOT NULL;
+                END");
 
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PriceAlerts')
@@ -483,6 +506,16 @@ public static class DatabaseSchemaService
                 "DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME())",
                 "UPDATE [dbo].[PriceAlerts] SET [InvoiceDate] = CONVERT(date, [CreatedUtc]) WHERE [CreatedUtc] IS NOT NULL");
             await EnsureColumnAsync(conn, "PriceAlerts", "PurchaseInvoiceId", "INT NULL");
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[PriceAlerts]', N'U') IS NOT NULL
+                BEGIN
+                    UPDATE [dbo].[PriceAlerts] SET [ProductName] = N'' WHERE [ProductName] IS NULL;
+                    UPDATE [dbo].[PriceAlerts] SET [ProductKey] = N'' WHERE [ProductKey] IS NULL;
+                    UPDATE [dbo].[PriceAlerts] SET [Sku] = N'' WHERE [Sku] IS NULL;
+                    ALTER TABLE [dbo].[PriceAlerts] ALTER COLUMN [ProductName] NVARCHAR(260) NOT NULL;
+                    ALTER TABLE [dbo].[PriceAlerts] ALTER COLUMN [ProductKey] NVARCHAR(260) NOT NULL;
+                    ALTER TABLE [dbo].[PriceAlerts] ALTER COLUMN [Sku] NVARCHAR(80) NOT NULL;
+                END");
             await EnsureColumnAsync(conn, "PriceAlerts", "ReadUtc", "DATETIME2 NULL");
 
             await ExecuteSafe(conn, @"

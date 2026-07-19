@@ -21,6 +21,12 @@ public sealed class PurchaseService
         _paths = paths;
     }
 
+    private static string CleanDatabaseText(string? value, int maximumLength)
+    {
+        var clean = Regex.Replace((value ?? "").Trim(), @"\s+", " ");
+        return clean.Length <= maximumLength ? clean : clean[..maximumLength].TrimEnd();
+    }
+
     private static string NormalizeProductKey(string? itemCode, string? name)
     {
         var code = (itemCode ?? "").Trim();
@@ -31,7 +37,7 @@ public sealed class PurchaseService
         s = Regex.Replace(s, @"\s+", " ");
         s = s.ToUpperInvariant();
 
-        return string.IsNullOrWhiteSpace(code) ? s : $"{code}|{s}";
+        return CleanDatabaseText(string.IsNullOrWhiteSpace(code) ? s : $"{code}|{s}", 260);
     }
 
     public string? CopyInvoiceFileToAppData(int storeId, DateOnly invoiceDate, string? sourceFilePath)
@@ -98,21 +104,21 @@ public sealed class PurchaseService
         {
             StoreId = storeId,
             VendorId = vendorId,
-            VendorName = vendorName,
-            InvoiceNumber = invoiceNumber,
+            VendorName = CleanDatabaseText(vendorName, 200),
+            InvoiceNumber = CleanDatabaseText(invoiceNumber, 100),
             InvoiceDate = invoiceDate,
             Total = total,
-            Notes = notes,
+            Notes = CleanDatabaseText(notes, 500),
             FilePath = copiedPath,
             CreatedByUserId = userId,
-            CreatedByName = userName,
+            CreatedByName = CleanDatabaseText(userName, 120),
             CreatedUtc = DateTime.UtcNow,
             Lines = lines
                 .Where(l => !string.IsNullOrWhiteSpace(l.ProductName))
                 .Select(l => new PurchaseInvoiceLine
                 {
-                    ItemCode = (l.ItemCode ?? "").Trim(),
-                    ProductName = (l.ProductName ?? "").Trim(),
+                    ItemCode = CleanDatabaseText(l.ItemCode, 80),
+                    ProductName = CleanDatabaseText(l.ProductName, 260),
                     OrdQuantity = l.OrdQuantity,
                     ShipQuantity = l.ShipQuantity,
                     VolumeMl = l.VolumeMl,
@@ -155,10 +161,10 @@ public sealed class PurchaseService
 
         inv.InvoiceDate = invoiceDate;
         inv.VendorId = vendorId;
-        inv.VendorName = vendorName;
-        inv.InvoiceNumber = invoiceNumber;
+        inv.VendorName = CleanDatabaseText(vendorName, 200);
+        inv.InvoiceNumber = CleanDatabaseText(invoiceNumber, 100);
         inv.Total = total;
-        inv.Notes = notes;
+        inv.Notes = CleanDatabaseText(notes, 500);
 
         if (!string.IsNullOrWhiteSpace(sourceFilePath) && File.Exists(sourceFilePath))
             inv.FilePath = CopyInvoiceFileToAppData(inv.StoreId, invoiceDate, sourceFilePath) ?? inv.FilePath;
@@ -168,8 +174,8 @@ public sealed class PurchaseService
         {
             inv.Lines.Add(new PurchaseInvoiceLine
             {
-                ItemCode = (l.ItemCode ?? "").Trim(),
-                ProductName = (l.ProductName ?? "").Trim(),
+                ItemCode = CleanDatabaseText(l.ItemCode, 80),
+                ProductName = CleanDatabaseText(l.ProductName, 260),
                 OrdQuantity = l.OrdQuantity,
                 ShipQuantity = l.ShipQuantity,
                 VolumeMl = l.VolumeMl,
@@ -226,7 +232,7 @@ public sealed class PurchaseService
             var key = NormalizeProductKey(line.ItemCode, line.ProductName);
             if (string.IsNullOrWhiteSpace(key)) continue;
 
-            var sku = (line.ItemCode ?? "").Trim();
+            var sku = CleanDatabaseText(line.ItemCode, 80);
             var existing = await db.ProductCosts.FirstOrDefaultAsync(x => x.StoreId == storeId && x.ProductKey == key, ct);
 
             if (existing is null)
@@ -235,12 +241,12 @@ public sealed class PurchaseService
                 {
                     StoreId = storeId,
                     ProductKey = key,
-                    ProductName = (line.ProductName ?? "").Trim(),
+                    ProductName = CleanDatabaseText(line.ProductName, 260),
                     Sku = sku,
                     LastUnitCost = line.UnitCost,
                     LastInvoiceDate = invoiceDate,
-                    LastVendorName = vendorName,
-                    LastInvoiceNumber = invoiceNumber,
+                    LastVendorName = CleanDatabaseText(vendorName, 200),
+                    LastInvoiceNumber = CleanDatabaseText(invoiceNumber, 100),
                     UpdatedUtc = DateTime.UtcNow
                 };
                 db.ProductCosts.Add(existing);
@@ -260,8 +266,8 @@ public sealed class PurchaseService
                         OldUnitCost = existing.LastUnitCost,
                         NewUnitCost = line.UnitCost,
                         Direction = dir,
-                        VendorName = vendorName,
-                        InvoiceNumber = invoiceNumber,
+                        VendorName = CleanDatabaseText(vendorName, 200),
+                        InvoiceNumber = CleanDatabaseText(invoiceNumber, 100),
                         InvoiceDate = invoiceDate,
                         PurchaseInvoiceId = null,
                         IsRead = false,
@@ -270,12 +276,12 @@ public sealed class PurchaseService
                     alerts++;
                 }
 
-                existing.ProductName = (line.ProductName ?? "").Trim();
+                existing.ProductName = CleanDatabaseText(line.ProductName, 260);
                 existing.Sku = sku;
                 existing.LastUnitCost = line.UnitCost;
                 existing.LastInvoiceDate = invoiceDate;
-                existing.LastVendorName = vendorName;
-                existing.LastInvoiceNumber = invoiceNumber;
+                existing.LastVendorName = CleanDatabaseText(vendorName, 200);
+                existing.LastInvoiceNumber = CleanDatabaseText(invoiceNumber, 100);
                 existing.UpdatedUtc = DateTime.UtcNow;
                 upserts++;
             }
@@ -376,7 +382,7 @@ public sealed class PurchaseService
             var key = NormalizeProductKey(line.ItemCode, line.ProductName);
             if (string.IsNullOrWhiteSpace(key)) continue;
 
-            var sku = (line.ItemCode ?? "").Trim();
+            var sku = CleanDatabaseText(line.ItemCode, 80);
             var existing = await db.ProductCosts.FirstOrDefaultAsync(x => x.StoreId == inv.StoreId && x.ProductKey == key, ct);
             if (existing is null)
             {
@@ -384,7 +390,7 @@ public sealed class PurchaseService
                 {
                     StoreId = inv.StoreId,
                     ProductKey = key,
-                    ProductName = (line.ProductName ?? "").Trim(),
+                    ProductName = CleanDatabaseText(line.ProductName, 260),
                     Sku = sku,
                     LastUnitCost = line.UnitCost,
                     LastInvoiceDate = inv.InvoiceDate,
@@ -417,7 +423,7 @@ public sealed class PurchaseService
                     });
                 }
 
-                existing.ProductName = (line.ProductName ?? "").Trim();
+                existing.ProductName = CleanDatabaseText(line.ProductName, 260);
                 existing.Sku = sku;
                 existing.LastUnitCost = line.UnitCost;
                 existing.LastInvoiceDate = inv.InvoiceDate;
@@ -479,8 +485,8 @@ public sealed class PurchaseService
                 db.ProductCosts.Add(cost);
             }
 
-            cost.ProductName = (bestLine.ProductName ?? "").Trim();
-            cost.Sku = (bestLine.ItemCode ?? "").Trim();
+            cost.ProductName = CleanDatabaseText(bestLine.ProductName, 260);
+            cost.Sku = CleanDatabaseText(bestLine.ItemCode, 80);
             cost.LastUnitCost = bestLine.UnitCost;
             cost.LastInvoiceDate = bestInv.InvoiceDate;
             cost.LastVendorName = bestInv.VendorName;

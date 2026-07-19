@@ -31,6 +31,7 @@ internal sealed partial class MainForm : Form
     private readonly SessionState _session;
     private readonly StoreConnectionService _storeConnections;
     private readonly PurchaseService _purchaseService;
+    private readonly InvoiceEmailSyncService _invoiceEmailSyncService;
     private readonly InvoiceImportService _invoiceImportService;
     private readonly PosReportImportService _posImporter;
     private readonly CheckPrintService _checkPrintService;
@@ -40,7 +41,9 @@ internal sealed partial class MainForm : Form
     private readonly Label _status = WinTheme.Label("");
     private readonly Dictionary<string, Button> _navButtons = new();
     private readonly SemaphoreSlim _bankDeliveryGate = new(1, 1);
+    private readonly SemaphoreSlim _invoiceEmailSyncGate = new(1, 1);
     private readonly System.Windows.Forms.Timer _monthlyDeliveryTimer = new() { Interval = 60 * 60 * 1000 };
+    private readonly System.Windows.Forms.Timer _invoiceEmailSyncTimer = new() { Interval = 4 * 60 * 60 * 1000 };
     private readonly int _loginStoreConnectionId;
     private int _currentConnectionStoreId;
     private int _currentStoreId;
@@ -68,6 +71,7 @@ internal sealed partial class MainForm : Form
             CurrentStoreId = _loginStoreConnectionId
         };
         _purchaseService = new PurchaseService(new StoreDbContextFactory(_storeConnections), _paths);
+        _invoiceEmailSyncService = new InvoiceEmailSyncService(_paths, _invoiceImportService, _purchaseService);
         ReloadLicensedStoreConnections();
         if (_reportService is ReportService concreteReportService)
             concreteReportService.SetStoreConnectionService(_storeConnections);
@@ -88,13 +92,52 @@ internal sealed partial class MainForm : Form
             _ = BeginMonthlyReportDeliveryAsync();
             _ = BeginMonthlyBankStatementDeliveryAsync();
             _ = BeginDuePosPortalSyncAsync();
+            _ = BeginDueInvoiceEmailSyncAsync();
             _monthlyDeliveryTimer.Start();
+            _invoiceEmailSyncTimer.Start();
         };
+        _invoiceEmailSyncTimer.Tick += async (_, _) => await BeginDueInvoiceEmailSyncAsync();
         FormClosed += (_, _) =>
         {
             _monthlyDeliveryTimer.Stop();
             _monthlyDeliveryTimer.Dispose();
+            _invoiceEmailSyncTimer.Stop();
+            _invoiceEmailSyncTimer.Dispose();
         };
+    }
+
+    private string CurrentInvoiceEmailStoreKey()
+        => $"{LicenseRuntime.ActiveStoreGuid}|{_currentConnectionStoreId}";
+
+    private async Task BeginDueInvoiceEmailSyncAsync()
+    {
+        var storeKey = CurrentInvoiceEmailStoreKey();
+        if (!_invoiceEmailSyncService.IsDue(storeKey, TimeSpan.FromHours(4))
+            || !await _invoiceEmailSyncGate.WaitAsync(0))
+            return;
+
+        try
+        {
+            var result = await _invoiceEmailSyncService.SyncAsync(
+                storeKey,
+                _currentStoreId,
+                _session.UserId,
+                _session.DisplayName);
+            if (!IsDisposed && (result.InvoicesImported > 0 || result.NeedsReview > 0))
+            {
+                BeginInvoke(() =>
+                    _status.Text = $"Invoice email sync: {result.InvoicesImported} imported; {result.NeedsReview} need review.");
+            }
+        }
+        catch
+        {
+            // Automatic invoice sync is non-blocking and retries at the next interval.
+            // Manual Sync from Purchases displays the actionable error to the client.
+        }
+        finally
+        {
+            _invoiceEmailSyncGate.Release();
+        }
     }
 
     private async Task BeginDuePosPortalSyncAsync()
@@ -812,6 +855,7 @@ internal sealed partial class MainForm : Form
 
         ShowModule(_currentModule);
         _ = BeginMonthlyBankStatementDeliveryAsync();
+        _ = BeginDueInvoiceEmailSyncAsync();
     }
 
     private async Task EnsureCurrentStoreDatabaseReadyAsync(string businessName)
@@ -4048,7 +4092,41 @@ internal sealed partial class MainForm : Form
             clearPurchaseForm();
             await refreshAsync();
         }, true, 160);
-        AddSectionButton(actions, "Add Correction", updateSelectedInvoiceAsync, width: 205, enabled: _session.IsAdmin);
+        AddSectionButton(actions, "Email Invoices", async () =>
+        {
+            var storeKey = CurrentInvoiceEmailStoreKey();
+            using var setup = new InvoiceEmailSetupForm(_paths, _invoiceEmailSyncService, storeKey);
+            if (setup.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                var syncResult = await _invoiceEmailSyncService.SyncAsync(
+                    storeKey,
+                    _currentStoreId,
+                    _session.UserId,
+                    _session.DisplayName);
+                await refreshAsync();
+                MessageBox.Show(this,
+                    $"Email invoice sync complete.\n\n" +
+                    $"PDF attachments found: {syncResult.AttachmentsFound}\n" +
+                    $"Invoices imported: {syncResult.InvoicesImported}\n" +
+                    $"Duplicates skipped: {syncResult.DuplicatesSkipped}\n" +
+                    $"Needs review: {syncResult.NeedsReview}" +
+                    (syncResult.NeedsReview > 0 ? $"\n\nReview folder:\n{syncResult.ReviewFolder}" : ""),
+                    "Invoice Email Sync",
+                    MessageBoxButtons.OK,
+                    syncResult.NeedsReview > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    AppBootstrap.RedactSensitiveText(ex.Message),
+                    "Invoice Email Sync",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }, width: 205, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Update Selected", updateSelectedInvoiceAsync, width: 210, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Delete Selected", async () =>
         {
