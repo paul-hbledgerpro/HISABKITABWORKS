@@ -526,16 +526,20 @@ internal sealed partial class MainForm
                     throw new InvalidOperationException("The PDF did not contain a valid tender breakdown.");
 
                 await using var duplicateDb = CreateDb();
+                var reportFrom = parsed.ReportFrom.Value;
+                var reportTo = parsed.ReportTo.Value;
                 if (await duplicateDb.PosSalesSummaries.AsNoTracking().AnyAsync(item =>
                         item.StoreId == _currentStoreId &&
-                        item.SourceFileSha256 == parsed.SourceFileSha256))
+                        (item.SourceFileSha256 == parsed.SourceFileSha256 ||
+                         (item.ReportFrom <= reportTo && item.ReportTo >= reportFrom))))
                 {
                     MessageBox.Show(this,
-                        "This exact POS report has already been imported for the selected store.",
+                        $"A Cash and Sales Summary for {reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy} " +
+                        "overlaps a report date already saved for the selected store. It was not imported again.",
                         "Duplicate POS Report",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
-                    status.Text = "Duplicate report was not imported.";
+                    status.Text = "That store and report date are already present; no duplicate was created.";
                     return;
                 }
 

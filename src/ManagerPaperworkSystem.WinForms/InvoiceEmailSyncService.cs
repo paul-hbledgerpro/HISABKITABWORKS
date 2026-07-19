@@ -66,6 +66,7 @@ internal sealed class InvoiceEmailSyncService
 
     public void SaveSettings(string storeKey, InvoiceEmailSyncSettings settings)
     {
+        settings.PasswordOrAppPassword = NormalizePassword(settings);
         var all = LoadAll();
         all[NormalizeStoreKey(storeKey)] = settings;
         SaveAll(all);
@@ -293,12 +294,14 @@ internal sealed class InvoiceEmailSyncService
             throw new InvalidOperationException("Enter a valid IMAP port.");
         if (string.IsNullOrWhiteSpace(settings.EmailAddress))
             throw new InvalidOperationException("Enter the client email address.");
-        if (string.IsNullOrWhiteSpace(settings.PasswordOrAppPassword))
+        var normalizedPassword = NormalizePassword(settings);
+        if (string.IsNullOrWhiteSpace(normalizedPassword))
             throw new InvalidOperationException("Enter the email app password.");
         if (settings.Provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase)
-            && settings.PasswordOrAppPassword.Replace(" ", "", StringComparison.Ordinal).Length != 16)
+            && normalizedPassword.Length != 16)
             throw new InvalidOperationException(
-                "Gmail requires the 16-character Google App Password, not the normal Gmail password.");
+                $"Gmail requires a 16-character Google App Password. "
+                + $"The entered value contains {normalizedPassword.Length} characters after spaces and separators are removed.");
     }
 
     private static async Task ConnectAndAuthenticateAsync(
@@ -313,8 +316,20 @@ internal sealed class InvoiceEmailSyncService
         client.AuthenticationMechanisms.Remove("XOAUTH2");
         await client.AuthenticateAsync(
             settings.EmailAddress.Trim(),
-            settings.PasswordOrAppPassword.Replace(" ", "", StringComparison.Ordinal),
+            NormalizePassword(settings),
             ct);
+    }
+
+    internal static string NormalizePassword(InvoiceEmailSyncSettings settings)
+    {
+        var value = settings.PasswordOrAppPassword ?? "";
+        if (!settings.Provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
+            return value.Trim();
+
+        // Google displays app passwords in four groups. Clipboard content can
+        // include ordinary spaces, non-breaking spaces, or group punctuation.
+        // App-password characters themselves are strictly letters and digits.
+        return new string(value.Where(char.IsLetterOrDigit).ToArray());
     }
 
     private static async Task<IMailFolder> GetFolderAsync(

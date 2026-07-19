@@ -206,6 +206,8 @@ internal sealed class InvoiceEmailSetupForm : Form
             LastSuccessfulSyncUtc = _service.GetSettings(_storeKey).LastSuccessfulSyncUtc,
             ProcessedAttachmentHashes = _service.GetSettings(_storeKey).ProcessedAttachmentHashes
         };
+        settings.PasswordOrAppPassword = InvoiceEmailSyncService.NormalizePassword(settings);
+        _password.Text = settings.PasswordOrAppPassword;
 
         Enabled = false;
         _status.Text = "Testing the encrypted email connection…";

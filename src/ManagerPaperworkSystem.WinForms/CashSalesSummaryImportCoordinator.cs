@@ -26,11 +26,29 @@ internal static class CashSalesSummaryImportCoordinator
         var parsed = await CashSalesSummaryPdfImporter.ImportAsync(sourcePath, cancellationToken);
         Validate(parsed);
 
-        var duplicate = await db.PosSalesSummaries.AsNoTracking().AnyAsync(
-            item => item.StoreId == storeId && item.SourceFileSha256 == parsed.SourceFileSha256,
-            cancellationToken);
-        if (duplicate)
-            return new CashSalesSummaryImportOutcome(false, true, null, parsed, "");
+        var reportFrom = parsed.ReportFrom!.Value;
+        var reportTo = parsed.ReportTo!.Value;
+        var existing = await db.PosSalesSummaries
+            .AsNoTracking()
+            .Where(item =>
+                item.StoreId == storeId &&
+                (item.SourceFileSha256 == parsed.SourceFileSha256 ||
+                 (item.ReportFrom <= reportTo && item.ReportTo >= reportFrom)))
+            .Select(item => new
+            {
+                item.Id,
+                item.SourceFilePath
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (existing is not null)
+        {
+            return new CashSalesSummaryImportOutcome(
+                false,
+                true,
+                existing.Id,
+                parsed,
+                existing.SourceFilePath);
+        }
 
         var reportFolder = Path.Combine(
             paths.AppDataDirectory,
