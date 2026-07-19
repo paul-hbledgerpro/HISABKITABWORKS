@@ -1,10 +1,10 @@
 <Project>
   <PropertyGroup>
     <!-- App version (used for assemblies + packaging). Bump this with each release. -->
-    <Version>1.0.103</Version>
-    <AssemblyVersion>1.0.103.0</AssemblyVersion>
-    <FileVersion>1.0.103.0</FileVersion>
-    <InformationalVersion>1.0.103</InformationalVersion>
+    <Version>1.0.104</Version>
+    <AssemblyVersion>1.0.104.0</AssemblyVersion>
+    <FileVersion>1.0.104.0</FileVersion>
+    <InformationalVersion>1.0.104</InformationalVersion>
 
     <!--
       Prevent build errors on some Windows setups caused by generating

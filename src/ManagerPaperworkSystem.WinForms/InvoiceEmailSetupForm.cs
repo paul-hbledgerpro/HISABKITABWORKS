@@ -13,8 +13,11 @@ internal sealed class InvoiceEmailSetupForm : Form
     private readonly TextBox _email = WinTheme.TextBox();
     private readonly TextBox _password = WinTheme.TextBox();
     private readonly TextBox _folder = WinTheme.TextBox();
+    private readonly DateTimePicker _invoiceMonth = WinTheme.DatePicker();
     private readonly CheckBox _enabled = new() { Text = "Automatically check this store's email for PDF invoices", AutoSize = true };
     private readonly Label _status = new() { AutoSize = false, Dock = DockStyle.Fill };
+
+    public DateOnly? RequestedInvoiceMonth { get; private set; }
 
     public InvoiceEmailSetupForm(
         IAppPaths paths,
@@ -29,13 +32,16 @@ internal sealed class InvoiceEmailSetupForm : Form
         Text = "Invoice Email Automation - HISAB KITAB";
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(760, 610);
-        MinimumSize = new Size(720, 580);
+        ClientSize = new Size(760, 700);
+        MinimumSize = new Size(720, 660);
         MaximizeBox = false;
 
         _provider.Items.AddRange(new object[] { "Gmail", "Microsoft 365 / Outlook", "Yahoo", "Custom IMAP" });
         _password.UseSystemPasswordChar = true;
         _folder.Text = "INBOX";
+        _invoiceMonth.Format = DateTimePickerFormat.Custom;
+        _invoiceMonth.CustomFormat = "MMMM yyyy";
+        _invoiceMonth.ShowUpDown = true;
 
         var root = new TableLayoutPanel
         {
@@ -79,12 +85,12 @@ internal sealed class InvoiceEmailSetupForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 7,
+            RowCount = 8,
             BackColor = WinTheme.Panel
         };
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 6; i++)
+        for (var i = 0; i < 7; i++)
             form.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         form.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         card.Controls.Add(form);
@@ -95,6 +101,7 @@ internal sealed class InvoiceEmailSetupForm : Form
         AddRow(form, 3, "CLIENT EMAIL ADDRESS", _email);
         AddRow(form, 4, "APP PASSWORD", _password);
         AddRow(form, 5, "MAIL FOLDER", _folder);
+        AddRow(form, 6, "BACKFILL INVOICE MONTH", _invoiceMonth);
 
         var options = new FlowLayoutPanel
         {
@@ -106,7 +113,7 @@ internal sealed class InvoiceEmailSetupForm : Form
         };
         options.Controls.Add(_ssl);
         options.Controls.Add(_enabled);
-        form.Controls.Add(options, 0, 6);
+        form.Controls.Add(options, 0, 7);
         form.SetColumnSpan(options, 2);
 
         _status.Text = "For Gmail, use a Google App Password—not the normal mailbox password.";
@@ -116,20 +123,21 @@ internal sealed class InvoiceEmailSetupForm : Form
         root.Controls.Add(_status, 0, 2);
 
         var buttons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = WinTheme.Bg };
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
-        var cancel = WinTheme.Button("CANCEL");
-        cancel.DialogResult = DialogResult.Cancel;
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
         var test = WinTheme.Button("TEST & SAVE");
-        var save = WinTheme.Button("SAVE & SYNC NOW", true);
-        buttons.Controls.Add(test, 1, 0);
-        buttons.Controls.Add(save, 2, 0);
+        var save = WinTheme.Button("SYNC NEW INVOICES", true);
+        var syncMonth = WinTheme.Button("SYNC SELECTED MONTH", true);
+        buttons.Controls.Add(test, 0, 0);
+        buttons.Controls.Add(save, 1, 0);
+        buttons.Controls.Add(syncMonth, 2, 0);
         root.Controls.Add(buttons, 0, 3);
 
         _provider.SelectedIndexChanged += (_, _) => ApplyProviderDefaults();
         test.Click += async (_, _) => await SaveAsync(testOnly: true);
-        save.Click += async (_, _) => await SaveAsync(testOnly: false);
+        save.Click += async (_, _) => await SaveAsync(testOnly: false, syncSelectedMonth: false);
+        syncMonth.Click += async (_, _) => await SaveAsync(testOnly: false, syncSelectedMonth: true);
 
         LoadSettings();
     }
@@ -177,7 +185,7 @@ internal sealed class InvoiceEmailSetupForm : Form
         }
     }
 
-    private async Task SaveAsync(bool testOnly)
+    private async Task SaveAsync(bool testOnly, bool syncSelectedMonth = false)
     {
         var settings = new InvoiceEmailSyncSettings
         {
@@ -212,6 +220,9 @@ internal sealed class InvoiceEmailSetupForm : Form
             _status.ForeColor = WinTheme.Green;
             if (!testOnly)
             {
+                RequestedInvoiceMonth = syncSelectedMonth
+                    ? new DateOnly(_invoiceMonth.Value.Year, _invoiceMonth.Value.Month, 1)
+                    : null;
                 DialogResult = DialogResult.OK;
                 Close();
             }

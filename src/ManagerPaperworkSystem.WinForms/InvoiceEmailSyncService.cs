@@ -95,6 +95,7 @@ internal sealed class InvoiceEmailSyncService
         int storeId,
         int userId,
         string userName,
+        DateOnly? invoiceMonth = null,
         CancellationToken ct = default)
     {
         var settings = GetSettings(storeKey);
@@ -124,9 +125,20 @@ internal sealed class InvoiceEmailSyncService
         var folder = await GetFolderAsync(client, settings.MailFolder, ct);
         await folder.OpenAsync(FolderAccess.ReadOnly, ct);
 
-        var since = (settings.LastSuccessfulSyncUtc ?? DateTime.UtcNow.AddDays(-45)).AddDays(-2);
-        var ids = await folder.SearchAsync(SearchQuery.DeliveredAfter(since), ct);
-        foreach (var id in ids.OrderByDescending(uid => uid.Id).Take(250).OrderBy(uid => uid.Id))
+        var monthStart = invoiceMonth.HasValue
+            ? new DateOnly(invoiceMonth.Value.Year, invoiceMonth.Value.Month, 1)
+            : (DateOnly?)null;
+        var monthEnd = monthStart?.AddMonths(1);
+        SearchQuery searchQuery = monthStart.HasValue
+            ? SearchQuery.DeliveredAfter(monthStart.Value.AddDays(-7).ToDateTime(TimeOnly.MinValue))
+                .And(SearchQuery.DeliveredBefore(monthEnd!.Value.AddDays(14).ToDateTime(TimeOnly.MinValue)))
+            : SearchQuery.DeliveredAfter(
+                (settings.LastSuccessfulSyncUtc ?? DateTime.UtcNow.AddDays(-45)).AddDays(-2));
+        var ids = await folder.SearchAsync(searchQuery, ct);
+        var idsToProcess = monthStart.HasValue
+            ? ids.OrderBy(uid => uid.Id)
+            : ids.OrderByDescending(uid => uid.Id).Take(250).OrderBy(uid => uid.Id);
+        foreach (var id in idsToProcess)
         {
             ct.ThrowIfCancellationRequested();
             var message = await folder.GetMessageAsync(id, ct);
@@ -143,7 +155,7 @@ internal sealed class InvoiceEmailSyncService
                 await attachment.Content.DecodeToAsync(memory, ct);
                 var bytes = memory.ToArray();
                 var hash = Convert.ToHexString(SHA256.HashData(bytes));
-                if (processed.Contains(hash))
+                if (!monthStart.HasValue && processed.Contains(hash))
                 {
                     duplicateCount++;
                     continue;
@@ -171,7 +183,20 @@ internal sealed class InvoiceEmailSyncService
                         }
                     };
 
-                if (!parseResult.Success || invoices.Count == 0 || invoices.Any(invoice => !IsVerified(invoice)))
+                var candidateInvoices = monthStart.HasValue
+                    ? invoices
+                        .Where(invoice => invoice.InvoiceDate.HasValue
+                                          && invoice.InvoiceDate.Value >= monthStart.Value
+                                          && invoice.InvoiceDate.Value < monthEnd!.Value)
+                        .ToList()
+                    : invoices;
+
+                if (monthStart.HasValue && candidateInvoices.Count == 0)
+                    continue;
+
+                if (!parseResult.Success
+                    || candidateInvoices.Count == 0
+                    || candidateInvoices.Any(invoice => !IsVerified(invoice)))
                 {
                     MoveToReview(storedPath, reviewFolder);
                     processed.Add(hash);
@@ -180,7 +205,7 @@ internal sealed class InvoiceEmailSyncService
                 }
 
                 var importedFromAttachment = 0;
-                foreach (var invoice in invoices)
+                foreach (var invoice in candidateInvoices)
                 {
                     var key = InvoiceKey(invoice.VendorName, invoice.InvoiceNumber);
                     if (existingKeys.Contains(key))
@@ -208,14 +233,15 @@ internal sealed class InvoiceEmailSyncService
                     importedFromAttachment++;
                 }
 
-                if (importedFromAttachment > 0 || invoices.All(invoice =>
+                if (importedFromAttachment > 0 || candidateInvoices.All(invoice =>
                         existingKeys.Contains(InvoiceKey(invoice.VendorName, invoice.InvoiceNumber))))
                     processed.Add(hash);
             }
         }
 
         await client.DisconnectAsync(true, ct);
-        settings.LastSuccessfulSyncUtc = DateTime.UtcNow;
+        if (!monthStart.HasValue)
+            settings.LastSuccessfulSyncUtc = DateTime.UtcNow;
         settings.ProcessedAttachmentHashes = processed.TakeLast(5000).ToList();
         SaveSettings(storeKey, settings);
 
@@ -326,7 +352,24 @@ internal sealed class InvoiceEmailSyncService
         => string.IsNullOrWhiteSpace(value) ? "DEFAULT" : value.Trim().ToUpperInvariant();
 
     private static string InvoiceKey(string? vendor, string? invoice)
-        => $"{(vendor ?? "").Trim().ToUpperInvariant()}|{(invoice ?? "").Trim().ToUpperInvariant()}";
+        => $"{NormalizeVendor(vendor)}|{NormalizeIdentifier(invoice)}";
+
+    private static string NormalizeVendor(string? value)
+    {
+        var normalized = NormalizeIdentifier(value);
+        foreach (var suffix in new[] { "LIMITEDLIABILITYCOMPANY", "CORPORATION", "INCORPORATED", "COMPANY", "LLC", "CORP", "INC", "LTD", "CO" })
+        {
+            if (normalized.EndsWith(suffix, StringComparison.Ordinal))
+                normalized = normalized[..^suffix.Length];
+        }
+        return normalized;
+    }
+
+    private static string NormalizeIdentifier(string? value)
+        => new((value ?? "")
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant)
+            .ToArray());
 
     private static string MakeSafeFileName(string value)
     {

@@ -3948,46 +3948,29 @@ internal sealed partial class MainForm : Form
         grid.Columns.Add(new DataGridViewCheckBoxColumn
         {
             Name = "Select",
+            DataPropertyName = nameof(PurchaseInvoiceGridRow.Select),
             HeaderText = "Select",
             ReadOnly = false,
             ThreeState = false,
             TrueValue = true,
-            FalseValue = false
+            FalseValue = false,
+            FillWeight = 45
         });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", DataPropertyName = nameof(BankStatementGridRow.Id), Visible = false, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Date", DataPropertyName = nameof(BankStatementGridRow.Date), HeaderText = "Date", ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Source", DataPropertyName = nameof(BankStatementGridRow.Source), HeaderText = "Source", ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Description", DataPropertyName = nameof(BankStatementGridRow.Description), HeaderText = "Description", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", DataPropertyName = nameof(PurchaseInvoiceGridRow.Id), Visible = false, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Date", DataPropertyName = nameof(PurchaseInvoiceGridRow.Date), HeaderText = "Invoice Date", ReadOnly = true, FillWeight = 85 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Vendor", DataPropertyName = nameof(PurchaseInvoiceGridRow.Vendor), HeaderText = "Vendor", ReadOnly = true, FillWeight = 155 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Invoice", DataPropertyName = nameof(PurchaseInvoiceGridRow.Invoice), HeaderText = "Invoice #", ReadOnly = true, FillWeight = 100 });
         grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            Name = "Debit",
-            DataPropertyName = nameof(BankStatementGridRow.Debit),
-            HeaderText = "Debit",
+            Name = "Total",
+            DataPropertyName = nameof(PurchaseInvoiceGridRow.Total),
+            HeaderText = "Total",
             ReadOnly = true,
+            FillWeight = 80,
             DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
         });
-        grid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Credit",
-            DataPropertyName = nameof(BankStatementGridRow.Credit),
-            HeaderText = "Credit",
-            ReadOnly = true,
-            DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
-        });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Category", DataPropertyName = nameof(BankStatementGridRow.Category), HeaderText = "Category", ReadOnly = true });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn
-        {
-            Name = "IncludeInProfitLoss",
-            DataPropertyName = nameof(BankStatementGridRow.IncludeInProfitLoss),
-            HeaderText = "P&L",
-            ReadOnly = false,
-            ThreeState = false,
-            TrueValue = true,
-            FalseValue = false
-        });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Matched", DataPropertyName = nameof(BankStatementGridRow.Matched), HeaderText = "Matched", ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "MatchReference", DataPropertyName = nameof(BankStatementGridRow.MatchReference), HeaderText = "Match Reference", ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Check", DataPropertyName = nameof(BankStatementGridRow.Check), HeaderText = "Check #", ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Attachment", DataPropertyName = nameof(PurchaseInvoiceGridRow.Attachment), HeaderText = "PDF Attachment", ReadOnly = true, FillWeight = 145 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PurchaseInvoiceGridRow.Status), HeaderText = "Status", ReadOnly = true, FillWeight = 75 });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing purchases for selected store"), 0, 3);
         string? selectedPurchaseFilePath = null;
@@ -4054,7 +4037,17 @@ internal sealed partial class MainForm : Form
             var invoices = await _purchaseService.GetInvoicesAsync(_currentStoreId);
             var monthRows = invoices.Where(x => x.InvoiceDate.Month == DateTime.Today.Month && x.InvoiceDate.Year == DateTime.Today.Year).ToList();
             grid.DataSource = invoices
-                .Select(x => new { x.Id, Select = false, Date = x.InvoiceDate, Vendor = x.VendorName, Invoice = x.InvoiceNumber, Category = "", Subtotal = x.Total, Tax = "", x.Total, Attachment = Path.GetFileName(x.FilePath), Status = string.IsNullOrWhiteSpace(x.FilePath) ? "Entered" : "Imported" })
+                .Select(x => new PurchaseInvoiceGridRow
+                {
+                    Id = x.Id,
+                    Select = false,
+                    Date = x.InvoiceDate,
+                    Vendor = x.VendorName,
+                    Invoice = x.InvoiceNumber,
+                    Total = x.Total,
+                    Attachment = Path.GetFileName(x.FilePath),
+                    Status = string.IsNullOrWhiteSpace(x.FilePath) ? "Entered" : "Imported"
+                })
                 .ToList();
             HideId(grid);
             monthPurchases.Text = MoneyText(monthRows.Sum(x => x.Total));
@@ -4105,10 +4098,14 @@ internal sealed partial class MainForm : Form
                     storeKey,
                     _currentStoreId,
                     _session.UserId,
-                    _session.DisplayName);
+                    _session.DisplayName,
+                    setup.RequestedInvoiceMonth);
                 await refreshAsync();
+                var scope = setup.RequestedInvoiceMonth.HasValue
+                    ? setup.RequestedInvoiceMonth.Value.ToString("MMMM yyyy", CultureInfo.CurrentCulture)
+                    : "new messages";
                 MessageBox.Show(this,
-                    $"Email invoice sync complete.\n\n" +
+                    $"Email invoice sync complete for {scope}.\n\n" +
                     $"PDF attachments found: {syncResult.AttachmentsFound}\n" +
                     $"Invoices imported: {syncResult.InvoicesImported}\n" +
                     $"Duplicates skipped: {syncResult.DuplicatesSkipped}\n" +
@@ -8050,6 +8047,18 @@ internal sealed record BankStatementRow(
     bool IsMatched = false,
     string MatchReference = "",
     bool IncludeInProfitLoss = false);
+
+internal sealed class PurchaseInvoiceGridRow
+{
+    public int Id { get; set; }
+    public bool Select { get; set; }
+    public DateOnly Date { get; set; }
+    public string Vendor { get; set; } = "";
+    public string Invoice { get; set; } = "";
+    public decimal Total { get; set; }
+    public string Attachment { get; set; } = "";
+    public string Status { get; set; } = "";
+}
 
 internal sealed class BankStatementGridRow
 {
