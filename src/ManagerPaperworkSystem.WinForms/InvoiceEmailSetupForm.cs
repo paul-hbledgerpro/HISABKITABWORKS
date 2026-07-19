@@ -32,8 +32,8 @@ internal sealed class InvoiceEmailSetupForm : Form
         Text = "Invoice Email Automation - HISAB KITAB";
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(760, 700);
-        MinimumSize = new Size(720, 660);
+        ClientSize = new Size(860, 820);
+        MinimumSize = new Size(800, 760);
         MaximizeBox = false;
 
         _provider.Items.AddRange(new object[] { "Gmail", "Microsoft 365 / Outlook", "Yahoo", "Custom IMAP" });
@@ -51,10 +51,10 @@ internal sealed class InvoiceEmailSetupForm : Form
             RowCount = 4,
             BackColor = WinTheme.Bg
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
         Controls.Add(root);
 
         var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = WinTheme.Bg };
@@ -91,8 +91,8 @@ internal sealed class InvoiceEmailSetupForm : Form
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (var i = 0; i < 7; i++)
-            form.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
-        form.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            form.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        form.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
         card.Controls.Add(form);
 
         AddRow(form, 0, "EMAIL PROVIDER", _provider);
@@ -129,6 +129,12 @@ internal sealed class InvoiceEmailSetupForm : Form
         var test = WinTheme.Button("TEST & SAVE");
         var save = WinTheme.Button("SYNC NEW INVOICES", true);
         var syncMonth = WinTheme.Button("SYNC SELECTED MONTH", true);
+        foreach (var button in new[] { test, save, syncMonth })
+        {
+            button.Dock = DockStyle.Fill;
+            button.AutoSize = false;
+            button.Margin = new Padding(6, 8, 6, 8);
+        }
         buttons.Controls.Add(test, 0, 0);
         buttons.Controls.Add(save, 1, 0);
         buttons.Controls.Add(syncMonth, 2, 0);
@@ -201,14 +207,6 @@ internal sealed class InvoiceEmailSetupForm : Form
             ProcessedAttachmentHashes = _service.GetSettings(_storeKey).ProcessedAttachmentHashes
         };
 
-        if (!settings.Enabled)
-        {
-            _service.SaveSettings(_storeKey, settings);
-            DialogResult = DialogResult.Cancel;
-            Close();
-            return;
-        }
-
         Enabled = false;
         _status.Text = "Testing the encrypted email connection…";
         _status.ForeColor = WinTheme.Blue;
@@ -216,7 +214,9 @@ internal sealed class InvoiceEmailSetupForm : Form
         {
             await _service.TestConnectionAsync(settings);
             _service.SaveSettings(_storeKey, settings);
-            _status.Text = "Email connection succeeded and the settings were saved securely on this PC.";
+            _status.Text = settings.Enabled
+                ? "Email connection succeeded. Automatic invoice checks are enabled for this store."
+                : "Email connection succeeded. Manual sync is ready; automatic checks remain disabled.";
             _status.ForeColor = WinTheme.Green;
             if (!testOnly)
             {

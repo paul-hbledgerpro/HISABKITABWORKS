@@ -4221,6 +4221,8 @@ internal sealed partial class MainForm : Form
                     : "new messages";
                 MessageBox.Show(this,
                     $"Email invoice sync complete for {scope}.\n\n" +
+                    $"Mail folders scanned: {syncResult.FoldersScanned}\n" +
+                    $"Messages checked: {syncResult.MessagesChecked}\n" +
                     $"PDF attachments found: {syncResult.AttachmentsFound}\n" +
                     $"Invoices imported: {syncResult.InvoicesImported}\n" +
                     $"Duplicates skipped: {syncResult.DuplicatesSkipped}\n" +
