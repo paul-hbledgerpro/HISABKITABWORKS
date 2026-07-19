@@ -413,7 +413,8 @@ internal static class PortalSyncService
         page.DefaultTimeout = 45_000;
         await ConfigureDownloadsAsync(page, downloadDirectory);
         string? cashSummaryPath = null;
-        string? zReportsPath = null;
+        var zReportPaths = new List<string>();
+        var rejectedZReportDetails = new List<string>();
         Exception? cashSummaryError = null;
         Exception? zReportsError = null;
         try
@@ -453,15 +454,62 @@ internal static class PortalSyncService
             {
                 try
                 {
-                    await OpenZReportByPeriodAsync(page);
-                    var downloaded = await GenerateReportAsync(
-                        browser, page, zDownloadDirectory, targetDate, "Z Report by Period",
-                        source => ValidateZReports(source, targetDate),
+                    await OpenCloseOutZReportAsync(page);
+                    var expectedReports = Math.Max(1, settings.ExpectedDailyZReports);
+                    var candidateLimit = Math.Max(12, expectedReports * 6);
+                    var candidateBatches = await GetRecentBatchNumbersAsync(
+                        page,
+                        candidateLimit,
                         cancellationToken);
-                    zReportsPath = StoreZReportFeedFile(
-                        settings,
-                        downloaded,
-                        targetDate);
+                    if (candidateBatches.Count == 0)
+                    {
+                        throw new InvalidOperationException(
+                            "AdventPOS did not provide any batch numbers for the Close-Out Report (Z-Report).");
+                    }
+
+                    foreach (var batch in candidateBatches)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var batchDownloadDirectory = Path.Combine(
+                            zDownloadDirectory,
+                            $"batch-{SafeFilePart(batch)}");
+                        Directory.CreateDirectory(batchDownloadDirectory);
+                        try
+                        {
+                            var downloaded = await GenerateReportAsync(
+                                browser,
+                                page,
+                                batchDownloadDirectory,
+                                targetDate,
+                                $"Close-Out Z Report batch {batch}",
+                                source => ValidateZReportBatch(source, targetDate, batch),
+                                cancellationToken,
+                                batch);
+                            zReportPaths.Add(StoreZReportFeedFile(
+                                settings,
+                                downloaded,
+                                targetDate));
+                            if (zReportPaths.Count >= expectedReports)
+                                break;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception exception)
+                        {
+                            rejectedZReportDetails.Add(
+                                $"batch {batch}: {FirstSentence(exception.Message)}");
+                        }
+                    }
+
+                    if (zReportPaths.Count == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"None of the newest AdventPOS Close-Out batches had Start Date " +
+                            $"{targetDate:M/d/yyyy}. " +
+                            string.Join(" ", rejectedZReportDetails.Take(4)));
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -536,15 +584,19 @@ internal static class PortalSyncService
         }
 
         var zResult = new ZReportImportOutcome(targetStatus.ZReportCount, 0, 0);
-        if (!string.IsNullOrWhiteSpace(zReportsPath))
+        foreach (var zReportsPath in zReportPaths)
         {
-            zResult = await ImportZReportsAsync(
+            var result = await ImportZReportsAsync(
                 db,
                 paths,
                 dataStoreId,
                 zReportsPath,
                 targetDate,
                 cancellationToken);
+            zResult = new ZReportImportOutcome(
+                zResult.Total + result.Total,
+                zResult.Imported + result.Imported,
+                zResult.Updated + result.Updated);
         }
 
         var finalStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
@@ -555,6 +607,20 @@ internal static class PortalSyncService
                 reportErrors.Add($"Cash & Sales Summary: {cashSummaryError.Message}");
             if (zReportsError is not null)
                 reportErrors.Add($"Z Report: {zReportsError.Message}");
+            if (zReportsError is null &&
+                zReportPaths.Count > 0 &&
+                finalStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports))
+            {
+                var rejected = DescribeRejectedZReports(zReportPaths, targetDate);
+                if (!string.IsNullOrWhiteSpace(rejected))
+                    reportErrors.Add(rejected);
+            }
+            if (rejectedZReportDetails.Count > 0 &&
+                finalStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports))
+            {
+                reportErrors.Add(
+                    $"Checked recent batches: {string.Join("; ", rejectedZReportDetails.Take(6))}");
+            }
             throw new InvalidOperationException(
                 $"POS sync did not complete for {targetDate:M/d/yyyy}. " +
                 $"Cash & Sales Summary present: {finalStatus.CashSummaryPresent}; " +
@@ -574,6 +640,46 @@ internal static class PortalSyncService
             $"{(cashSummaryImported ? "imported into Cash Sales Summary" : "already present")}; " +
             $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s), " +
             $"{finalStatus.ZReportCount} register report(s) verified in Shift Cash Drop.");
+    }
+
+    private static string DescribeRejectedZReports(
+        IEnumerable<string> sourcePaths,
+        DateOnly targetDate)
+    {
+        try
+        {
+            var importer = new PosReportImportService();
+            var rejected = sourcePaths
+                .SelectMany(importer.ImportZReports)
+                .Where(report =>
+                    report.ReportDate.HasValue &&
+                    report.ReportDate.Value != targetDate &&
+                    !string.IsNullOrWhiteSpace(report.ShiftOrBatch))
+                .Select(report =>
+                    $"batch {report.ShiftOrBatch!.Trim()} has Start Date " +
+                    $"{report.ReportDate!.Value:M/d/yyyy}")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return rejected.Count == 0
+                ? ""
+                : $"Z Report safety check: {string.Join("; ", rejected)} and was not imported as " +
+                  $"{targetDate:M/d/yyyy}. Close/correct that register batch in AdventPOS; the next sync will retry it.";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string FirstSentence(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "report could not be validated";
+        var compact = string.Join(" ", value
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Trim()));
+        var separator = compact.IndexOf(". ", StringComparison.Ordinal);
+        return separator < 0 ? compact.TrimEnd('.') : compact[..separator].TrimEnd('.');
     }
 
     private static async Task EnsureSignedInAsync(IPage page, PortalStoreSyncSettings settings)
@@ -801,7 +907,7 @@ internal static class PortalSyncService
             throw new InvalidOperationException("Cash and Sales Summary is not available for this AdventPOS account.");
     }
 
-    private static async Task OpenZReportByPeriodAsync(IPage page)
+    private static async Task OpenCloseOutZReportAsync(IPage page)
     {
         if (!await IsVisibleAsync(page, "#ReportModal"))
         {
@@ -824,7 +930,7 @@ internal static class PortalSyncService
 
             if (!reopened)
                 throw new InvalidOperationException(
-                    "The AdventPOS Admin Reports control could not be reopened for the Z Report.");
+                    "The AdventPOS Admin Reports control could not be reopened for the Close-Out Z Report.");
         }
 
         await WaitUntilAsync(page,
@@ -832,7 +938,7 @@ internal static class PortalSyncService
                 await HasCashReportFunctionsAsync(page) &&
                 await IsVisibleAsync(page, "#ReportModal"),
             TimeSpan.FromSeconds(30),
-            "The AdventPOS Admin Reports window was not available for the Z Report.");
+            "The AdventPOS Admin Reports window was not available for the Close-Out Z Report.");
 
         var selected = await page.EvaluateFunctionAsync<bool>(
             @"() => {
@@ -853,8 +959,9 @@ internal static class PortalSyncService
                     if (!report) return false;
                     const name = normalize(report.Name);
                     const longName = normalize(report.LongName);
-                    return name === 'zreportbyperiod' ||
-                           longName === 'zreportbyperiod';
+                    return name === 'zreport' ||
+                           name === 'closeoutreport' ||
+                           longName === 'closeoutreportzreport';
                 });
                 if (index < 0) return false;
                 const selector = `#Div_tbRptSales [data-Id='${index}'], #Div_tbRptSales [data-id='${index}']`;
@@ -865,7 +972,161 @@ internal static class PortalSyncService
             }");
         if (!selected)
             throw new InvalidOperationException(
-                "Z Report by Period is not available in AdventPOS Admin Reports for this store.");
+                "Close-Out Report (Z-Report) is not available in AdventPOS Admin Reports for this store.");
+
+        await WaitUntilAsync(
+            page,
+            () => page.EvaluateExpressionAsync<bool>(
+                BatchSelectorAvailableScript),
+            TimeSpan.FromSeconds(30),
+            "The AdventPOS Close-Out Report opened, but its Batch selector did not become ready.");
+    }
+
+    private const string BatchSelectorAvailableScript =
+        @"(() => {
+            const visible = element => {
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' &&
+                       rect.width > 0 && rect.height > 0;
+            };
+            const numeric = option => /^\d+$/.test((option.textContent || '').trim());
+            const selects = Array.from(document.querySelectorAll('select')).filter(visible);
+            const describe = select => {
+                const labels = select.labels
+                    ? Array.from(select.labels).map(label => label.textContent || '').join(' ')
+                    : '';
+                const container = select.closest('tr,.row,.form-group,.input-group,[class*=""selection""]');
+                return [
+                    select.id || '',
+                    select.name || '',
+                    select.getAttribute('aria-label') || '',
+                    labels,
+                    container ? container.textContent || '' : ''
+                ].join(' ').toLowerCase();
+            };
+            return selects.some(select =>
+                describe(select).includes('batch') &&
+                Array.from(select.options || []).some(numeric));
+        })()";
+
+    private static async Task<IReadOnlyList<string>> GetRecentBatchNumbersAsync(
+        IPage page,
+        int maximum,
+        CancellationToken cancellationToken)
+    {
+        await WaitUntilAsync(
+            page,
+            () => page.EvaluateExpressionAsync<bool>(BatchSelectorAvailableScript),
+            TimeSpan.FromSeconds(30),
+            "AdventPOS did not load the batch list for the Close-Out Z Report.");
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var batches = await page.EvaluateFunctionAsync<string[]>(
+            @"maximum => {
+                const visible = element => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' &&
+                           rect.width > 0 && rect.height > 0;
+                };
+                const describe = select => {
+                    const labels = select.labels
+                        ? Array.from(select.labels).map(label => label.textContent || '').join(' ')
+                        : '';
+                    const container = select.closest('tr,.row,.form-group,.input-group,[class*=""selection""]');
+                    return [
+                        select.id || '',
+                        select.name || '',
+                        select.getAttribute('aria-label') || '',
+                        labels,
+                        container ? container.textContent || '' : ''
+                    ].join(' ').toLowerCase();
+                };
+                const select = Array.from(document.querySelectorAll('select'))
+                    .filter(visible)
+                    .find(candidate =>
+                        describe(candidate).includes('batch') &&
+                        Array.from(candidate.options || [])
+                            .some(option => /^\d+$/.test((option.textContent || '').trim())));
+                if (!select) return [];
+                return Array.from(new Set(
+                        Array.from(select.options || [])
+                            .map(option => (option.textContent || '').trim())
+                            .filter(value => /^\d+$/.test(value))))
+                    .sort((left, right) => Number(right) - Number(left))
+                    .slice(0, maximum);
+            }",
+            maximum);
+        return batches;
+    }
+
+    private static async Task SelectBatchAsync(
+        IPage page,
+        string batch,
+        CancellationToken cancellationToken)
+    {
+        var selected = await page.EvaluateFunctionAsync<bool>(
+            @"batch => {
+                const visible = element => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' &&
+                           rect.width > 0 && rect.height > 0;
+                };
+                const describe = select => {
+                    const labels = select.labels
+                        ? Array.from(select.labels).map(label => label.textContent || '').join(' ')
+                        : '';
+                    const container = select.closest('tr,.row,.form-group,.input-group,[class*=""selection""]');
+                    return [
+                        select.id || '',
+                        select.name || '',
+                        select.getAttribute('aria-label') || '',
+                        labels,
+                        container ? container.textContent || '' : ''
+                    ].join(' ').toLowerCase();
+                };
+                const select = Array.from(document.querySelectorAll('select'))
+                    .filter(visible)
+                    .find(candidate =>
+                        describe(candidate).includes('batch') &&
+                        Array.from(candidate.options || [])
+                            .some(option => (option.textContent || '').trim() === batch));
+                if (!select) return false;
+                const option = Array.from(select.options || [])
+                    .find(candidate => (candidate.textContent || '').trim() === batch);
+                if (!option) return false;
+                select.value = option.value;
+                option.selected = true;
+                if (window.jQuery)
+                    window.jQuery(select).val(option.value).trigger('change');
+                else {
+                    select.dispatchEvent(new Event('input', { bubbles: true }));
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                return (select.options[select.selectedIndex]?.textContent || '').trim() === batch;
+            }",
+            batch);
+        if (!selected)
+        {
+            throw new InvalidOperationException(
+                $"AdventPOS batch {batch} was no longer available in the Close-Out report list.");
+        }
+
+        await Task.Delay(500, cancellationToken);
+        await WaitUntilAsync(
+            page,
+            () => page.EvaluateFunctionAsync<bool>(
+                @"batch => Array.from(document.querySelectorAll('select')).some(select =>
+                    select.offsetParent !== null &&
+                    (select.options[select.selectedIndex]?.textContent || '').trim() === batch)",
+                batch),
+            TimeSpan.FromSeconds(10),
+            $"AdventPOS did not retain batch {batch} in the Close-Out report selector.");
     }
 
     private static async Task<string> GenerateReportAsync(
@@ -875,7 +1136,8 @@ internal static class PortalSyncService
         DateOnly targetDate,
         string reportName,
         Action<string> validateDownload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? batchNumber = null)
     {
         var dateText = targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         await page.EvaluateFunctionAsync(
@@ -918,6 +1180,9 @@ internal static class PortalSyncService
                 dateText),
             TimeSpan.FromSeconds(30),
             $"AdventPOS did not finish selecting {reportName} for {targetDate:M/d/yyyy}.");
+
+        if (!string.IsNullOrWhiteSpace(batchNumber))
+            await SelectBatchAsync(page, batchNumber, cancellationToken);
 
         var knownPages = (await browser.PagesAsync()).ToHashSet();
         await page.EvaluateExpressionAsync("ViewReport(true, true, false);");
@@ -1078,11 +1343,7 @@ internal static class PortalSyncService
         var valid = reports
             .Where(report =>
                 report.ReportDate.HasValue &&
-                !string.IsNullOrWhiteSpace(report.ShiftOrBatch) &&
-                (report.CashTotal != 0m ||
-                 report.CardTotal != 0m ||
-                 report.NetSales != 0m ||
-                 report.TaxTotal != 0m))
+                !string.IsNullOrWhiteSpace(report.ShiftOrBatch))
             .ToList();
         var uniqueBatches = valid
             .Where(report => report.ReportDate == targetDate)
@@ -1093,8 +1354,44 @@ internal static class PortalSyncService
             .ToList();
         if (uniqueBatches.Count == 0)
             throw new InvalidOperationException(
-                $"The AdventPOS Z Report by Period did not contain a valid batch whose Start Date is " +
-                $"{targetDate:M/d/yyyy}. Other report pages were preserved but will not be imported.");
+                $"The AdventPOS Close-Out Z Report did not contain a valid batch whose Start Date is " +
+                $"{targetDate:M/d/yyyy}. The batch was not imported.");
+    }
+
+    private static void ValidateZReportBatch(
+        string path,
+        DateOnly targetDate,
+        string expectedBatch)
+    {
+        var reports = new PosReportImportService()
+            .ImportZReports(path)
+            .Where(report =>
+                !string.IsNullOrWhiteSpace(report.ShiftOrBatch) &&
+                string.Equals(
+                    report.ShiftOrBatch.Trim(),
+                    expectedBatch.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (reports.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"the downloaded PDF did not contain selected batch {expectedBatch}");
+        }
+
+        var matching = reports.FirstOrDefault(report =>
+            report.ReportDate == targetDate);
+        if (matching is not null)
+            return;
+
+        var actualDates = reports
+            .Where(report => report.ReportDate.HasValue)
+            .Select(report => report.ReportDate!.Value.ToString("M/d/yyyy", CultureInfo.InvariantCulture))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        throw new InvalidOperationException(
+            actualDates.Count == 0
+                ? $"batch {expectedBatch} did not expose a valid Start Date"
+                : $"batch {expectedBatch} has Start Date {string.Join(", ", actualDates)}, not {targetDate:M/d/yyyy}");
     }
 
     private static async Task<PortalTargetStatus> GetTargetStatusAsync(

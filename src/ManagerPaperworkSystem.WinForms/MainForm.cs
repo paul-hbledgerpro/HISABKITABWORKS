@@ -1703,7 +1703,7 @@ internal sealed partial class MainForm : Form
             };
             db.ShiftLogs.Add(entry);
             await db.SaveChangesAsync();
-            await SyncShiftLogCashDropsToCashOnHandAsync(entry.Date);
+            await SyncShiftLogAccountingAsync(entry.Date);
             refresh();
             clearAllShiftFields();
         }
@@ -1828,9 +1828,9 @@ internal sealed partial class MainForm : Form
             entry.RegisterPayout = Money(correctionPayout.Text);
             entry.PayoutReason = correctionReason.Text.Trim();
             await db.SaveChangesAsync();
-            await SyncShiftLogCashDropsToCashOnHandAsync(oldDate);
+            await SyncShiftLogAccountingAsync(oldDate);
             if (entry.Date != oldDate)
-                await SyncShiftLogCashDropsToCashOnHandAsync(entry.Date);
+                await SyncShiftLogAccountingAsync(entry.Date);
             refresh();
             MessageBox.Show(this, "Selected shift cash drop entry updated successfully.", "Shift Cash Drop", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -1878,7 +1878,7 @@ internal sealed partial class MainForm : Form
             entry.RegisterPayout = payoutAmount;
             entry.PayoutReason = reason.Text.Trim();
             await db.SaveChangesAsync();
-            await SyncShiftLogCashDropsToCashOnHandAsync(entry.Date);
+            await SyncShiftLogAccountingAsync(entry.Date);
             refresh();
             clearAllShiftFields();
             MessageBox.Show(this,
@@ -1983,7 +1983,7 @@ internal sealed partial class MainForm : Form
             var oldDate = entity.Date;
             db.ShiftLogs.Remove(entity);
             await db.SaveChangesAsync();
-            await SyncShiftLogCashDropsToCashOnHandAsync(oldDate);
+            await SyncShiftLogAccountingAsync(oldDate);
             refresh();
         };
         actions.Controls.Add(delete);
@@ -7695,12 +7695,89 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
                 .ToListAsync();
 
             foreach (var date in dates.OrderBy(x => x))
-                await SyncShiftLogCashDropsToCashOnHandAsync(date);
+                await SyncShiftLogAccountingAsync(date);
         }
         finally
         {
             _syncingShiftDrops = false;
         }
+    }
+
+    private async Task SyncShiftLogAccountingAsync(DateOnly date)
+    {
+        await SyncShiftLogCashDropsToCashOnHandAsync(date);
+        await SyncShiftLogCashDropsToCashSalesSummaryAsync(date);
+    }
+
+    private async Task SyncShiftLogCashDropsToCashSalesSummaryAsync(DateOnly date)
+    {
+        if (_currentStoreId <= 0)
+            return;
+
+        await using var db = CreateDb();
+        var rows = await db.ShiftLogs
+            .AsNoTracking()
+            .Where(item =>
+                item.StoreId == _currentStoreId &&
+                item.Date == date &&
+                item.PosSalesSummaryId == null)
+            .OrderBy(item => item.CreatedUtc)
+            .ToListAsync();
+        var effective = EffectiveRows(
+            rows,
+            item => item.IsCorrection,
+            item => item.CorrectsId,
+            item => item.Id,
+            item => item.CreatedUtc);
+
+        var summary = await db.PosSalesSummaries
+            .Where(item =>
+                item.StoreId == _currentStoreId &&
+                item.ReportFrom == date &&
+                item.ReportTo == date)
+            .OrderByDescending(item => item.ImportedUtc)
+            .FirstOrDefaultAsync();
+        if (summary is null)
+            return;
+
+        summary.CashDropReceived = effective.Sum(item => item.CashDropReceived);
+        summary.RegisterPayout = effective.Sum(item => item.RegisterPayout);
+        summary.PayoutReason = BuildCombinedShiftPayoutReason(effective);
+
+        var hasManagerReconciliation = effective.Any(item =>
+            item.CashDropReceived != 0m ||
+            item.RegisterPayout != 0m ||
+            !string.IsNullOrWhiteSpace(item.PayoutReason));
+        if (hasManagerReconciliation)
+        {
+            summary.IsReconciled = true;
+            summary.ReconciledByUserId = _session.UserId;
+            summary.ReconciledByName = _session.DisplayName;
+            summary.ReconciledUtc = DateTime.UtcNow;
+        }
+        else
+        {
+            summary.IsReconciled = false;
+            summary.ReconciledByUserId = null;
+            summary.ReconciledByName = "";
+            summary.ReconciledUtc = null;
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    private static string BuildCombinedShiftPayoutReason(IEnumerable<ShiftLogEntry> rows)
+    {
+        var reasons = rows
+            .Where(item => !string.IsNullOrWhiteSpace(item.PayoutReason))
+            .Select(item =>
+                string.IsNullOrWhiteSpace(item.ShiftNo)
+                    ? item.PayoutReason.Trim()
+                    : $"Batch {item.ShiftNo}: {item.PayoutReason.Trim()}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var combined = string.Join("; ", reasons);
+        return combined.Length <= 300 ? combined : combined[..300];
     }
 
     private async Task SyncShiftLogCashDropsToCashOnHandAsync(DateOnly date)
