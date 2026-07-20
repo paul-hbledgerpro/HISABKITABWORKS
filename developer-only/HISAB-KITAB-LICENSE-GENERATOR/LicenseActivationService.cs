@@ -586,6 +586,10 @@ END", connection);
         var licensedBusinesses = businesses.Select(business =>
         {
             var encrypted = EncryptConnection(business.DatabaseName, request.DevicePublicKey);
+            var invoiceInbox = InvoiceInboxLicenseProvisioningLoader.Load(
+                LicensingConnectionString,
+                subscription.CustomerId,
+                business.StoreGuid);
             return new LicensedBusinessPayloadV1
             {
                 BusinessId = business.Id,
@@ -594,6 +598,9 @@ END", connection);
                 StoreGuid = business.StoreGuid,
                 DatabaseName = business.DatabaseName,
                 PayrollState = assignedPayrollState,
+                InvoiceInboxApiUrl = invoiceInbox?.ApiBaseUrl ?? "",
+                InvoiceInboxAddress = invoiceInbox?.InvoiceAddress ?? "",
+                InvoiceInboxApiToken = invoiceInbox?.StoreApiToken ?? "",
                 IsPrimary = business.IsPrimary,
                 EncryptedConnectionKey = encrypted.EncryptedKey,
                 EncryptedConnection = encrypted.Cipher,

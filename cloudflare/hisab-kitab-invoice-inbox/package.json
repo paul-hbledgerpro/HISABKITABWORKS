@@ -1,0 +1,21 @@
+{
+  "name": "hisab-kitab-invoice-inbox",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && wrangler deploy --dry-run",
+    "deploy": "wrangler deploy --keep-vars",
+    "types": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply hisab-kitab-invoice-metadata --local",
+    "db:migrate:remote": "wrangler d1 migrations apply hisab-kitab-invoice-metadata --remote"
+  },
+  "dependencies": {
+    "postal-mime": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.112.0"
+  }
+}

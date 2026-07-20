@@ -41,6 +41,15 @@ internal sealed record AccountInvoice(
 internal sealed record AccountInvoiceItem(int Id, int InvoiceId, string ServiceName, string Description, decimal Amount);
 internal sealed record AccountPayment(int Id, int InvoiceId, DateTime PaymentDate, decimal Amount, string Method, string ReferenceNumber, string Notes);
 internal sealed record InvoiceDocumentData(ClientAccount Account, AccountInvoice Invoice, IReadOnlyList<AccountInvoiceItem> Items, IReadOnlyList<AccountPayment> Payments);
+internal sealed record InvoiceInboxProvisioning(
+    int CustomerId,
+    int LicenseId,
+    string StoreGuid,
+    string WorkerStoreId,
+    string InvoiceAddress,
+    string EncryptedStoreApiToken,
+    string ApiBaseUrl,
+    DateTime UpdatedUtc);
 
 internal sealed class ClientAccountService
 {
@@ -141,6 +150,26 @@ BEGIN
         CreatedUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountPayments_Created DEFAULT(SYSUTCDATETIME())
     );
     CREATE INDEX IX_AccountPayments_InvoiceId ON dbo.AccountPayments(InvoiceId);
+END;
+
+IF OBJECT_ID('dbo.InvoiceInboxProvisioning', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.InvoiceInboxProvisioning
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_InvoiceInboxProvisioning PRIMARY KEY,
+        CustomerId INT NOT NULL,
+        LicenseId INT NOT NULL,
+        StoreGuid NVARCHAR(200) NOT NULL,
+        WorkerStoreId NVARCHAR(80) NOT NULL,
+        InvoiceAddress NVARCHAR(320) NOT NULL,
+        EncryptedStoreApiToken NVARCHAR(2000) NOT NULL,
+        ApiBaseUrl NVARCHAR(500) NOT NULL,
+        UpdatedUtc DATETIME2 NOT NULL CONSTRAINT DF_InvoiceInboxProvisioning_Updated DEFAULT(SYSUTCDATETIME()),
+        CONSTRAINT UQ_InvoiceInboxProvisioning_StoreGuid UNIQUE(StoreGuid),
+        CONSTRAINT UQ_InvoiceInboxProvisioning_Address UNIQUE(InvoiceAddress)
+    );
+    CREATE INDEX IX_InvoiceInboxProvisioning_CustomerId
+        ON dbo.InvoiceInboxProvisioning(CustomerId);
 END;", connection);
         command.ExecuteNonQuery();
     }
@@ -244,6 +273,64 @@ WHERE Id=@license AND CustomerId=@customer;", connection);
         command.Parameters.AddWithValue("@customer", customerId);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("The selected client license could not be found. Refresh and select the account again.");
+    }
+
+    public InvoiceInboxProvisioning? LoadInvoiceInboxProvisioning(int customerId, string storeGuid)
+    {
+        using var connection = Open();
+        using var command = new SqlCommand(@"
+SELECT CustomerId,LicenseId,StoreGuid,WorkerStoreId,InvoiceAddress,
+       EncryptedStoreApiToken,ApiBaseUrl,UpdatedUtc
+FROM dbo.InvoiceInboxProvisioning
+WHERE CustomerId=@customer AND StoreGuid=@guid;", connection);
+        command.Parameters.AddWithValue("@customer", customerId);
+        command.Parameters.AddWithValue("@guid", storeGuid.Trim().ToUpperInvariant());
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new InvoiceInboxProvisioning(
+                reader.GetInt32(0),
+                reader.GetInt32(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetDateTime(7))
+            : null;
+    }
+
+    public void SaveInvoiceInboxProvisioning(InvoiceInboxProvisioning value)
+    {
+        if (value.CustomerId <= 0 || value.LicenseId <= 0 ||
+            string.IsNullOrWhiteSpace(value.StoreGuid) ||
+            string.IsNullOrWhiteSpace(value.WorkerStoreId) ||
+            string.IsNullOrWhiteSpace(value.InvoiceAddress) ||
+            string.IsNullOrWhiteSpace(value.EncryptedStoreApiToken) ||
+            string.IsNullOrWhiteSpace(value.ApiBaseUrl))
+            throw new InvalidOperationException("The Invoice Inbox provisioning record is incomplete.");
+
+        using var connection = Open();
+        using var command = new SqlCommand(@"
+MERGE dbo.InvoiceInboxProvisioning AS target
+USING (SELECT @guid AS StoreGuid) AS source
+ON target.StoreGuid=source.StoreGuid
+WHEN MATCHED THEN UPDATE SET
+    LicenseId=@license,StoreGuid=@guid,WorkerStoreId=@workerStore,
+    InvoiceAddress=@address,EncryptedStoreApiToken=@token,
+    ApiBaseUrl=@baseUrl,UpdatedUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT(CustomerId,LicenseId,StoreGuid,WorkerStoreId,InvoiceAddress,
+           EncryptedStoreApiToken,ApiBaseUrl,UpdatedUtc)
+    VALUES(@customer,@license,@guid,@workerStore,@address,@token,@baseUrl,SYSUTCDATETIME());",
+            connection);
+        command.Parameters.AddWithValue("@customer", value.CustomerId);
+        command.Parameters.AddWithValue("@license", value.LicenseId);
+        command.Parameters.AddWithValue("@guid", value.StoreGuid.Trim().ToUpperInvariant());
+        command.Parameters.AddWithValue("@workerStore", value.WorkerStoreId.Trim());
+        command.Parameters.AddWithValue("@address", value.InvoiceAddress.Trim().ToLowerInvariant());
+        command.Parameters.AddWithValue("@token", value.EncryptedStoreApiToken);
+        command.Parameters.AddWithValue("@baseUrl", value.ApiBaseUrl.Trim().TrimEnd('/'));
+        command.ExecuteNonQuery();
     }
 
     public IReadOnlyList<ServicePrice> LoadServicePrices(ClientAccount account)

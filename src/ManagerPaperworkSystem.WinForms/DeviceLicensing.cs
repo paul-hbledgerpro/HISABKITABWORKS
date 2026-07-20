@@ -775,6 +775,9 @@ internal sealed class LicensedBusinessPayloadV1
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
     public string PayrollState { get; set; } = "";
+    public string InvoiceInboxApiUrl { get; set; } = "";
+    public string InvoiceInboxAddress { get; set; } = "";
+    public string InvoiceInboxApiToken { get; set; } = "";
     public bool IsPrimary { get; set; }
     public string EncryptedConnectionKey { get; set; } = "";
     public string EncryptedConnection { get; set; } = "";

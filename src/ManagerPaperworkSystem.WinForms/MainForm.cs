@@ -32,6 +32,7 @@ internal sealed partial class MainForm : Form
     private readonly StoreConnectionService _storeConnections;
     private readonly PurchaseService _purchaseService;
     private readonly InvoiceEmailSyncService _invoiceEmailSyncService;
+    private readonly CloudInvoiceInboxService _cloudInvoiceInboxService;
     private readonly InvoiceImportService _invoiceImportService;
     private readonly PosReportImportService _posImporter;
     private readonly CheckPrintService _checkPrintService;
@@ -42,6 +43,8 @@ internal sealed partial class MainForm : Form
     private readonly Dictionary<string, Button> _navButtons = new();
     private readonly SemaphoreSlim _bankDeliveryGate = new(1, 1);
     private readonly SemaphoreSlim _invoiceEmailSyncGate = new(1, 1);
+    private readonly Dictionary<string, DateTime> _cloudInvoiceLastSyncUtc =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Windows.Forms.Timer _monthlyDeliveryTimer = new() { Interval = 60 * 60 * 1000 };
     private readonly System.Windows.Forms.Timer _invoiceEmailSyncTimer = new() { Interval = 4 * 60 * 60 * 1000 };
     private readonly int _loginStoreConnectionId;
@@ -72,6 +75,7 @@ internal sealed partial class MainForm : Form
         };
         _purchaseService = new PurchaseService(new StoreDbContextFactory(_storeConnections), _paths);
         _invoiceEmailSyncService = new InvoiceEmailSyncService(_paths, _invoiceImportService, _purchaseService);
+        _cloudInvoiceInboxService = new CloudInvoiceInboxService(_paths, _invoiceEmailSyncService);
         ReloadLicensedStoreConnections();
         if (_reportService is ReportService concreteReportService)
             concreteReportService.SetStoreConnectionService(_storeConnections);
@@ -109,24 +113,78 @@ internal sealed partial class MainForm : Form
     private string CurrentInvoiceEmailStoreKey()
         => $"{LicenseRuntime.ActiveStoreGuid}|{_currentConnectionStoreId}";
 
+    private LicensedBusinessConnection? CurrentLicensedBusiness()
+    {
+        var businesses = LicensedBusinessService.Load();
+        if (businesses.Count == 0)
+            return null;
+
+        var databaseName = "";
+        try
+        {
+            databaseName = new SqlConnectionStringBuilder(CurrentStoreConnectionString()).InitialCatalog;
+        }
+        catch
+        {
+            // Fall back to the signed active Store GUID below.
+        }
+
+        return businesses.FirstOrDefault(business =>
+                   !string.IsNullOrWhiteSpace(databaseName)
+                   && string.Equals(business.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase))
+               ?? businesses.FirstOrDefault(business =>
+                   string.Equals(
+                       business.StoreGuid,
+                       LicenseRuntime.ActiveStoreGuid,
+                       StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasCloudInvoiceInbox(LicensedBusinessConnection? business)
+        => business is not null
+           && !string.IsNullOrWhiteSpace(business.InvoiceInboxApiUrl)
+           && !string.IsNullOrWhiteSpace(business.InvoiceInboxAddress)
+           && !string.IsNullOrWhiteSpace(business.InvoiceInboxApiToken);
+
     private async Task BeginDueInvoiceEmailSyncAsync()
     {
         var storeKey = CurrentInvoiceEmailStoreKey();
-        if (!_invoiceEmailSyncService.IsDue(storeKey, TimeSpan.FromHours(4))
+        var business = CurrentLicensedBusiness();
+        var cloudConfigured = HasCloudInvoiceInbox(business);
+        var cloudDue = !_cloudInvoiceLastSyncUtc.TryGetValue(storeKey, out var lastCloudSync)
+                       || DateTime.UtcNow - lastCloudSync >= TimeSpan.FromHours(4);
+        if ((cloudConfigured ? !cloudDue : !_invoiceEmailSyncService.IsDue(storeKey, TimeSpan.FromHours(4)))
             || !await _invoiceEmailSyncGate.WaitAsync(0))
             return;
 
         try
         {
-            var result = await _invoiceEmailSyncService.SyncAsync(
-                storeKey,
-                _currentStoreId,
-                _session.UserId,
-                _session.DisplayName);
-            if (!IsDisposed && (result.InvoicesImported > 0 || result.NeedsReview > 0))
+            if (cloudConfigured && business is not null)
             {
-                BeginInvoke(() =>
-                    _status.Text = $"Invoice email sync: {result.InvoicesImported} imported; {result.NeedsReview} need review.");
+                var result = await _cloudInvoiceInboxService.SyncAsync(
+                    business,
+                    storeKey,
+                    _currentStoreId,
+                    _session.UserId,
+                    _session.DisplayName);
+                _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
+                if (!IsDisposed && (result.InvoicesImported > 0 || result.NeedsReview > 0))
+                {
+                    BeginInvoke(() =>
+                        _status.Text = $"Protected invoice inbox: {result.InvoicesImported} imported; {result.NeedsReview} need review.");
+                }
+            }
+            else
+            {
+                var result = await _invoiceEmailSyncService.SyncAsync(
+                    storeKey,
+                    _currentStoreId,
+                    _session.UserId,
+                    _session.DisplayName);
+                if (!IsDisposed && (result.InvoicesImported > 0 || result.NeedsReview > 0))
+                {
+                    BeginInvoke(() =>
+                        _status.Text = $"Invoice email sync: {result.InvoicesImported} imported; {result.NeedsReview} need review.");
+                }
             }
         }
         catch
@@ -4228,6 +4286,53 @@ internal sealed partial class MainForm : Form
         AddSectionButton(actions, "Email Invoices", async () =>
         {
             var storeKey = CurrentInvoiceEmailStoreKey();
+            var business = CurrentLicensedBusiness();
+            if (HasCloudInvoiceInbox(business) && business is not null)
+            {
+                using var cloudInbox = new CloudInvoiceInboxForm(
+                    _cloudInvoiceInboxService,
+                    business);
+                if (cloudInbox.ShowDialog(this) != DialogResult.OK || !cloudInbox.SyncRequested)
+                    return;
+
+                try
+                {
+                    var result = await _cloudInvoiceInboxService.SyncAsync(
+                        business,
+                        storeKey,
+                        _currentStoreId,
+                        _session.UserId,
+                        _session.DisplayName);
+                    _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
+                    await refreshAsync();
+                    MessageBox.Show(this,
+                        $"Protected invoice inbox sync complete.\n\n" +
+                        $"Messages checked: {result.MessagesChecked}\n" +
+                        $"PDF attachments downloaded: {result.PdfsDownloaded}\n" +
+                        $"Invoices imported: {result.InvoicesImported}\n" +
+                        $"Duplicates skipped: {result.DuplicatesSkipped}\n" +
+                        $"Needs review: {result.NeedsReview}" +
+                        (result.NeedsReview > 0
+                            ? $"\n\nReview folder:\n{result.ReviewFolder}"
+                            : ""),
+                        "Protected Invoice Inbox",
+                        MessageBoxButtons.OK,
+                        result.NeedsReview > 0
+                            ? MessageBoxIcon.Warning
+                            : MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this,
+                        AppBootstrap.RedactSensitiveText(ex.Message),
+                        "Protected Invoice Inbox",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+
+                return;
+            }
+
             using var setup = new InvoiceEmailSetupForm(_paths, _invoiceEmailSyncService, storeKey);
             if (setup.ShowDialog(this) != DialogResult.OK)
                 return;

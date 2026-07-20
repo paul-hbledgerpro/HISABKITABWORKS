@@ -51,6 +51,9 @@ internal static class LicensedBusinessService
                         ? business.DatabaseName.Trim()
                         : business.StoreGuid.Trim(),
                     DatabaseName = business.DatabaseName.Trim(),
+                    InvoiceInboxApiUrl = business.InvoiceInboxApiUrl.Trim().TrimEnd('/'),
+                    InvoiceInboxAddress = business.InvoiceInboxAddress.Trim().ToLowerInvariant(),
+                    InvoiceInboxApiToken = business.InvoiceInboxApiToken.Trim(),
                     IsPrimary = business.IsPrimary,
                     Connection = settings
                 });
@@ -212,6 +215,9 @@ internal sealed class LicensedBusinessConnection
     public string Address { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
+    public string InvoiceInboxApiUrl { get; set; } = "";
+    public string InvoiceInboxAddress { get; set; } = "";
+    public string InvoiceInboxApiToken { get; set; } = "";
     public bool IsPrimary { get; set; }
     public DatabaseConnectionSettings Connection { get; set; } = new();
 }

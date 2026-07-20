@@ -38,6 +38,12 @@ internal sealed record InvoiceEmailSyncResult(
     string ReviewFolder,
     string FoldersScanned);
 
+internal sealed record InvoicePdfImportResult(
+    int InvoicesImported,
+    int DuplicatesSkipped,
+    int NeedsReview,
+    string ReviewFolder);
+
 internal sealed class InvoiceEmailSyncService
 {
     private static readonly byte[] Entropy =
@@ -344,6 +350,84 @@ internal sealed class InvoiceEmailSyncService
             reviewCount,
             reviewFolder,
             foldersScanned.Count == 0 ? "(none)" : string.Join(", ", foldersScanned.Distinct()));
+    }
+
+    public async Task<InvoicePdfImportResult> ImportDownloadedPdfsAsync(
+        string storeKey,
+        int storeId,
+        int userId,
+        string userName,
+        IReadOnlyList<string> pdfPaths,
+        CancellationToken ct = default)
+    {
+        var safeStoreKey = MakeSafeFileName(NormalizeStoreKey(storeKey));
+        var reviewFolder = Path.Combine(
+            _paths.AppDataDirectory,
+            "Invoice Email Inbox",
+            safeStoreKey,
+            "Needs Review");
+        Directory.CreateDirectory(reviewFolder);
+
+        var existingInvoices = await _purchaseService.GetInvoicesAsync(storeId, ct);
+        var existingKeys = existingInvoices
+            .Select(invoice => InvoiceKey(invoice.VendorName, invoice.InvoiceNumber))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var imported = 0;
+        var duplicates = 0;
+        var needsReview = 0;
+
+        foreach (var pdfPath in pdfPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            ct.ThrowIfCancellationRequested();
+            var parseResult = await _invoiceImporter.ImportAsync(pdfPath, ct: ct);
+            var invoices = parseResult.Invoices.Count > 0
+                ? parseResult.Invoices
+                : new List<ImportedInvoice>
+                {
+                    new()
+                    {
+                        VendorName = parseResult.VendorName,
+                        InvoiceNumber = parseResult.InvoiceNumber,
+                        InvoiceDate = parseResult.InvoiceDate,
+                        Total = parseResult.Total,
+                        Lines = parseResult.Lines
+                    }
+                };
+
+            if (!parseResult.Success || invoices.Count == 0 || invoices.Any(invoice => !IsVerified(invoice)))
+            {
+                MoveToReview(pdfPath, reviewFolder);
+                needsReview++;
+                continue;
+            }
+
+            foreach (var invoice in invoices)
+            {
+                var key = InvoiceKey(invoice.VendorName, invoice.InvoiceNumber);
+                if (!existingKeys.Add(key))
+                {
+                    duplicates++;
+                    continue;
+                }
+
+                await _purchaseService.AddInvoiceAsync(
+                    storeId,
+                    invoice.InvoiceDate!.Value,
+                    null,
+                    invoice.VendorName,
+                    invoice.InvoiceNumber,
+                    invoice.Total!.Value,
+                    "Automatically imported from the store's protected HISAB KITAB invoice inbox.",
+                    pdfPath,
+                    invoice.Lines,
+                    userId,
+                    userName,
+                    ct);
+                imported++;
+            }
+        }
+
+        return new InvoicePdfImportResult(imported, duplicates, needsReview, reviewFolder);
     }
 
     private static bool IsVerified(ImportedInvoice invoice)

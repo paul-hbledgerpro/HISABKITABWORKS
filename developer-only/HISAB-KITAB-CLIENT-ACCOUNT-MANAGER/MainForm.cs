@@ -165,17 +165,21 @@ internal sealed class MainForm : Form
     private Control BuildDirectory()
     {
         var panel = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(18), RowCount = 4 };
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
         var heading = DeveloperTheme.Label("CLIENT DIRECTORY", true, DeveloperTheme.Orange); heading.Font = DeveloperTheme.Bold(14); panel.Controls.Add(heading,0,0);
         _selectedLicense.BackColor = DeveloperTheme.PaleBlue; _selectedLicense.Padding = new Padding(10, 0, 10, 0); _selectedLicense.AutoEllipsis = true;
         panel.Controls.Add(_selectedLicense, 0, 1); panel.Controls.Add(_grid,0,2);
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(0,8,0,0) };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,24)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,16)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,30)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,30));
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, Padding = new Padding(0,8,0,0) };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,34)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33));
+        actions.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); actions.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
         var newClient = DeveloperTheme.Button("NEW CLIENT", true); newClient.Click += (_,_) => OpenNewClientAccount();
         var refresh = DeveloperTheme.Button("REFRESH"); refresh.Click += (_,_) => RefreshAccounts();
+        var invoiceInbox = DeveloperTheme.Button("STORE INVOICE INBOX", true); invoiceInbox.Click += (_,_) => OpenInvoiceInbox();
         var billing = DeveloperTheme.Button("ACCOUNT PAYMENTS & INVOICES", true); billing.Click += (_,_) => OpenAccountBilling();
         var license = DeveloperTheme.Button("OPEN LICENSE GENERATOR"); license.Click += (_,_) => OpenLicenseGenerator();
-        actions.Controls.Add(newClient,0,0); actions.Controls.Add(refresh,1,0); actions.Controls.Add(billing,2,0); actions.Controls.Add(license,3,0); panel.Controls.Add(actions,0,3); return panel;
+        actions.Controls.Add(newClient,0,0); actions.Controls.Add(refresh,1,0); actions.Controls.Add(invoiceInbox,2,0);
+        actions.Controls.Add(billing,0,1); actions.SetColumnSpan(billing,2); actions.Controls.Add(license,2,1);
+        panel.Controls.Add(actions,0,3); return panel;
     }
 
     private static void AddField(TableLayoutPanel form, int row, string label, Control control, int column, int span = 1)
@@ -341,6 +345,16 @@ internal sealed class MainForm : Form
         form.ShowDialog(this);
         RefreshAccounts();
         SetStatus("Account payments and invoices refreshed.", false);
+    }
+    private void OpenInvoiceInbox()
+    {
+        if (_service is null) { SetStatus("Connect to the licensing database first.", true); return; }
+        if (_customerId <= 0) { SetStatus("Select the client account whose store invoice inbox you want to manage.", true); return; }
+        var account = _accounts.FirstOrDefault(x => x.CustomerId == _customerId);
+        if (account is null) { SetStatus("Refresh and select the client account again.", true); return; }
+        using var form = new InvoiceInboxProvisioningForm(_service, account);
+        form.ShowDialog(this);
+        SetStatus($"Invoice Inbox provisioning closed for {account.BusinessName}.", false);
     }
     private void OpenLicenseGenerator()
     {

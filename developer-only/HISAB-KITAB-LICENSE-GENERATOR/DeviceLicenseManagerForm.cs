@@ -805,12 +805,20 @@ VALUES
         foreach (var business in businesses)
         {
             var encrypted = EncryptConnection(business.DatabaseName, request.DevicePublicKey);
+            var invoiceInbox = InvoiceInboxLicenseProvisioningLoader.Load(
+                _licensingConnectionString,
+                subscription.CustomerId,
+                business.StoreGuid);
             licensedBusinesses.Add(new LicensedBusinessPayloadV1
             {
                 BusinessId = business.Id,
                 BusinessName = business.BusinessName,
                 Address = business.StoreAddress,
+                StoreGuid = business.StoreGuid,
                 DatabaseName = business.DatabaseName,
+                InvoiceInboxApiUrl = invoiceInbox?.ApiBaseUrl ?? "",
+                InvoiceInboxAddress = invoiceInbox?.InvoiceAddress ?? "",
+                InvoiceInboxApiToken = invoiceInbox?.StoreApiToken ?? "",
                 IsPrimary = business.IsPrimary,
                 EncryptedConnectionKey = encrypted.EncryptedKey,
                 EncryptedConnection = encrypted.Cipher,
@@ -859,7 +867,7 @@ VALUES
         using var connection = new SqlConnection(_licensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(@"
-SELECT Id, BusinessName, StoreAddress, DatabaseName, IsPrimary
+SELECT Id, BusinessName, StoreAddress, DatabaseName, StoreGuid, IsPrimary
 FROM dbo.CustomerBusinesses
 WHERE CustomerId=@customerId AND IsActive=1
 ORDER BY IsPrimary DESC, BusinessName", connection);
@@ -868,7 +876,8 @@ ORDER BY IsPrimary DESC, BusinessName", connection);
         var businesses = new List<CustomerBusinessRecord>();
         while (reader.Read())
             businesses.Add(new CustomerBusinessRecord(reader.GetInt32(0), reader.GetString(1),
-                reader.IsDBNull(2) ? "" : reader.GetString(2), reader.GetString(3), reader.GetBoolean(4)));
+                reader.IsDBNull(2) ? "" : reader.GetString(2), reader.GetString(3),
+                reader.IsDBNull(4) ? reader.GetString(3) : reader.GetString(4), reader.GetBoolean(5)));
         return businesses;
     }
 
@@ -973,7 +982,7 @@ WHERE Id=@id", connection);
         DateTime ExpiresDate, DateTime LastIssuedDate);
 
     private sealed record CustomerBusinessRecord(int Id, string BusinessName, string StoreAddress,
-        string DatabaseName, bool IsPrimary);
+        string DatabaseName, string StoreGuid, bool IsPrimary);
 
     private sealed record EncryptedConnectionParts(string EncryptedKey, string Cipher, string Nonce, string Tag);
 }
