@@ -168,6 +168,10 @@ internal static class AppBootstrap
 
     private static (string connectionString, bool useSqlServer) GetConnectionSettings()
     {
+        var installedLicenseExists =
+            LicenseRuntime.CurrentLicense is not null ||
+            File.Exists(DeviceLicenseService.InstalledLicensePath);
+
         try
         {
             var protectedSettings = DeviceLicenseService.LoadProtectedConnection();
@@ -200,12 +204,43 @@ internal static class AppBootstrap
                     return connection;
                 }
             }
+
+            // A signed multi-business license also contains the encrypted SQL
+            // connection for every approved business. Recover the primary
+            // connection from that protected directory if the older standalone
+            // connection file is missing.
+            var primaryBusiness = LicensedBusinessService.Load()
+                .SingleOrDefault(business => business.IsPrimary);
+            if (primaryBusiness is not null)
+            {
+                var connection = BuildConnectionString(primaryBusiness.Connection);
+                if (!connection.useSqlServer || string.IsNullOrWhiteSpace(connection.connectionString))
+                    throw new InvalidOperationException(
+                        "The licensed primary business does not contain a valid SQL Server connection.");
+
+                DeviceLicenseService.SaveProtectedConnection(primaryBusiness.Connection);
+                TryDelete(ConnectionSettingsPath);
+                return connection;
+            }
+
+            if (installedLicenseExists)
+                throw new InvalidOperationException(
+                    "The protected SQL Server connection is missing from this licensed PC.");
         }
-        catch
+        catch (Exception ex)
         {
-            // Fall back to SQLite. Startup should remain visible.
+            // Never let a licensed customer installation silently open a blank
+            // local SQLite database when its protected SQL connection cannot be
+            // read. StartupFlow will offer the safe license re-import/repair path.
+            if (installedLicenseExists)
+                throw new InvalidOperationException(
+                    "The protected SQL Server connection could not be loaded. " +
+                    "Re-import the developer-issued license to repair this PC.",
+                    ex);
         }
 
+        // SQLite remains available only as an internal bootstrap/test provider
+        // before a device license has supplied a SQL Server connection.
         return ("", false);
     }
 
