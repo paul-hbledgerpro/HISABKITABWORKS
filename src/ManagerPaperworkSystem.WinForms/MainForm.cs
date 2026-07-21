@@ -4177,7 +4177,15 @@ internal sealed partial class MainForm : Form
             FillWeight = 80,
             DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
         });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Attachment", DataPropertyName = nameof(PurchaseInvoiceGridRow.Attachment), HeaderText = "PDF Attachment", ReadOnly = true, FillWeight = 145 });
+        grid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Attachment",
+            DataPropertyName = nameof(PurchaseInvoiceGridRow.Attachment),
+            HeaderText = "Invoice PDF",
+            ReadOnly = true,
+            FlatStyle = FlatStyle.Flat,
+            FillWeight = 110
+        });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PurchaseInvoiceGridRow.Status), HeaderText = "Status", ReadOnly = true, FillWeight = 75 });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing purchases for selected store"), 0, 3);
@@ -4259,7 +4267,8 @@ internal sealed partial class MainForm : Form
                     Vendor = x.VendorName,
                     Invoice = x.InvoiceNumber,
                     Total = x.Total,
-                    Attachment = Path.GetFileName(x.FilePath),
+                    Attachment = !string.IsNullOrWhiteSpace(x.FilePath) && File.Exists(x.FilePath) ? "View PDF" : "No PDF",
+                    FilePath = x.FilePath,
                     Status = string.IsNullOrWhiteSpace(x.FilePath) ? "Entered" : "Imported"
                 })
                 .ToList();
@@ -4293,6 +4302,13 @@ internal sealed partial class MainForm : Form
             refresh();
         };
         grid.SelectionChanged += async (_, _) => await loadSelectedInvoiceAsync();
+        grid.CellContentClick += (_, e) =>
+        {
+            if (e.RowIndex < 0 || !string.Equals(grid.Columns[e.ColumnIndex].Name, "Attachment", StringComparison.Ordinal))
+                return;
+            if (grid.Rows[e.RowIndex].DataBoundItem is PurchaseInvoiceGridRow invoiceRow)
+                OpenStoredDocument(invoiceRow.FilePath, "Purchase Invoice");
+        };
         AddSectionButton(actions, "Home", (_, _) => ShowModule("Dashboard"), width: 150);
         AddSectionButton(actions, "New Purchase", (_, _) => clearPurchaseForm(), width: 185);
         AddSectionButton(actions, "Import Purchases", async () =>
@@ -4421,7 +4437,7 @@ internal sealed partial class MainForm : Form
             clearPurchaseForm();
             await refreshAsync();
         }, width: 210, enabled: _session.IsAdmin);
-        AddSectionButton(actions, "Open File", (_, _) => OpenSelectedPurchaseFile(grid), width: 145);
+        AddSectionButton(actions, "Open Invoice PDF", (_, _) => OpenSelectedPurchaseFile(grid), width: 190);
         AddSectionButton(actions, "Refresh", async () => await refreshAsync(), width: 145);
         refresh();
         return ModuleShell("\uE719", "Purchases", "Record vendor invoices, imports, and purchase totals.", root);
@@ -4557,6 +4573,19 @@ internal sealed partial class MainForm : Form
         var refreshingBankRows = false;
         void configureBankColumns()
         {
+            if (!grid.Columns.Contains("CheckCopy"))
+            {
+                grid.Columns.Add(new DataGridViewButtonColumn
+                {
+                    Name = "CheckCopy",
+                    DataPropertyName = nameof(BankStatementGridRow.CheckCopyAction),
+                    HeaderText = "Check Copy",
+                    ReadOnly = true,
+                    UseColumnTextForButtonValue = false,
+                    FlatStyle = FlatStyle.Flat,
+                    FillWeight = 82
+                });
+            }
             foreach (DataGridViewColumn column in grid.Columns)
                 column.ReadOnly = column.Name is not ("Select" or "IncludeInProfitLoss");
             if (grid.Columns.Contains("IncludeInProfitLoss"))
@@ -4568,11 +4597,23 @@ internal sealed partial class MainForm : Form
             if (grid.IsCurrentCellDirty)
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
         };
-        grid.CellContentClick += (_, e) =>
+        grid.CellContentClick += async (_, e) =>
         {
-            if (e.RowIndex >= 0 &&
-                grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)
+            if (e.RowIndex < 0 || e.ColumnIndex < 0)
+                return;
+
+            if (grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)
+            {
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                return;
+            }
+
+            if (string.Equals(grid.Columns[e.ColumnIndex].Name, "CheckCopy", StringComparison.Ordinal) &&
+                grid.Rows[e.RowIndex].DataBoundItem is BankStatementGridRow bankRow)
+            {
+                await AttachOrOpenBankCheckCopyAsync(bankRow);
+                await refreshAsync();
+            }
         };
         grid.CellValueChanged += async (_, e) =>
         {
@@ -4605,11 +4646,25 @@ internal sealed partial class MainForm : Form
                     Category = x.Category,
                     Matched = x.IsMatched,
                     MatchReference = x.MatchReference,
-                    Check = x.CheckNumber
+                    Check = x.CheckNumber,
+                    CheckCopyPath = x.CheckCopyPath,
+                    CheckCopyAction = IsBankCheckTransaction(x.CheckNumber, x.Description)
+                        ? File.Exists(x.CheckCopyPath) ? "View Copy" : "Attach Copy"
+                        : "—"
                 })
                 .ToList();
             HideId(grid);
             configureBankColumns();
+            foreach (DataGridViewRow gridRow in grid.Rows)
+            {
+                if (gridRow.DataBoundItem is not BankStatementGridRow bankRow || !grid.Columns.Contains("CheckCopy"))
+                    continue;
+                gridRow.Cells["CheckCopy"].ToolTipText = File.Exists(bankRow.CheckCopyPath)
+                    ? bankRow.CheckCopyPath
+                    : IsBankCheckTransaction(bankRow.Check, bankRow.Description)
+                        ? "Attach the check image or PDF downloaded from the bank."
+                        : "This is not identified as a check transaction.";
+            }
             var debitTotal = rows.Sum(x => x.Debit);
             var creditTotal = rows.Sum(x => x.Credit);
             var matchedRows = rows.Where(x => x.IsMatched).ToList();
@@ -5119,11 +5174,27 @@ internal sealed partial class MainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Product", DataPropertyName = nameof(PriceAlertGridRow.Product), HeaderText = "Product", ReadOnly = true, MinimumWidth = 175, FillWeight = 145 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "SKU", DataPropertyName = nameof(PriceAlertGridRow.SKU), HeaderText = "SKU", ReadOnly = true, MinimumWidth = 95, FillWeight = 78 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldCost", DataPropertyName = nameof(PriceAlertGridRow.OldCost), HeaderText = "Old Price", ReadOnly = true, MinimumWidth = 88, FillWeight = 70, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldInvoice", DataPropertyName = nameof(PriceAlertGridRow.OldInvoice), HeaderText = "Old Price Invoice #", ReadOnly = true, MinimumWidth = 130, FillWeight = 110 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldWholesaler", DataPropertyName = nameof(PriceAlertGridRow.OldWholesaler), HeaderText = "Old Price Wholesaler", ReadOnly = true, MinimumWidth = 155, FillWeight = 135 });
+        grid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "OldInvoicePdf",
+            DataPropertyName = nameof(PriceAlertGridRow.OldInvoicePdf),
+            HeaderText = "Old Price PDF",
+            ReadOnly = true,
+            FlatStyle = FlatStyle.Flat,
+            MinimumWidth = 115,
+            FillWeight = 90
+        });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewCost", DataPropertyName = nameof(PriceAlertGridRow.NewCost), HeaderText = "New Price", ReadOnly = true, MinimumWidth = 88, FillWeight = 70, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewInvoice", DataPropertyName = nameof(PriceAlertGridRow.NewInvoice), HeaderText = "New Price Invoice #", ReadOnly = true, MinimumWidth = 130, FillWeight = 110 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewDistributor", DataPropertyName = nameof(PriceAlertGridRow.NewDistributor), HeaderText = "New Price Distributor", ReadOnly = true, MinimumWidth = 155, FillWeight = 135 });
+        grid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "NewInvoicePdf",
+            DataPropertyName = nameof(PriceAlertGridRow.NewInvoicePdf),
+            HeaderText = "New Price PDF",
+            ReadOnly = true,
+            FlatStyle = FlatStyle.Flat,
+            MinimumWidth = 115,
+            FillWeight = 90
+        });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Change", DataPropertyName = nameof(PriceAlertGridRow.Change), HeaderText = "Change", ReadOnly = true, MinimumWidth = 88, FillWeight = 70 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PriceAlertGridRow.Status), HeaderText = "Status", ReadOnly = true, MinimumWidth = 82, FillWeight = 65 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Created", DataPropertyName = nameof(PriceAlertGridRow.Created), HeaderText = "Created", ReadOnly = true, MinimumWidth = 130, FillWeight = 110, DefaultCellStyle = new DataGridViewCellStyle { Format = "g" } });
@@ -5144,11 +5215,17 @@ internal sealed partial class MainForm : Form
                 .Where(x => x.StoreId == _currentStoreId && x.CreatedUtc >= fromDate && x.CreatedUtc < toExclusive)
                 .OrderByDescending(x => x.CreatedUtc)
                 .ToList();
+            var invoiceSources = db.PurchaseInvoices.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.FilePath != "")
+                .OrderByDescending(x => x.InvoiceDate)
+                .ToList();
             grid.DataSource = rows
                 .Select(x =>
                 {
                     var pct = x.OldUnitCost == 0 ? 0 : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m;
                     var priority = Math.Abs(pct) >= 10m ? "High" : Math.Abs(pct) >= 5m ? "Medium" : "Low";
+                    var oldInvoicePath = ResolvePriceAlertInvoicePath(invoiceSources, null, x.OldInvoiceNumber, x.OldVendorName, x.InvoiceDate);
+                    var newInvoicePath = ResolvePriceAlertInvoicePath(invoiceSources, x.PurchaseInvoiceId, x.InvoiceNumber, x.VendorName, x.InvoiceDate);
                     return new PriceAlertGridRow
                     {
                         Id = x.Id,
@@ -5157,17 +5234,26 @@ internal sealed partial class MainForm : Form
                         Product = x.ProductName,
                         SKU = x.Sku,
                         OldCost = x.OldUnitCost,
-                        OldInvoice = x.OldInvoiceNumber,
-                        OldWholesaler = x.OldVendorName,
+                        OldInvoicePdf = File.Exists(oldInvoicePath) ? "View PDF" : "Not found",
+                        OldInvoicePath = oldInvoicePath,
+                        OldInvoiceDetails = $"{x.OldVendorName} • Invoice {x.OldInvoiceNumber}".Trim(' ', '•'),
                         NewCost = x.NewUnitCost,
-                        NewInvoice = x.InvoiceNumber,
-                        NewDistributor = x.VendorName,
+                        NewInvoicePdf = File.Exists(newInvoicePath) ? "View PDF" : "Not found",
+                        NewInvoicePath = newInvoicePath,
+                        NewInvoiceDetails = $"{x.VendorName} • Invoice {x.InvoiceNumber}".Trim(' ', '•'),
                         Change = PercentText(pct),
                         Status = x.IsRead ? "Read" : "New",
                         Created = x.CreatedUtc
                     };
                 })
                 .ToList();
+            foreach (DataGridViewRow gridRow in grid.Rows)
+            {
+                if (gridRow.DataBoundItem is not PriceAlertGridRow alertRow)
+                    continue;
+                gridRow.Cells["OldInvoicePdf"].ToolTipText = alertRow.OldInvoiceDetails;
+                gridRow.Cells["NewInvoicePdf"].ToolTipText = alertRow.NewInvoiceDetails;
+            }
             newAlerts.Text = rows.Count(x => !x.IsRead).ToString(CultureInfo.InvariantCulture);
             highPriority.Text = rows.Count(x => !x.IsRead && Math.Abs(x.OldUnitCost == 0 ? 0 : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m) >= 10m).ToString(CultureInfo.InvariantCulture);
             resolved.Text = rows.Count(x => x.IsRead).ToString(CultureInfo.InvariantCulture);
@@ -5189,6 +5275,16 @@ internal sealed partial class MainForm : Form
             alertTo = selectedTo;
             previousAlertPeriod = alertPeriod.Text;
             refresh();
+        };
+        grid.CellContentClick += (_, e) =>
+        {
+            if (e.RowIndex < 0 || grid.Rows[e.RowIndex].DataBoundItem is not PriceAlertGridRow alertRow)
+                return;
+            var columnName = grid.Columns[e.ColumnIndex].Name;
+            if (string.Equals(columnName, "OldInvoicePdf", StringComparison.Ordinal))
+                OpenStoredDocument(alertRow.OldInvoicePath, "Old Price Invoice");
+            else if (string.Equals(columnName, "NewInvoicePdf", StringComparison.Ordinal))
+                OpenStoredDocument(alertRow.NewInvoicePath, "New Price Invoice");
         };
         AddSectionButton(actions, "Home", (_, _) => ShowModule("Dashboard"), width: 160);
         AddSectionButton(actions, "Manage Alerts", async () =>
@@ -6079,13 +6175,25 @@ internal sealed partial class MainForm : Form
 
         using var db = CreateDb();
         var invoice = db.PurchaseInvoices.AsNoTracking().FirstOrDefault(x => x.Id == id.Value && x.StoreId == _currentStoreId);
-        if (invoice is null || string.IsNullOrWhiteSpace(invoice.FilePath) || !File.Exists(invoice.FilePath))
+        OpenStoredDocument(invoice?.FilePath, "Purchase Invoice");
+    }
+
+    private void OpenStoredDocument(string? filePath, string documentName)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
-            MessageBox.Show(this, "The selected invoice does not have an attached file.", "Purchases", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, $"No {documentName.ToLowerInvariant()} is attached to this record.", documentName, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        Process.Start(new ProcessStartInfo(invoice.FilePath) { UseShellExecute = true });
+        try
+        {
+            Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), documentName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private async Task UpdateBankTransactionAsync(int id, string? category, string? checkNumber)
@@ -6448,6 +6556,7 @@ CREATE TABLE [dbo].[BankStatementTransactions] (
     [IsMatched] BIT NOT NULL DEFAULT 0,
     [MatchReference] NVARCHAR(200) NOT NULL DEFAULT '',
     [IncludeInProfitLoss] BIT NOT NULL DEFAULT 0,
+    [CheckCopyPath] NVARCHAR(1000) NOT NULL DEFAULT '',
     [ImportedUtc] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
     [CreatedByName] NVARCHAR(100) NOT NULL DEFAULT ''
 );
@@ -6482,6 +6591,7 @@ CREATE TABLE [dbo].[BankConnections] (
     IsMatched INTEGER NOT NULL DEFAULT 0,
     MatchReference TEXT NOT NULL DEFAULT '',
     IncludeInProfitLoss INTEGER NOT NULL DEFAULT 0,
+    CheckCopyPath TEXT NOT NULL DEFAULT '',
     ImportedUtc TEXT NOT NULL DEFAULT (datetime('now')),
     CreatedByName TEXT NOT NULL DEFAULT ''
 );
@@ -6530,6 +6640,8 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'MatchReference') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [MatchReference] NVARCHAR(200) NOT NULL CONSTRAINT DF_BankStatementTransactions_MatchReference DEFAULT '';
 IF COL_LENGTH('dbo.BankStatementTransactions', 'IncludeInProfitLoss') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [IncludeInProfitLoss] BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IncludeInProfitLoss DEFAULT 0;
+IF COL_LENGTH('dbo.BankStatementTransactions', 'CheckCopyPath') IS NULL
+    ALTER TABLE [dbo].[BankStatementTransactions] ADD [CheckCopyPath] NVARCHAR(1000) NOT NULL CONSTRAINT DF_BankStatementTransactions_CheckCopyPath DEFAULT '';
 IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BankConnections')
 CREATE TABLE [dbo].[BankConnections] (
     [Id] INT IDENTITY(1,1) PRIMARY KEY,
@@ -6583,6 +6695,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await addColumn("IsMatched", "IsMatched INTEGER NOT NULL DEFAULT 0");
         await addColumn("MatchReference", "MatchReference TEXT NOT NULL DEFAULT ''");
         await addColumn("IncludeInProfitLoss", "IncludeInProfitLoss INTEGER NOT NULL DEFAULT 0");
+        await addColumn("CheckCopyPath", "CheckCopyPath TEXT NOT NULL DEFAULT ''");
         await ExecuteBankSchemaCommandAsync(conn, @"CREATE TABLE IF NOT EXISTS BankConnections (
     Id INTEGER PRIMARY KEY AUTOINCREMENT,
     StoreId INTEGER NOT NULL,
@@ -6653,8 +6766,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = conn is SqlConnection
-            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
-            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
+            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss, CheckCopyPath FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
+            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss, CheckCopyPath FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
         AddParam(cmd, "@sid", _currentStoreId);
         AddBankStatementDatePeriodParams(cmd, conn, month, year);
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -6674,7 +6787,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
                 reader.IsDBNull(7) ? "Statement Import" : reader[7]?.ToString() ?? "Statement Import",
                 !reader.IsDBNull(8) && Convert.ToBoolean(reader[8]),
                 reader.IsDBNull(9) ? "" : reader[9]?.ToString() ?? "",
-                !reader.IsDBNull(10) && Convert.ToBoolean(reader[10])));
+                !reader.IsDBNull(10) && Convert.ToBoolean(reader[10]),
+                reader.IsDBNull(11) ? "" : reader[11]?.ToString() ?? ""));
         }
         return rows;
     }
@@ -6724,6 +6838,19 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "UPDATE BankStatementTransactions SET IncludeInProfitLoss=@include WHERE Id=@id AND StoreId=@sid";
         AddParam(cmd, "@include", include);
+        AddParam(cmd, "@id", id);
+        AddParam(cmd, "@sid", _currentStoreId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task UpdateBankCheckCopyPathAsync(int id, string checkCopyPath)
+    {
+        await EnsureBankStatementTablesAsync();
+        await using var conn = CreateBankConnection();
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE BankStatementTransactions SET CheckCopyPath=@path WHERE Id=@id AND StoreId=@sid";
+        AddParam(cmd, "@path", checkCopyPath);
         AddParam(cmd, "@id", id);
         AddParam(cmd, "@sid", _currentStoreId);
         await cmd.ExecuteNonQueryAsync();
@@ -6837,6 +6964,73 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             AddParam(command, "@include", DefaultIncludeInProfitLoss(transaction.Category, transaction.Credit, transaction.Debit));
             await command.ExecuteNonQueryAsync();
         }
+    }
+
+    private async Task AttachOrOpenBankCheckCopyAsync(BankStatementGridRow row)
+    {
+        if (!IsBankCheckTransaction(row.Check, row.Description))
+        {
+            MessageBox.Show(this, "This transaction is not identified as a check transaction.", "Check Copy",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (File.Exists(row.CheckCopyPath))
+        {
+            OpenStoredDocument(row.CheckCopyPath, "Check Copy");
+            return;
+        }
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Attach Check Copy",
+            Filter = "Check copies (*.pdf;*.png;*.jpg;*.jpeg;*.tif;*.tiff)|*.pdf;*.png;*.jpg;*.jpeg;*.tif;*.tiff|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        var folder = Path.Combine(_paths.AppDataDirectory, "Bank Check Copies", $"Store_{_currentStoreId}", row.Date.ToString("yyyy-MM"));
+        Directory.CreateDirectory(folder);
+        var checkLabel = string.IsNullOrWhiteSpace(row.Check) ? $"Transaction_{row.Id}" : $"Check_{row.Check}";
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+            checkLabel = checkLabel.Replace(invalid, '_');
+        var extension = Path.GetExtension(dialog.FileName);
+        var targetPath = Path.Combine(folder, $"{row.Date:yyyy-MM-dd}_{checkLabel}_{row.Id}{extension}");
+        File.Copy(dialog.FileName, targetPath, overwrite: true);
+        await UpdateBankCheckCopyPathAsync(row.Id, targetPath);
+        OpenStoredDocument(targetPath, "Check Copy");
+    }
+
+    private static bool IsBankCheckTransaction(string? checkNumber, string? description)
+        => !string.IsNullOrWhiteSpace(checkNumber)
+           || (!string.IsNullOrWhiteSpace(description) && description.Contains("check", StringComparison.OrdinalIgnoreCase));
+
+    private static string ResolvePriceAlertInvoicePath(
+        IReadOnlyList<PurchaseInvoice> invoices,
+        int? purchaseInvoiceId,
+        string? invoiceNumber,
+        string? vendorName,
+        DateOnly effectiveDate)
+    {
+        var available = invoices.Where(x => !string.IsNullOrWhiteSpace(x.FilePath) && File.Exists(x.FilePath));
+        if (purchaseInvoiceId.HasValue)
+        {
+            var byId = available.FirstOrDefault(x => x.Id == purchaseInvoiceId.Value);
+            if (byId is not null)
+                return byId.FilePath;
+        }
+
+        var normalizedInvoice = invoiceNumber?.Trim() ?? "";
+        var normalizedVendor = vendorName?.Trim() ?? "";
+        var exact = available
+            .Where(x => !string.IsNullOrWhiteSpace(normalizedInvoice) &&
+                        string.Equals(x.InvoiceNumber.Trim(), normalizedInvoice, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => string.Equals(x.VendorName.Trim(), normalizedVendor, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(x => Math.Abs(x.InvoiceDate.DayNumber - effectiveDate.DayNumber))
+            .FirstOrDefault();
+        return exact?.FilePath ?? "";
     }
 
     private async Task<(int Month, int Year)?> ImportBankStatementAsync(int month, int year, Func<Task> refreshAsync)
@@ -8550,7 +8744,8 @@ internal sealed record BankStatementRow(
     string Source = "Statement Import",
     bool IsMatched = false,
     string MatchReference = "",
-    bool IncludeInProfitLoss = false);
+    bool IncludeInProfitLoss = false,
+    string CheckCopyPath = "");
 
 internal sealed class PurchaseInvoiceGridRow
 {
@@ -8561,6 +8756,7 @@ internal sealed class PurchaseInvoiceGridRow
     public string Invoice { get; set; } = "";
     public decimal Total { get; set; }
     public string Attachment { get; set; } = "";
+    public string FilePath { get; set; } = "";
     public string Status { get; set; } = "";
 }
 
@@ -8572,11 +8768,13 @@ internal sealed class PriceAlertGridRow
     public string Product { get; set; } = "";
     public string SKU { get; set; } = "";
     public decimal OldCost { get; set; }
-    public string OldInvoice { get; set; } = "";
-    public string OldWholesaler { get; set; } = "";
+    public string OldInvoicePdf { get; set; } = "";
+    public string OldInvoicePath { get; set; } = "";
+    public string OldInvoiceDetails { get; set; } = "";
     public decimal NewCost { get; set; }
-    public string NewInvoice { get; set; } = "";
-    public string NewDistributor { get; set; } = "";
+    public string NewInvoicePdf { get; set; } = "";
+    public string NewInvoicePath { get; set; } = "";
+    public string NewInvoiceDetails { get; set; } = "";
     public string Change { get; set; } = "";
     public string Status { get; set; } = "";
     public DateTime Created { get; set; }
@@ -8595,6 +8793,9 @@ internal sealed class BankStatementGridRow
     public bool Matched { get; set; }
     public string MatchReference { get; set; } = "";
     public string Check { get; set; } = "";
+    public string CheckCopyAction { get; set; } = "";
+    [System.ComponentModel.Browsable(false)]
+    public string CheckCopyPath { get; set; } = "";
 }
 
 internal sealed class CheckPayoutGridRow
