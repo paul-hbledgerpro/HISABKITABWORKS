@@ -29,8 +29,9 @@ internal sealed class InvoiceInboxProvisioningForm : Form
         BackColor = DeveloperTheme.Bg;
         Font = DeveloperTheme.Body();
         StartPosition = FormStartPosition.CenterParent;
-        Size = new Size(880, 650);
-        MinimumSize = new Size(760, 590);
+        ClientSize = new Size(900, 700);
+        MinimumSize = new Size(780, 640);
+        AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         MaximizeBox = false;
 
@@ -53,8 +54,8 @@ internal sealed class InvoiceInboxProvisioningForm : Form
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.Controls.Add(BuildHeader(), 0, 0);
         root.Controls.Add(BuildContent(), 0, 1);
         root.Controls.Add(BuildActions(), 0, 2);
@@ -111,21 +112,29 @@ internal sealed class InvoiceInboxProvisioningForm : Form
 
     private Control BuildContent()
     {
-        var card = new TableLayoutPanel
+        var viewport = new Panel
         {
             Dock = DockStyle.Fill,
             BackColor = Color.White,
-            Padding = new Padding(24, 18, 24, 18),
-            ColumnCount = 1,
-            RowCount = 7
+            AutoScroll = true
         };
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-        card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var card = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            BackColor = Color.White,
+            Padding = new Padding(24, 12, 24, 12),
+            ColumnCount = 1,
+            RowCount = 7,
+            Height = 414
+        };
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
 
         card.Controls.Add(ReadOnlyLine("CLIENT / BUSINESS", _account.BusinessName), 0, 0);
         card.Controls.Add(ReadOnlyLine("STORE GUID", _account.StoreGuid), 0, 1);
@@ -138,9 +147,11 @@ internal sealed class InvoiceInboxProvisioningForm : Form
             false,
             DeveloperTheme.Blue);
         note.BackColor = DeveloperTheme.PaleBlue;
-        note.Padding = new Padding(12);
+        note.Padding = new Padding(12, 6, 12, 6);
+        note.AutoEllipsis = true;
         card.Controls.Add(note, 0, 6);
-        return card;
+        viewport.Controls.Add(card);
+        return viewport;
     }
 
     private Control BuildActions()
@@ -314,8 +325,8 @@ internal sealed class InvoiceInboxProvisioningForm : Form
     private static Control Field(string label, Control control)
     {
         var panel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 44));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
         control.Dock = DockStyle.Fill;
         panel.Controls.Add(DeveloperTheme.Label(label, true), 0, 0);
         panel.Controls.Add(control, 0, 1);
