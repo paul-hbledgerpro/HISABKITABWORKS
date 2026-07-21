@@ -4070,12 +4070,13 @@ internal sealed partial class MainForm : Form
 
     private Control BuildPurchases()
     {
-        var root = SectionRoot(260, 72);
-        var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = WinTheme.Bg };
+        var root = SectionRoot(318, 72);
+        var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, BackColor = WinTheme.Bg };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 82));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
-        top.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
-        top.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
+        top.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+        top.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
+        top.RowStyles.Add(new RowStyle(SizeType.Percent, 18));
         root.Controls.Add(top, 0, 0);
 
         var headerShell = WinTheme.BorderedPanel(10);
@@ -4130,12 +4131,21 @@ internal sealed partial class MainForm : Form
         addLine.Margin = new Padding(8, 8, 8, 8);
         line.Controls.Add(addLine, 4, 1);
 
+        var periodShell = WinTheme.BorderedPanel(6);
+        periodShell.Dock = DockStyle.Fill;
+        periodShell.Margin = new Padding(4, 0, 8, 6);
+        top.Controls.Add(periodShell, 0, 2);
+        var purchasePeriod = CreateStandardPeriodCombo();
+        var periodLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1, BackColor = WinTheme.Panel };
+        periodShell.Controls.Add(periodLayout);
+        AddMockField(periodLayout, "Period *", purchasePeriod, 0, 0, 105);
+
         var stats = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 0) };
         top.Controls.Add(stats, 1, 0);
-        top.SetRowSpan(stats, 2);
-        var monthPurchases = MetricCard(stats, "Month Purchases", "$0.00", WinTheme.Text, "This Month", 255, 74);
+        top.SetRowSpan(stats, 3);
+        var monthPurchases = MetricCard(stats, "Period Purchases", "$0.00", WinTheme.Text, "Selected Period", 255, 74);
         var openInvoices = MetricCard(stats, "Open Invoices", "$0.00", WinTheme.Text, "0 Invoices", 255, 74);
-        var importedPdfs = MetricCard(stats, "Imported PDFs", "0", WinTheme.Text, "This Month", 255, 74);
+        var importedPdfs = MetricCard(stats, "Imported PDFs", "0", WinTheme.Text, "Selected Period", 255, 74);
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 8, 0, 8) };
         root.Controls.Add(actions, 0, 1);
@@ -4172,6 +4182,10 @@ internal sealed partial class MainForm : Form
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing purchases for selected store"), 0, 3);
         string? selectedPurchaseFilePath = null;
+        var purchaseFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var purchaseTo = DateTime.Today;
+        var previousPurchasePeriod = "Current Month";
+        var changingPurchasePeriod = false;
 
         void clearPurchaseForm()
         {
@@ -4233,8 +4247,10 @@ internal sealed partial class MainForm : Form
         async Task refreshAsync()
         {
             var invoices = await _purchaseService.GetInvoicesAsync(_currentStoreId);
-            var monthRows = invoices.Where(x => x.InvoiceDate.Month == DateTime.Today.Month && x.InvoiceDate.Year == DateTime.Today.Year).ToList();
-            grid.DataSource = invoices
+            var periodRows = invoices
+                .Where(x => x.InvoiceDate >= DateOnly.FromDateTime(purchaseFrom) && x.InvoiceDate <= DateOnly.FromDateTime(purchaseTo))
+                .ToList();
+            grid.DataSource = periodRows
                 .Select(x => new PurchaseInvoiceGridRow
                 {
                     Id = x.Id,
@@ -4248,16 +4264,34 @@ internal sealed partial class MainForm : Form
                 })
                 .ToList();
             HideId(grid);
-            monthPurchases.Text = MoneyText(monthRows.Sum(x => x.Total));
-            openInvoices.Text = MoneyText(invoices.Sum(x => x.Total));
+            monthPurchases.Text = MoneyText(periodRows.Sum(x => x.Total));
+            openInvoices.Text = MoneyText(periodRows.Sum(x => x.Total));
             if (openInvoices.Parent?.Controls.OfType<Label>().LastOrDefault() is { } openInvoiceSubtitle)
-                openInvoiceSubtitle.Text = $"{invoices.Count} Invoices";
-            importedPdfs.Text = invoices.Count(x => !string.IsNullOrWhiteSpace(x.FilePath)).ToString(CultureInfo.InvariantCulture);
+                openInvoiceSubtitle.Text = $"{periodRows.Count} Invoices";
+            importedPdfs.Text = periodRows.Count(x => !string.IsNullOrWhiteSpace(x.FilePath)).ToString(CultureInfo.InvariantCulture);
         }
         void refresh()
         {
             _ = refreshAsync();
         }
+        purchasePeriod.SelectedIndexChanged += (_, _) =>
+        {
+            if (changingPurchasePeriod)
+                return;
+
+            if (!TryResolveStandardPeriod(purchasePeriod.Text, purchaseFrom, purchaseTo, out var selectedFrom, out var selectedTo))
+            {
+                changingPurchasePeriod = true;
+                purchasePeriod.SelectedItem = previousPurchasePeriod;
+                changingPurchasePeriod = false;
+                return;
+            }
+
+            purchaseFrom = selectedFrom;
+            purchaseTo = selectedTo;
+            previousPurchasePeriod = purchasePeriod.Text;
+            refresh();
+        };
         grid.SelectionChanged += async (_, _) => await loadSelectedInvoiceAsync();
         AddSectionButton(actions, "Home", (_, _) => ShowModule("Dashboard"), width: 150);
         AddSectionButton(actions, "New Purchase", (_, _) => clearPurchaseForm(), width: 185);
@@ -5018,7 +5052,7 @@ internal sealed partial class MainForm : Form
 
     private Control BuildPriceAlerts()
     {
-        var root = SectionRoot(200, 72);
+        var root = SectionRoot(220, 72);
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = WinTheme.Bg };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
@@ -5038,6 +5072,7 @@ internal sealed partial class MainForm : Form
         var minChange = SectionCombo("All", "5%+", "10%+", "20%+");
         var product = SectionTextBox("Search by product name or SKU...");
         var threshold = SectionTextBox("10.00", rightAlign: true);
+        var alertPeriod = CreateStandardPeriodCombo();
         AddMockField(filters, "Category", category, 0, 0, 105);
         AddMockField(filters, "Supplier", supplier, 1, 0, 105);
         AddMockField(filters, "Status", status, 2, 0, 90);
@@ -5045,7 +5080,8 @@ internal sealed partial class MainForm : Form
         AddMockField(filters, "Search Product", product, 1, 1, 135);
         AddMockField(filters, "Alert Threshold (%)", threshold, 2, 1, 155);
         AddMockField(filters, "Auto Alert", SectionCombo("On", "Off"), 0, 2, 105);
-        filters.SetColumnSpan(filters.GetControlFromPosition(0, 2)!, 3);
+        AddMockField(filters, "Period *", alertPeriod, 1, 2, 105);
+        filters.SetColumnSpan(filters.GetControlFromPosition(1, 2)!, 2);
 
         var statGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = WinTheme.Bg };
         statGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
@@ -5054,31 +5090,100 @@ internal sealed partial class MainForm : Form
         top.Controls.Add(statGrid, 1, 0);
         var newAlerts = MetricCard(statGrid, 0, 0, "New Alerts", "0", WinTheme.Red, "Unread alerts");
         var highPriority = MetricCard(statGrid, 1, 0, "High Priority", "0", WinTheme.Red, "Require attention");
-        var resolved = MetricCard(statGrid, 2, 0, "Resolved This Month", "0", WinTheme.Green, "Alerts resolved");
+        var resolved = MetricCard(statGrid, 2, 0, "Resolved", "0", WinTheme.Green, "Selected period");
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 8, 0, 8) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
+        grid.AutoGenerateColumns = false;
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        grid.ScrollBars = ScrollBars.Both;
+        grid.ReadOnly = false;
+        grid.EditMode = DataGridViewEditMode.EditOnEnter;
+        grid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Select",
+            DataPropertyName = nameof(PriceAlertGridRow.Select),
+            HeaderText = "Select",
+            ReadOnly = false,
+            Width = 62
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", DataPropertyName = nameof(PriceAlertGridRow.Id), Visible = false, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Priority", DataPropertyName = nameof(PriceAlertGridRow.Priority), HeaderText = "Priority", ReadOnly = true, Width = 82 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Product", DataPropertyName = nameof(PriceAlertGridRow.Product), HeaderText = "Product", ReadOnly = true, Width = 190 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "SKU", DataPropertyName = nameof(PriceAlertGridRow.SKU), HeaderText = "SKU", ReadOnly = true, Width = 105 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldCost", DataPropertyName = nameof(PriceAlertGridRow.OldCost), HeaderText = "Old Price", ReadOnly = true, Width = 92, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldInvoice", DataPropertyName = nameof(PriceAlertGridRow.OldInvoice), HeaderText = "Old Price Invoice #", ReadOnly = true, Width = 145 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldWholesaler", DataPropertyName = nameof(PriceAlertGridRow.OldWholesaler), HeaderText = "Old Price Wholesaler", ReadOnly = true, Width = 175 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewCost", DataPropertyName = nameof(PriceAlertGridRow.NewCost), HeaderText = "New Price", ReadOnly = true, Width = 92, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewInvoice", DataPropertyName = nameof(PriceAlertGridRow.NewInvoice), HeaderText = "New Price Invoice #", ReadOnly = true, Width = 145 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewDistributor", DataPropertyName = nameof(PriceAlertGridRow.NewDistributor), HeaderText = "New Price Distributor", ReadOnly = true, Width = 175 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Change", DataPropertyName = nameof(PriceAlertGridRow.Change), HeaderText = "Change", ReadOnly = true, Width = 90 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PriceAlertGridRow.Status), HeaderText = "Status", ReadOnly = true, Width = 82 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Created", DataPropertyName = nameof(PriceAlertGridRow.Created), HeaderText = "Created", ReadOnly = true, Width = 145, DefaultCellStyle = new DataGridViewCellStyle { Format = "g" } });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing price alerts for selected store"), 0, 3);
+
+        var alertFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var alertTo = DateTime.Today;
+        var previousAlertPeriod = "Current Month";
+        var changingAlertPeriod = false;
 
         void refresh()
         {
             using var db = CreateDb();
-            var rows = db.PriceAlerts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).OrderByDescending(x => x.CreatedUtc).ToList();
+            var fromDate = DateOnly.FromDateTime(alertFrom);
+            var toDate = DateOnly.FromDateTime(alertTo);
+            var rows = db.PriceAlerts.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.InvoiceDate >= fromDate && x.InvoiceDate <= toDate)
+                .OrderByDescending(x => x.CreatedUtc)
+                .ToList();
             grid.DataSource = rows
                 .Select(x =>
                 {
                     var pct = x.OldUnitCost == 0 ? 0 : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m;
                     var priority = Math.Abs(pct) >= 10m ? "High" : Math.Abs(pct) >= 5m ? "Medium" : "Low";
-                    return new { x.Id, Select = false, Priority = x.IsRead ? "Read" : priority, Product = x.ProductName, SKU = x.Sku, Supplier = x.VendorName, OldCost = x.OldUnitCost, NewCost = x.NewUnitCost, Change = PercentText(pct), AlertPrice = x.NewUnitCost, Status = x.IsRead ? "Read" : "New", Created = x.CreatedUtc };
+                    return new PriceAlertGridRow
+                    {
+                        Id = x.Id,
+                        Select = false,
+                        Priority = x.IsRead ? "Read" : priority,
+                        Product = x.ProductName,
+                        SKU = x.Sku,
+                        OldCost = x.OldUnitCost,
+                        OldInvoice = x.OldInvoiceNumber,
+                        OldWholesaler = x.OldVendorName,
+                        NewCost = x.NewUnitCost,
+                        NewInvoice = x.InvoiceNumber,
+                        NewDistributor = x.VendorName,
+                        Change = PercentText(pct),
+                        Status = x.IsRead ? "Read" : "New",
+                        Created = x.CreatedUtc
+                    };
                 })
                 .ToList();
-            HideId(grid);
             newAlerts.Text = rows.Count(x => !x.IsRead).ToString(CultureInfo.InvariantCulture);
             highPriority.Text = rows.Count(x => !x.IsRead && Math.Abs(x.OldUnitCost == 0 ? 0 : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m) >= 10m).ToString(CultureInfo.InvariantCulture);
-            resolved.Text = rows.Count(x => x.IsRead && x.ReadUtc?.Month == DateTime.UtcNow.Month && x.ReadUtc?.Year == DateTime.UtcNow.Year).ToString(CultureInfo.InvariantCulture);
+            resolved.Text = rows.Count(x => x.IsRead).ToString(CultureInfo.InvariantCulture);
         }
+        alertPeriod.SelectedIndexChanged += (_, _) =>
+        {
+            if (changingAlertPeriod)
+                return;
+
+            if (!TryResolveStandardPeriod(alertPeriod.Text, alertFrom, alertTo, out var selectedFrom, out var selectedTo))
+            {
+                changingAlertPeriod = true;
+                alertPeriod.SelectedItem = previousAlertPeriod;
+                changingAlertPeriod = false;
+                return;
+            }
+
+            alertFrom = selectedFrom;
+            alertTo = selectedTo;
+            previousAlertPeriod = alertPeriod.Text;
+            refresh();
+        };
         AddSectionButton(actions, "Home", (_, _) => ShowModule("Dashboard"), width: 160);
         AddSectionButton(actions, "Manage Alerts", async () =>
         {
@@ -5252,7 +5357,7 @@ internal sealed partial class MainForm : Form
     private Control BuildReports()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = WinTheme.Bg, Padding = new Padding(2) };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 205));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 230));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
@@ -5296,7 +5401,7 @@ internal sealed partial class MainForm : Form
         var includeDetails = SectionCombo("Include Details", "Summary Only");
         AddMockField(gen, "Report Type *", type, 0, 1, 120);
         gen.SetColumnSpan(gen.GetControlFromPosition(0, 1)!, 2);
-        AddMockField(gen, "Period *", period, 2, 1, 70);
+        AddMockField(gen, "Period *", period, 2, 1, 110);
         gen.SetColumnSpan(gen.GetControlFromPosition(2, 1)!, 2);
         AddMockField(gen, "Format", format, 0, 2, 80);
         AddMockField(gen, "Details", includeDetails, 1, 2, 80);
@@ -5510,6 +5615,75 @@ internal sealed partial class MainForm : Form
         };
         previewReport();
         return ModuleShell("\uE749", "Reports", "Generate, export, and review store reports.", root);
+    }
+
+    private static ComboBox CreateStandardPeriodCombo()
+    {
+        var period = SectionCombo(
+            "Today",
+            "Yesterday",
+            "Current Week",
+            "Previous Week",
+            "Current Month",
+            "Previous Month",
+            "Current Year",
+            "Previous Year",
+            "Custom");
+        period.SelectedItem = "Current Month";
+        return period;
+    }
+
+    private bool TryResolveStandardPeriod(
+        string selection,
+        DateTime currentFrom,
+        DateTime currentTo,
+        out DateTime selectedFrom,
+        out DateTime selectedTo)
+    {
+        var today = DateTime.Today;
+        var firstDayOfWeek = CultureInfo.CurrentCulture.DateTimeFormat.FirstDayOfWeek;
+        var daysFromWeekStart = (7 + (int)today.DayOfWeek - (int)firstDayOfWeek) % 7;
+        var currentWeekStart = today.AddDays(-daysFromWeekStart);
+
+        selectedFrom = currentFrom;
+        selectedTo = currentTo;
+        switch (selection)
+        {
+            case "Today":
+                selectedFrom = selectedTo = today;
+                return true;
+            case "Yesterday":
+                selectedFrom = selectedTo = today.AddDays(-1);
+                return true;
+            case "Current Week":
+                selectedFrom = currentWeekStart;
+                selectedTo = today;
+                return true;
+            case "Previous Week":
+                selectedFrom = currentWeekStart.AddDays(-7);
+                selectedTo = currentWeekStart.AddDays(-1);
+                return true;
+            case "Current Month":
+                selectedFrom = new DateTime(today.Year, today.Month, 1);
+                selectedTo = today;
+                return true;
+            case "Previous Month":
+                selectedTo = new DateTime(today.Year, today.Month, 1).AddDays(-1);
+                selectedFrom = new DateTime(selectedTo.Year, selectedTo.Month, 1);
+                return true;
+            case "Current Year":
+                selectedFrom = new DateTime(today.Year, 1, 1);
+                selectedTo = today;
+                return true;
+            case "Previous Year":
+                selectedFrom = new DateTime(today.Year - 1, 1, 1);
+                selectedTo = new DateTime(today.Year - 1, 12, 31);
+                return true;
+            case "Custom":
+                return TrySelectCustomReportPeriod(currentFrom, currentTo, out selectedFrom, out selectedTo);
+            default:
+                return false;
+        }
     }
 
     private bool TrySelectCustomReportPeriod(DateTime currentFrom, DateTime currentTo, out DateTime selectedFrom, out DateTime selectedTo)
@@ -8382,6 +8556,24 @@ internal sealed class PurchaseInvoiceGridRow
     public decimal Total { get; set; }
     public string Attachment { get; set; } = "";
     public string Status { get; set; } = "";
+}
+
+internal sealed class PriceAlertGridRow
+{
+    public int Id { get; set; }
+    public bool Select { get; set; }
+    public string Priority { get; set; } = "";
+    public string Product { get; set; } = "";
+    public string SKU { get; set; } = "";
+    public decimal OldCost { get; set; }
+    public string OldInvoice { get; set; } = "";
+    public string OldWholesaler { get; set; } = "";
+    public decimal NewCost { get; set; }
+    public string NewInvoice { get; set; } = "";
+    public string NewDistributor { get; set; } = "";
+    public string Change { get; set; } = "";
+    public string Status { get; set; } = "";
+    public DateTime Created { get; set; }
 }
 
 internal sealed class BankStatementGridRow

@@ -498,6 +498,8 @@ public static class DatabaseSchemaService
                     [Direction] INT NOT NULL DEFAULT 0,
                     [AlertType] INT NOT NULL DEFAULT 0,
                     [VendorName] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [OldVendorName] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [OldInvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
                     [OtherVendorName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [InvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
                     [InvoiceDate] DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME()),
@@ -522,6 +524,8 @@ public static class DatabaseSchemaService
                 "IF COL_LENGTH(N'[dbo].[PriceAlerts]', N'NewPrice') IS NOT NULL UPDATE [dbo].[PriceAlerts] SET [NewUnitCost] = CONVERT(DECIMAL(18,4), [NewPrice])");
             await EnsureColumnAsync(conn, "PriceAlerts", "Direction", "INT NOT NULL DEFAULT 0");
             await EnsureColumnAsync(conn, "PriceAlerts", "AlertType", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "PriceAlerts", "OldVendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PriceAlerts", "OldInvoiceNumber", "NVARCHAR(100) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "OtherVendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "InvoiceNumber", "NVARCHAR(100) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "InvoiceDate",
