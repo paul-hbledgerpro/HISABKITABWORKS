@@ -5052,7 +5052,7 @@ internal sealed partial class MainForm : Form
 
     private Control BuildPriceAlerts()
     {
-        var root = SectionRoot(220, 72);
+        var root = SectionRoot(246, 72);
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = WinTheme.Bg };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
@@ -5096,31 +5096,37 @@ internal sealed partial class MainForm : Form
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
         grid.AutoGenerateColumns = false;
-        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         grid.ScrollBars = ScrollBars.Both;
         grid.ReadOnly = false;
         grid.EditMode = DataGridViewEditMode.EditOnEnter;
+        grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.EnableResizing;
+        grid.ColumnHeadersHeight = 52;
+        grid.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.True;
+        grid.RowTemplate.Height = 30;
         grid.Columns.Add(new DataGridViewCheckBoxColumn
         {
             Name = "Select",
             DataPropertyName = nameof(PriceAlertGridRow.Select),
             HeaderText = "Select",
             ReadOnly = false,
-            Width = 62
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+            Width = 62,
+            MinimumWidth = 62
         });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", DataPropertyName = nameof(PriceAlertGridRow.Id), Visible = false, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Priority", DataPropertyName = nameof(PriceAlertGridRow.Priority), HeaderText = "Priority", ReadOnly = true, Width = 82 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Product", DataPropertyName = nameof(PriceAlertGridRow.Product), HeaderText = "Product", ReadOnly = true, Width = 190 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "SKU", DataPropertyName = nameof(PriceAlertGridRow.SKU), HeaderText = "SKU", ReadOnly = true, Width = 105 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldCost", DataPropertyName = nameof(PriceAlertGridRow.OldCost), HeaderText = "Old Price", ReadOnly = true, Width = 92, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldInvoice", DataPropertyName = nameof(PriceAlertGridRow.OldInvoice), HeaderText = "Old Price Invoice #", ReadOnly = true, Width = 145 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldWholesaler", DataPropertyName = nameof(PriceAlertGridRow.OldWholesaler), HeaderText = "Old Price Wholesaler", ReadOnly = true, Width = 175 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewCost", DataPropertyName = nameof(PriceAlertGridRow.NewCost), HeaderText = "New Price", ReadOnly = true, Width = 92, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewInvoice", DataPropertyName = nameof(PriceAlertGridRow.NewInvoice), HeaderText = "New Price Invoice #", ReadOnly = true, Width = 145 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewDistributor", DataPropertyName = nameof(PriceAlertGridRow.NewDistributor), HeaderText = "New Price Distributor", ReadOnly = true, Width = 175 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Change", DataPropertyName = nameof(PriceAlertGridRow.Change), HeaderText = "Change", ReadOnly = true, Width = 90 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PriceAlertGridRow.Status), HeaderText = "Status", ReadOnly = true, Width = 82 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Created", DataPropertyName = nameof(PriceAlertGridRow.Created), HeaderText = "Created", ReadOnly = true, Width = 145, DefaultCellStyle = new DataGridViewCellStyle { Format = "g" } });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Priority", DataPropertyName = nameof(PriceAlertGridRow.Priority), HeaderText = "Priority", ReadOnly = true, MinimumWidth = 82, FillWeight = 60 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Product", DataPropertyName = nameof(PriceAlertGridRow.Product), HeaderText = "Product", ReadOnly = true, MinimumWidth = 175, FillWeight = 145 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "SKU", DataPropertyName = nameof(PriceAlertGridRow.SKU), HeaderText = "SKU", ReadOnly = true, MinimumWidth = 95, FillWeight = 78 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldCost", DataPropertyName = nameof(PriceAlertGridRow.OldCost), HeaderText = "Old Price", ReadOnly = true, MinimumWidth = 88, FillWeight = 70, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldInvoice", DataPropertyName = nameof(PriceAlertGridRow.OldInvoice), HeaderText = "Old Price Invoice #", ReadOnly = true, MinimumWidth = 130, FillWeight = 110 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldWholesaler", DataPropertyName = nameof(PriceAlertGridRow.OldWholesaler), HeaderText = "Old Price Wholesaler", ReadOnly = true, MinimumWidth = 155, FillWeight = 135 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewCost", DataPropertyName = nameof(PriceAlertGridRow.NewCost), HeaderText = "New Price", ReadOnly = true, MinimumWidth = 88, FillWeight = 70, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewInvoice", DataPropertyName = nameof(PriceAlertGridRow.NewInvoice), HeaderText = "New Price Invoice #", ReadOnly = true, MinimumWidth = 130, FillWeight = 110 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewDistributor", DataPropertyName = nameof(PriceAlertGridRow.NewDistributor), HeaderText = "New Price Distributor", ReadOnly = true, MinimumWidth = 155, FillWeight = 135 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Change", DataPropertyName = nameof(PriceAlertGridRow.Change), HeaderText = "Change", ReadOnly = true, MinimumWidth = 88, FillWeight = 70 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PriceAlertGridRow.Status), HeaderText = "Status", ReadOnly = true, MinimumWidth = 82, FillWeight = 65 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Created", DataPropertyName = nameof(PriceAlertGridRow.Created), HeaderText = "Created", ReadOnly = true, MinimumWidth = 130, FillWeight = 110, DefaultCellStyle = new DataGridViewCellStyle { Format = "g" } });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing price alerts for selected store"), 0, 3);
 
@@ -5132,10 +5138,10 @@ internal sealed partial class MainForm : Form
         void refresh()
         {
             using var db = CreateDb();
-            var fromDate = DateOnly.FromDateTime(alertFrom);
-            var toDate = DateOnly.FromDateTime(alertTo);
+            var fromDate = alertFrom.Date;
+            var toExclusive = alertTo.Date.AddDays(1);
             var rows = db.PriceAlerts.AsNoTracking()
-                .Where(x => x.StoreId == _currentStoreId && x.InvoiceDate >= fromDate && x.InvoiceDate <= toDate)
+                .Where(x => x.StoreId == _currentStoreId && x.CreatedUtc >= fromDate && x.CreatedUtc < toExclusive)
                 .OrderByDescending(x => x.CreatedUtc)
                 .ToList();
             grid.DataSource = rows
