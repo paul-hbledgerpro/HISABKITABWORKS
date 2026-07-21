@@ -1,12 +1,32 @@
 # HISAB KITAB WORKS — DEVELOPER HANDOFF
 
-Last updated: July 20, 2026
+Last updated: July 21, 2026
 
-Current release: `1.0.120`
+Current release: `1.0.123`
 
 Git branch: `agent/payroll-scheduling-account-billing`
 
-Release commit before this handoff: `91620a2` (`Add protected invoice inbox and release 1.0.120`)
+Latest completed feature commit: `97775b7` (`Fix price alert visibility and scaling`)
+
+## Latest continuation checkpoint — 1.0.123
+
+- Price Alerts now filters by the alert creation date rather than the source
+  invoice date. This restores existing alerts when a user selects Current Month.
+- The Galaxy Elgin database was checked read-only and contains 9 price alerts,
+  408 product-cost records, 49 invoices, and 456 invoice lines.
+- The Price Alerts filter area and grid were resized for Windows display scaling.
+  Wrapped headers, larger header/row heights, proportional columns, and minimum
+  widths prevent the added invoice/vendor columns from being clipped.
+- The client, License Generator, and Account Manager Release builds completed
+  with zero errors and zero warnings.
+- Release packages for all three applications were rebuilt as version 1.0.123.
+- Generated installers and updater ZIPs are not committed to Git; they are
+  published in the GitHub release and copied to Google Drive under
+  `Important Docs/HB LEDGER PRO/HISAB KITAB WORKS/Release 1.0.123`.
+
+At the work PC, use the branch commands in section 2. The only intentionally
+untracked local item at the home PC is `tmp/`; do not add it without reviewing
+its contents.
 
 This is the canonical continuation document for moving work between the home PC
 and work PC. It replaces the obsolete WPF-era handoff that previously occupied
