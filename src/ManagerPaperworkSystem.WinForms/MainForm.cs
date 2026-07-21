@@ -4660,9 +4660,9 @@ internal sealed partial class MainForm : Form
                 if (gridRow.DataBoundItem is not BankStatementGridRow bankRow || !grid.Columns.Contains("CheckCopy"))
                     continue;
                 gridRow.Cells["CheckCopy"].ToolTipText = File.Exists(bankRow.CheckCopyPath)
-                    ? bankRow.CheckCopyPath
+                    ? "View the attached check copy inside HISAB KITAB."
                     : IsBankCheckTransaction(bankRow.Check, bankRow.Description)
-                        ? "Attach the check image or PDF downloaded from the bank."
+                        ? "Plaid provides the check number and transaction details, but not the bank's check image. Attach the bank-provided PDF or image here."
                         : "This is not identified as a check transaction.";
             }
             var debitTotal = rows.Sum(x => x.Debit);
@@ -6188,7 +6188,8 @@ internal sealed partial class MainForm : Form
 
         try
         {
-            Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true });
+            using var viewer = new StoredDocumentViewerForm(filePath, documentName);
+            viewer.ShowDialog(this);
         }
         catch (Exception ex)
         {
@@ -6988,6 +6989,10 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             CheckFileExists = true,
             Multiselect = false
         };
+        MessageBox.Show(this,
+            "The connected bank feed provides this check transaction and its check number, but it does not provide the scanned check image. " +
+            "Select the check PDF or image downloaded from the bank. It will be attached to this transaction and will open inside HISAB KITAB.",
+            "Attach Bank Check Copy", MessageBoxButtons.OK, MessageBoxIcon.Information);
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
 
