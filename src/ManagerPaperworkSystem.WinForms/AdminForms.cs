@@ -232,53 +232,6 @@ internal sealed class UserAccountsForm : Form
     }
 }
 
-internal sealed class DatabaseSettingsForm : Form
-{
-    private readonly IAppPaths _paths;
-    private readonly TextBox _settings = WinTheme.TextBox();
-
-    public DatabaseSettingsForm(IAppPaths paths)
-    {
-        _paths = paths;
-        WinTheme.Apply(this);
-        Text = "Database Settings - HISAB KITAB";
-        Size = new Size(900, 520);
-        _settings.Multiline = true;
-        _settings.Dock = DockStyle.Fill;
-        _settings.ScrollBars = ScrollBars.Both;
-        _settings.ReadOnly = true;
-        Controls.Add(_settings);
-        Load += (_, _) => LoadSettingsText();
-    }
-
-    private void LoadSettingsText()
-    {
-        var lines = new List<string>
-        {
-            "HISAB KITAB Database Settings",
-            "",
-            "App Data Folder:",
-            _paths.AppDataDirectory,
-            "",
-            "SQLite Database Path:",
-            _paths.DatabasePath,
-            "",
-            "Connection Settings File:",
-            AppBootstrap.ConnectionSettingsPath,
-            "",
-            "Store Connections File:",
-            AppBootstrap.StoreConnectionsPath,
-            ""
-        };
-        if (File.Exists(AppBootstrap.ConnectionSettingsPath))
-        {
-            lines.Add("connection_settings.json:");
-            lines.Add(AppBootstrap.RedactSensitiveText(File.ReadAllText(AppBootstrap.ConnectionSettingsPath)));
-        }
-        _settings.Text = string.Join(Environment.NewLine, lines);
-    }
-}
-
 internal sealed class CreateAccountForm : Form
 {
     private readonly IAuthService _auth;

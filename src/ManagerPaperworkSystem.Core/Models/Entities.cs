@@ -606,6 +606,12 @@ public sealed class PriceAlert : Entity
 
     [MaxLength(200)]
     public string VendorName { get; set; } = "";
+
+    [MaxLength(200)]
+    public string OldVendorName { get; set; } = "";
+
+    [MaxLength(100)]
+    public string OldInvoiceNumber { get; set; } = "";
     
     [MaxLength(200)]
     public string OtherVendorName { get; set; } = ""; // For cross-vendor alerts

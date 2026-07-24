@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "1.0.115"
+    [string]$Version = "1.0.127"
 )
 
 $ErrorActionPreference = "Stop"
@@ -114,7 +114,7 @@ $scripts = @(
 
 foreach ($script in $scripts) {
     Write-Host "Compiling $(Split-Path -Leaf $script) ..." -ForegroundColor Cyan
-    & $iscc $script
+    & $iscc "/DMyAppVersion=$Version" $script
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup compilation failed for $script (exit code $LASTEXITCODE)."
     }

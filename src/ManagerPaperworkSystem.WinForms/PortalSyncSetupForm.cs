@@ -221,11 +221,13 @@ internal sealed class PortalSyncSetupForm : Form
                 SaveSettings(showConfirmation: false);
                 _syncRunning = true;
                 ToggleActions(actions, false);
-                _status.Text = "Opening the protected Chrome profile and requesting yesterday's report...";
+                _status.Text =
+                    "Waiting for any automatic run to finish, then requesting yesterday's reports...";
                 var results = await PortalSyncService.RunDueAsync(
                     _paths,
                     true,
                     true,
+                    waitForExistingRun: true,
                     cancellationToken: _syncCancellation.Token);
                 if (!CanUpdateWindow())
                     return;

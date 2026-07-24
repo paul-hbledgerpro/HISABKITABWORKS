@@ -474,8 +474,49 @@ internal static class DeviceLicenseService
             return null;
         var protectedBytes = File.ReadAllBytes(ProtectedConnectionPath);
         var clear = ProtectedData.Unprotect(protectedBytes, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        return JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+        try
+        {
+            var stored = JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+            if (stored is null)
+                return null;
+
+            LocalSqlServerPolicy.MarkMigrationPendingIfRemote(stored);
+            var local = LocalSqlServerPolicy.Normalize(stored);
+            if (!ConnectionSettingsEqual(stored, local))
+                SaveProtectedConnection(local);
+            return local;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
     }
+
+    internal static void SaveProtectedConnection(DatabaseConnectionSettings settings)
+    {
+        settings = LocalSqlServerPolicy.Normalize(settings);
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
+        try
+        {
+            var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(ProtectedConnectionPath, protectedBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
+    }
+
+    private static bool ConnectionSettingsEqual(
+        DatabaseConnectionSettings left,
+        DatabaseConnectionSettings right)
+        => string.Equals(left.DatabaseType, right.DatabaseType, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Server, right.Server, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Database, right.Database, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Username, right.Username, StringComparison.Ordinal) &&
+           string.Equals(left.Password, right.Password, StringComparison.Ordinal) &&
+           string.Equals(left.ConnectionString, right.ConnectionString, StringComparison.Ordinal);
 
     private static DeviceIdentityRecord CreateIdentity()
     {
@@ -569,10 +610,7 @@ internal static class DeviceLicenseService
             payload.EncryptedConnection,
             payload.ConnectionNonce,
             payload.ConnectionTag);
-        var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
-        var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        File.WriteAllBytes(ProtectedConnectionPath, protectedBytes);
-        CryptographicOperations.ZeroMemory(clear);
+        SaveProtectedConnection(settings);
     }
 
     internal static DatabaseConnectionSettings DecryptConnectionPayload(
@@ -756,6 +794,9 @@ internal sealed class LicensedBusinessPayloadV1
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
     public string PayrollState { get; set; } = "";
+    public string InvoiceInboxApiUrl { get; set; } = "";
+    public string InvoiceInboxAddress { get; set; } = "";
+    public string InvoiceInboxApiToken { get; set; } = "";
     public bool IsPrimary { get; set; }
     public string EncryptedConnectionKey { get; set; } = "";
     public string EncryptedConnection { get; set; } = "";

@@ -16,6 +16,8 @@ internal sealed class LicenseActivationService
 
     public LicenseActivationService(string server, string username, string password)
     {
+        if (string.IsNullOrWhiteSpace(server))
+            throw new ArgumentException("Enter the shared licensing SQL Server.", nameof(server));
         _server = server.Trim();
         _username = username.Trim();
         _password = password;
@@ -25,14 +27,21 @@ internal sealed class LicenseActivationService
 
     public IReadOnlyList<string> ListBusinessDatabases()
     {
-        using var connection = new SqlConnection(ConnectionString("master"));
+        using var connection = new SqlConnection(LicensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(@"
-SELECT name
-FROM sys.databases
-WHERE database_id > 4 AND state_desc='ONLINE' AND name<>@licensingDatabase
-ORDER BY name", connection);
-        command.Parameters.AddWithValue("@licensingDatabase", LicensingDatabase);
+SELECT DISTINCT DatabaseName
+FROM (
+    SELECT NULLIF(LTRIM(RTRIM(DatabaseName)), '') AS DatabaseName
+    FROM dbo.CustomerBusinesses
+    WHERE IsActive=1
+    UNION
+    SELECT NULLIF(LTRIM(RTRIM(AssignedDatabases)), '')
+    FROM dbo.Licenses
+    WHERE IsActive=1
+) licensed
+WHERE DatabaseName IS NOT NULL
+ORDER BY DatabaseName", connection);
         using var reader = command.ExecuteReader();
         var databases = new List<string>();
         while (reader.Read())
@@ -42,6 +51,7 @@ ORDER BY name", connection);
 
     public void TestAndPrepareDatabase()
     {
+        LocalSqlServerPolicy.EnsureDatabaseExists(_server, LicensingDatabase, _username, _password);
         using var connection = new SqlConnection(LicensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(SchemaSql, connection) { CommandTimeout = 120 };
@@ -120,14 +130,12 @@ ORDER BY name", connection);
 
             EnsureBusinessCanBelongToCustomer(
                 subscription.CustomerId, storeGuid, databaseName, allowBusinessTransfer);
-            EnsurePhysicalDatabase(databaseName);
             UpsertAdditionalBusiness(subscription.CustomerId, storeGuid, databaseName, businessName);
             addedBusiness = !alreadyApproved;
         }
         else
         {
             SaveCustomerActivationMetadata(subscription.CustomerId, storeGuid, storeZip);
-            EnsurePhysicalDatabase(databaseName);
         }
 
         var devices = LoadDevices(subscription.LicenseId);
@@ -514,22 +522,6 @@ END", connection);
         command.ExecuteNonQuery();
     }
 
-    private void EnsurePhysicalDatabase(string storeGuid)
-    {
-        using var connection = new SqlConnection(ConnectionString("master"));
-        connection.Open();
-        using (var exists = new SqlCommand("SELECT COUNT(*) FROM sys.databases WHERE name=@name", connection))
-        {
-            exists.Parameters.AddWithValue("@name", storeGuid);
-            if (Convert.ToInt32(exists.ExecuteScalar()) > 0)
-                return;
-        }
-
-        var quoted = storeGuid.Replace("]", "]]", StringComparison.Ordinal);
-        using var create = new SqlCommand($"CREATE DATABASE [{quoted}]", connection) { CommandTimeout = 120 };
-        create.ExecuteNonQuery();
-    }
-
     private static DeviceLicenseRequestV2 RequestFromRegisteredPc(
         ClientSubscription subscription,
         IReadOnlyList<RegisteredLicensePc> devices,
@@ -586,6 +578,10 @@ END", connection);
         var licensedBusinesses = businesses.Select(business =>
         {
             var encrypted = EncryptConnection(business.DatabaseName, request.DevicePublicKey);
+            var invoiceInbox = InvoiceInboxLicenseProvisioningLoader.Load(
+                LicensingConnectionString,
+                subscription.CustomerId,
+                business.StoreGuid);
             return new LicensedBusinessPayloadV1
             {
                 BusinessId = business.Id,
@@ -594,6 +590,9 @@ END", connection);
                 StoreGuid = business.StoreGuid,
                 DatabaseName = business.DatabaseName,
                 PayrollState = assignedPayrollState,
+                InvoiceInboxApiUrl = invoiceInbox?.ApiBaseUrl ?? "",
+                InvoiceInboxAddress = invoiceInbox?.InvoiceAddress ?? "",
+                InvoiceInboxApiToken = invoiceInbox?.StoreApiToken ?? "",
                 IsPrimary = business.IsPrimary,
                 EncryptedConnectionKey = encrypted.EncryptedKey,
                 EncryptedConnection = encrypted.Cipher,
@@ -660,10 +659,10 @@ ORDER BY IsPrimary DESC, BusinessName", connection);
     {
         var connectionPayload = new DeviceConnectionPayload
         {
-            Server = _server,
+            Server = LocalSqlServerPolicy.ClientStoreInstance,
             Database = databaseName,
-            Username = _username,
-            Password = _password
+            Username = string.Empty,
+            Password = string.Empty
         };
         var clearConnection = JsonSerializer.SerializeToUtf8Bytes(connectionPayload, _json);
         var aesKey = RandomNumberGenerator.GetBytes(32);
@@ -847,16 +846,7 @@ VALUES
     }
 
     private string ConnectionString(string database)
-        => new SqlConnectionStringBuilder
-        {
-            DataSource = _server,
-            InitialCatalog = database,
-            UserID = _username,
-            Password = _password,
-            Encrypt = true,
-            TrustServerCertificate = true,
-            ConnectTimeout = 30
-        }.ConnectionString;
+        => LocalSqlServerPolicy.BuildConnectionString(_server, database, _username, _password);
 
     private static ClientSubscription ReadSubscription(SqlDataReader reader)
         => new(

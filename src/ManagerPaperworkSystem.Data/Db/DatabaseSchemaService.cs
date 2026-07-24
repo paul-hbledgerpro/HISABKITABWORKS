@@ -498,6 +498,8 @@ public static class DatabaseSchemaService
                     [Direction] INT NOT NULL DEFAULT 0,
                     [AlertType] INT NOT NULL DEFAULT 0,
                     [VendorName] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [OldVendorName] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [OldInvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
                     [OtherVendorName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [InvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
                     [InvoiceDate] DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME()),
@@ -522,6 +524,8 @@ public static class DatabaseSchemaService
                 "IF COL_LENGTH(N'[dbo].[PriceAlerts]', N'NewPrice') IS NOT NULL UPDATE [dbo].[PriceAlerts] SET [NewUnitCost] = CONVERT(DECIMAL(18,4), [NewPrice])");
             await EnsureColumnAsync(conn, "PriceAlerts", "Direction", "INT NOT NULL DEFAULT 0");
             await EnsureColumnAsync(conn, "PriceAlerts", "AlertType", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "PriceAlerts", "OldVendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PriceAlerts", "OldInvoiceNumber", "NVARCHAR(100) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "OtherVendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "InvoiceNumber", "NVARCHAR(100) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "InvoiceDate",
@@ -831,12 +835,14 @@ public static class DatabaseSchemaService
                     [IsMatched] BIT NOT NULL DEFAULT 0,
                     [MatchReference] NVARCHAR(200) NOT NULL DEFAULT '',
                     [IncludeInProfitLoss] BIT NOT NULL DEFAULT 0,
+                    [CheckCopyPath] NVARCHAR(1000) NOT NULL DEFAULT '',
                     [ImportedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
                 )");
 
             await EnsureColumnAsync(conn, "BankStatementTransactions", "IsMatched", "BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IsMatched DEFAULT 0");
             await EnsureColumnAsync(conn, "BankStatementTransactions", "MatchReference", "NVARCHAR(200) NOT NULL CONSTRAINT DF_BankStatementTransactions_MatchReference DEFAULT ''");
             await EnsureColumnAsync(conn, "BankStatementTransactions", "IncludeInProfitLoss", "BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IncludeInProfitLoss DEFAULT 0");
+            await EnsureColumnAsync(conn, "BankStatementTransactions", "CheckCopyPath", "NVARCHAR(1000) NOT NULL CONSTRAINT DF_BankStatementTransactions_CheckCopyPath DEFAULT ''");
 
             // Phase 3: Seed default data if tables are empty
             var sName = storeName ?? "Store 1";

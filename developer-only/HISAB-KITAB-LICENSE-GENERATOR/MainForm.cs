@@ -1,3 +1,5 @@
+using HisabKitabWorks.DeveloperTools;
+
 namespace HisabKitabWorks.LicenseGenerator.WinForms;
 
 internal sealed partial class MainForm : Form
@@ -80,7 +82,10 @@ internal sealed partial class MainForm : Form
         WindowState = FormWindowState.Normal;
         FormBorderStyle = FormBorderStyle.Sizable;
 
-        _server.Text = "hbstoreledger-server.database.windows.net";
+        var connectionProfile = DeveloperLicensingConnection.Load(LocalSqlServerPolicy.DefaultInstance);
+        _server.Text = connectionProfile.Server;
+        _username.Text = connectionProfile.Username;
+        _password.Text = connectionProfile.Password;
         _storeGuid.CharacterCasing = CharacterCasing.Upper;
         _pcId.CharacterCasing = CharacterCasing.Upper;
         _storeZip.MaxLength = 5;
@@ -91,6 +96,7 @@ internal sealed partial class MainForm : Form
         ConfigureGrid();
         Controls.Add(BuildLayout());
         WireEvents();
+        ApplyDatabaseAuthenticationMode();
         RefreshSigningStatus();
     }
 
@@ -109,29 +115,58 @@ internal sealed partial class MainForm : Form
         _copyLicense.Click += (_, _) => CopyLicense();
         _saveLicense.Click += (_, _) => SaveLicense();
         _manageBusinesses.Click += (_, _) => ManageBusinesses();
-        foreach (var field in new[] { _server, _username, _password })
+        _server.TextChanged += (_, _) =>
+        {
+            ApplyDatabaseAuthenticationMode();
+            MarkConnectionStale();
+        };
+        foreach (var field in new[] { _username, _password })
             field.TextChanged += (_, _) => MarkConnectionStale();
+    }
+
+    private void ApplyDatabaseAuthenticationMode()
+    {
+        var usesWindowsAuthentication = LocalSqlServerPolicy.IsLocal(_server.Text);
+        _username.Enabled = !usesWindowsAuthentication;
+        _password.Enabled = !usesWindowsAuthentication;
+
+        if (usesWindowsAuthentication)
+        {
+            _username.Text = string.Empty;
+            _password.Text = string.Empty;
+            _username.PlaceholderText = "WINDOWS AUTH";
+            _password.PlaceholderText = "NOT REQUIRED";
+        }
+        else
+        {
+            _username.PlaceholderText = "USERNAME";
+            _password.PlaceholderText = "PASSWORD";
+        }
     }
 
     private void Connect()
     {
-        if (string.IsNullOrWhiteSpace(_server.Text) ||
-            string.IsNullOrWhiteSpace(_username.Text) ||
-            string.IsNullOrWhiteSpace(_password.Text))
+        if (string.IsNullOrWhiteSpace(_server.Text))
         {
-            SetStatus("Enter SQL Server, username and password.", true);
+            SetStatus("Enter the shared licensing SQL Server.", true);
             return;
         }
 
         SetBusy(true, "Connecting and preparing the licensing database...");
         try
         {
-            var service = new LicenseActivationService(_server.Text, _username.Text, _password.Text);
+            var local = LocalSqlServerPolicy.IsLocal(_server.Text);
+            var username = local ? string.Empty : _username.Text;
+            var password = local ? string.Empty : _password.Text;
+            var service = new LicenseActivationService(_server.Text, username, password);
             service.TestAndPrepareDatabase();
+            DeveloperLicensingConnection.Save(_server.Text, username, password);
             _service = service;
             _isConnected = true;
             LoadDatabaseChoices();
-            _connectionStatus.Text = "●  Connected to licensing database";
+            _connectionStatus.Text = local
+                ? "●  Connected with Windows Authentication"
+                : "●  Connected to licensing database";
             _connectionStatus.ForeColor = AdminTheme.Green;
             SetStatus("Connected. Paste Store GUID, PC ID, Store Name and Store ZIP, then generate the key.", false);
         }

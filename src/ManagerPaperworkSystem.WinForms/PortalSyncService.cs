@@ -144,9 +144,13 @@ internal static class PortalSyncService
         bool force,
         bool visibleChrome,
         Guid? onlyStoreConfigurationId = null,
+        bool waitForExistingRun = false,
         CancellationToken cancellationToken = default)
     {
-        if (!await RunGate.WaitAsync(0, cancellationToken))
+        var gateAcquired = waitForExistingRun
+            ? await RunGate.WaitAsync(TimeSpan.FromMinutes(3), cancellationToken)
+            : await RunGate.WaitAsync(0, cancellationToken);
+        if (!gateAcquired)
             return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
 
         FileStream? processLock = null;
@@ -154,17 +158,27 @@ internal static class PortalSyncService
         {
             var lockPath = Path.Combine(AppBootstrap.AppDataPath, "pos-portal-sync.lock");
             Directory.CreateDirectory(AppBootstrap.AppDataPath);
-            try
+            var lockDeadline = waitForExistingRun
+                ? DateTime.UtcNow.AddMinutes(3)
+                : DateTime.UtcNow;
+            while (processLock is null)
             {
-                processLock = new FileStream(
-                    lockPath,
-                    FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite,
-                    FileShare.None);
-            }
-            catch (IOException)
-            {
-                return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
+                try
+                {
+                    processLock = new FileStream(
+                        lockPath,
+                        FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite,
+                        FileShare.None);
+                }
+                catch (IOException) when (DateTime.UtcNow < lockDeadline)
+                {
+                    await Task.Delay(500, cancellationToken);
+                }
+                catch (IOException)
+                {
+                    return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
+                }
             }
 
             var document = PortalSyncSettingsStore.Load();
@@ -393,6 +407,34 @@ internal static class PortalSyncService
                 .Select(key => key[zKeyPrefix.Length..]),
             StringComparer.OrdinalIgnoreCase);
         var zResult = new ZReportImportOutcome(targetStatus.ZReportCount, 0, 0);
+        if (needsZReports)
+        {
+            var recovered = await ImportArchivedZReportsAsync(
+                settings,
+                db,
+                paths,
+                dataStoreId,
+                targetDate,
+                verifiedZBatches,
+                cancellationToken);
+            zResult = new ZReportImportOutcome(
+                zResult.Total + recovered.Total,
+                zResult.Imported + recovered.Imported,
+                zResult.Updated + recovered.Updated);
+            needsZReports =
+                verifiedZBatches.Count < Math.Max(1, settings.ExpectedDailyZReports);
+        }
+
+        if (!needsCashSummary && !needsZReports)
+        {
+            return new PortalSyncRunResult(
+                settings.BusinessName,
+                true,
+                zResult.Imported > 0,
+                $"POS sync for {targetDate:M/d/yyyy}: Cash & Sales Summary already present; " +
+                $"{zResult.Imported} archived Z-report shift(s) recovered and " +
+                $"{verifiedZBatches.Count} register report(s) verified in Shift Cash Drop.");
+        }
 
         Directory.CreateDirectory(profile);
         Directory.CreateDirectory(downloadDirectory);
@@ -507,27 +549,36 @@ internal static class PortalSyncService
                         Directory.CreateDirectory(batchDownloadDirectory);
                         try
                         {
-                            var archiveDirectory =
-                                PortalSyncSettingsStore.ZReportArchiveDirectory(settings);
-                            Directory.CreateDirectory(archiveDirectory);
+                            var safeBatch = SafeFilePart(batch);
+                            var localPdfPath = Path.Combine(
+                                batchDownloadDirectory,
+                                $"{safeBatch}.pdf");
+                            var localScreenshotPath = Path.Combine(
+                                batchDownloadDirectory,
+                                $"{safeBatch}.png");
                             var generated = await GenerateReportAsync(
                                 browser,
                                 page,
                                 batchDownloadDirectory,
                                 targetDate,
                                 $"Close-Out Z Report batch {batch}",
-                                Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.pdf"),
-                                Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.png"),
+                                localPdfPath,
+                                localScreenshotPath,
                                 cancellationToken,
                                 batch,
                                 browserPdfFirst: true);
+                            ArchiveGeneratedZReport(settings, batch, generated);
 
                             PosReportData? renderedReport = null;
                             if (!string.IsNullOrWhiteSpace(generated.PdfPath))
                             {
                                 try
                                 {
-                                    ValidateZReportBatch(generated.PdfPath, targetDate, batch);
+                                    await WaitForValidZReportBatchAsync(
+                                        generated.PdfPath,
+                                        targetDate,
+                                        batch,
+                                        cancellationToken);
                                     var feedPath = StoreZReportFeedFile(
                                         settings,
                                         generated.PdfPath,
@@ -1633,6 +1684,131 @@ internal static class PortalSyncService
                 .Select(character => char.IsWhiteSpace(character) ? '-' : character)
                 .ToArray())
             .Trim('-', '.', ' ');
+    }
+
+    private static void ArchiveGeneratedZReport(
+        PortalStoreSyncSettings settings,
+        string batch,
+        GeneratedPortalReport generated)
+    {
+        var archiveDirectory = PortalSyncSettingsStore.ZReportArchiveDirectory(settings);
+        Directory.CreateDirectory(archiveDirectory);
+        var safeBatch = SafeFilePart(batch);
+        if (!string.IsNullOrWhiteSpace(generated.PdfPath) &&
+            File.Exists(generated.PdfPath))
+        {
+            File.Copy(
+                generated.PdfPath,
+                Path.Combine(archiveDirectory, $"{safeBatch}.pdf"),
+                true);
+        }
+        if (File.Exists(generated.ScreenshotPath))
+        {
+            File.Copy(
+                generated.ScreenshotPath,
+                Path.Combine(archiveDirectory, $"{safeBatch}.png"),
+                true);
+        }
+    }
+
+    private static async Task WaitForValidZReportBatchAsync(
+        string path,
+        DateOnly targetDate,
+        string expectedBatch,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                ValidateZReportBatch(path, targetDate, expectedBatch);
+                return;
+            }
+            catch (Exception exception)
+            {
+                lastError = exception;
+                if (attempt < 9)
+                    await Task.Delay(300, cancellationToken);
+            }
+        }
+
+        throw lastError ??
+              new InvalidOperationException(
+                  $"The captured Z report for batch {expectedBatch} could not be read.");
+    }
+
+    private static async Task<ZReportImportOutcome> ImportArchivedZReportsAsync(
+        PortalStoreSyncSettings settings,
+        AppDbContext db,
+        IAppPaths paths,
+        int storeId,
+        DateOnly targetDate,
+        HashSet<string> verifiedBatches,
+        CancellationToken cancellationToken)
+    {
+        var expected = Math.Max(1, settings.ExpectedDailyZReports);
+        var archiveDirectory = PortalSyncSettingsStore.ZReportArchiveDirectory(settings);
+        if (!Directory.Exists(archiveDirectory))
+            return new ZReportImportOutcome(0, 0, 0);
+
+        var total = 0;
+        var imported = 0;
+        var updated = 0;
+        foreach (var path in Directory.EnumerateFiles(archiveDirectory, "*.pdf")
+                     .OrderByDescending(file =>
+                     {
+                         var name = Path.GetFileNameWithoutExtension(file);
+                         return long.TryParse(name, out var number) ? number : long.MinValue;
+                     }))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (verifiedBatches.Count >= expected)
+                break;
+
+            try
+            {
+                var matchingBatches = new PosReportImportService()
+                    .ImportZReports(path)
+                    .Where(report =>
+                        report.ReportDate == targetDate &&
+                        !string.IsNullOrWhiteSpace(report.ShiftOrBatch))
+                    .Select(report => report.ShiftOrBatch!.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(batch => !verifiedBatches.Contains(batch))
+                    .ToList();
+                if (matchingBatches.Count == 0)
+                    continue;
+
+                var outcome = await ImportZReportsAsync(
+                    db,
+                    paths,
+                    storeId,
+                    path,
+                    targetDate,
+                    cancellationToken);
+                total += outcome.Total;
+                imported += outcome.Imported;
+                updated += outcome.Updated;
+                foreach (var batch in matchingBatches)
+                    verifiedBatches.Add(batch);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                WriteDiagnostic(
+                    settings.BusinessName,
+                    false,
+                    $"Archived Z-report recovery skipped {Path.GetFileName(path)}: " +
+                    FirstSentence(exception.Message));
+            }
+        }
+
+        return new ZReportImportOutcome(total, imported, updated);
     }
 
     private static void ValidateZReports(string path, DateOnly targetDate)
