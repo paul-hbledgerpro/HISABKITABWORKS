@@ -42,7 +42,9 @@ internal static class LocalSqlServerPolicy
             ConnectTimeout = 30
         };
 
-        if (string.IsNullOrWhiteSpace(username))
+        // Local SQL Express always authenticates with the Windows account
+        // running this developer tool. Ignore stale SQL credentials locally.
+        if (local || string.IsNullOrWhiteSpace(username))
             builder.IntegratedSecurity = true;
         else
         {

@@ -64,7 +64,7 @@ internal sealed class MainForm : Form
         _addressState.ReadOnly = true; _addressState.TabStop = false; _addressState.BackColor = DeveloperTheme.PaleBlue;
         _monthlyReportEmail.Enabled = false; _monthlyReportDay.Enabled = false;
         _payrollState.Items.AddRange(UsStateCodes.Cast<object>().ToArray());
-        ConfigureGrid(); Controls.Add(BuildLayout()); WireEvents(); Clear();
+        ConfigureGrid(); Controls.Add(BuildLayout()); WireEvents(); ApplyDatabaseAuthenticationMode(); Clear();
     }
 
     private Control BuildLayout()
@@ -212,8 +212,40 @@ internal sealed class MainForm : Form
             _monthlyReportEmail.Enabled = _monthlyReports.Checked;
             _monthlyReportDay.Enabled = _monthlyReports.Checked;
         };
-        foreach (var field in new[] {_server,_username,_password})
-            field.TextChanged += (_,_) => { _service=null; _connection.Text="●  Connection changed"; _connection.ForeColor=DeveloperTheme.Muted; };
+        _server.TextChanged += (_, _) =>
+        {
+            ApplyDatabaseAuthenticationMode();
+            MarkConnectionStale();
+        };
+        foreach (var field in new[] {_username,_password})
+            field.TextChanged += (_,_) => MarkConnectionStale();
+    }
+
+    private void MarkConnectionStale()
+    {
+        _service=null;
+        _connection.Text="●  Connection changed";
+        _connection.ForeColor=DeveloperTheme.Muted;
+    }
+
+    private void ApplyDatabaseAuthenticationMode()
+    {
+        var usesWindowsAuthentication = LocalSqlServerPolicy.IsLocal(_server.Text);
+        _username.Enabled = !usesWindowsAuthentication;
+        _password.Enabled = !usesWindowsAuthentication;
+
+        if (usesWindowsAuthentication)
+        {
+            _username.Text = string.Empty;
+            _password.Text = string.Empty;
+            _username.PlaceholderText = "WINDOWS AUTH";
+            _password.PlaceholderText = "NOT REQUIRED";
+        }
+        else
+        {
+            _username.PlaceholderText = "USERNAME";
+            _password.PlaceholderText = "PASSWORD";
+        }
     }
     private void ConfigureGrid()
     {
@@ -232,12 +264,15 @@ internal sealed class MainForm : Form
         try
         {
             Cursor = Cursors.WaitCursor;
-            var service = new ClientAccountService(_server.Text, _username.Text, _password.Text);
+            var local = LocalSqlServerPolicy.IsLocal(_server.Text);
+            var username = local ? string.Empty : _username.Text;
+            var password = local ? string.Empty : _password.Text;
+            var service = new ClientAccountService(_server.Text, username, password);
             service.ConnectAndUpgrade();
-            DeveloperLicensingConnection.Save(_server.Text, _username.Text, _password.Text);
+            DeveloperLicensingConnection.Save(_server.Text, username, password);
             _service = service;
             _database.DataSource = service.Databases();
-            _connection.Text = "●  Connected";
+            _connection.Text = local ? "●  Connected with Windows Authentication" : "●  Connected";
             _connection.ForeColor = DeveloperTheme.Green;
             RefreshAccounts();
             SetStatus("Connected. Create a client account and select its paid services before issuing the PC license.", false);
