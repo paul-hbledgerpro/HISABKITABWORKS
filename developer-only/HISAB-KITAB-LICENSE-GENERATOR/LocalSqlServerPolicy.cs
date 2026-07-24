@@ -78,7 +78,14 @@ internal static class LocalSqlServerPolicy
         using var connection = new SqlConnection(BuildConnectionString(server, MasterDatabase, username, password));
         connection.Open();
         using var command = new SqlCommand(
-            "IF DB_ID(@database) IS NULL EXEC(N'CREATE DATABASE ' + QUOTENAME(@database))",
+            """
+            IF DB_ID(@database) IS NULL
+            BEGIN
+                DECLARE @createDatabaseSql nvarchar(max);
+                SET @createDatabaseSql = N'CREATE DATABASE ' + QUOTENAME(@database);
+                EXEC sys.sp_executesql @createDatabaseSql;
+            END
+            """,
             connection);
         command.Parameters.AddWithValue("@database", database);
         command.ExecuteNonQuery();
