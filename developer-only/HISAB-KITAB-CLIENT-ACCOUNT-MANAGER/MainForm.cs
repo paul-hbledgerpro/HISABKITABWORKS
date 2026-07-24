@@ -55,7 +55,9 @@ internal sealed class MainForm : Form
         Icon = DeveloperTheme.Icon(); BackColor = DeveloperTheme.Bg; Font = DeveloperTheme.Body();
         StartPosition = FormStartPosition.CenterScreen; Size = new Size(1450, 930); MinimumSize = new Size(1180, 760);
         AutoScaleMode = AutoScaleMode.Dpi; WindowState = FormWindowState.Normal;
-        _server.Text = "hbstoreledger-server.database.windows.net"; _guid.CharacterCasing = CharacterCasing.Upper; _zip.MaxLength = 5; _subscription.ReadOnly = true;
+        _server.Text = LocalSqlServerPolicy.DefaultInstance;
+        _username.Clear(); _password.Clear(); _username.Enabled = false; _password.Enabled = false;
+        _guid.CharacterCasing = CharacterCasing.Upper; _zip.MaxLength = 5; _subscription.ReadOnly = true;
         _addressState.ReadOnly = true; _addressState.TabStop = false; _addressState.BackColor = DeveloperTheme.PaleBlue;
         _monthlyReportEmail.Enabled = false; _monthlyReportDay.Enabled = false;
         _payrollState.Items.AddRange(UsStateCodes.Cast<object>().ToArray());

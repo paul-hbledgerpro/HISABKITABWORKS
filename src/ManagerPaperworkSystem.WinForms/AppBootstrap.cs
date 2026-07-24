@@ -6,6 +6,7 @@ using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
 using ManagerPaperworkSystem.Data.Services;
 using ManagerPaperworkSystem.UI.Services;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -75,6 +76,7 @@ internal static class AppBootstrap
         var connection = scope.ServiceProvider.GetRequiredService<ActiveConnectionInfo>();
         if (connection.UseSqlServer && !string.IsNullOrWhiteSpace(connection.ConnectionString))
         {
+            await LocalSqlServerPolicy.EnsureDatabaseExistsAsync(connection.ConnectionString);
             await DatabaseSchemaService.EnsureSchemaAsync(connection.ConnectionString);
         }
 
@@ -92,8 +94,9 @@ internal static class AppBootstrap
                 var clear = ProtectedData.Unprotect(protectedBytes, StoreConnectionEntropy, DataProtectionScope.LocalMachine);
                 try
                 {
-                    return JsonSerializer.Deserialize<Dictionary<string, string>>(clear)
-                        ?? new Dictionary<string, string>();
+                    return NormalizeStoreConnections(
+                        JsonSerializer.Deserialize<Dictionary<string, string>>(clear)
+                        ?? new Dictionary<string, string>());
                 }
                 finally
                 {
@@ -106,8 +109,9 @@ internal static class AppBootstrap
 
             var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(StoreConnectionsPath))
                 ?? new Dictionary<string, string>();
-            SaveStoreConnections(legacy);
-            return legacy;
+            var localConnections = NormalizeStoreConnections(legacy);
+            SaveStoreConnections(localConnections);
+            return localConnections;
         }
         catch
         {
@@ -117,6 +121,7 @@ internal static class AppBootstrap
 
     public static void SaveStoreConnections(Dictionary<string, string> connections)
     {
+        connections = NormalizeStoreConnections(connections);
         Directory.CreateDirectory(AppDataDirectory);
         var clear = JsonSerializer.SerializeToUtf8Bytes(connections, new JsonSerializerOptions { WriteIndented = true });
         try
@@ -248,17 +253,31 @@ internal static class AppBootstrap
     {
         if (!string.Equals(settings.DatabaseType, "SqlServer", StringComparison.OrdinalIgnoreCase))
             return ("", false);
-        if (!string.IsNullOrWhiteSpace(settings.ConnectionString))
-            return (settings.ConnectionString, true);
-        if (string.IsNullOrWhiteSpace(settings.Server) || string.IsNullOrWhiteSpace(settings.Database))
+        var local = LocalSqlServerPolicy.Normalize(settings);
+        if (string.IsNullOrWhiteSpace(local.Database))
             return ("", false);
 
-        var conn = $"Server={settings.Server};Database={settings.Database};";
-        conn += !string.IsNullOrWhiteSpace(settings.Username)
-            ? $"User Id={settings.Username};Password={settings.Password};"
-            : "Integrated Security=True;";
-        conn += "TrustServerCertificate=True;Connect Timeout=30;ConnectRetryCount=2;ConnectRetryInterval=2;";
-        return (conn, true);
+        return (LocalSqlServerPolicy.BuildConnectionString(local.Database), true);
+    }
+
+    private static Dictionary<string, string> NormalizeStoreConnections(
+        IEnumerable<KeyValuePair<string, string>> connections)
+    {
+        var normalized = new Dictionary<string, string>();
+        foreach (var pair in connections)
+        {
+            try
+            {
+                LocalSqlServerPolicy.MarkMigrationPendingIfRemote(pair.Value);
+                normalized[pair.Key] = LocalSqlServerPolicy.NormalizeConnectionString(pair.Value);
+            }
+            catch
+            {
+                // Ignore only malformed entries. Valid legacy Azure entries retain
+                // their database name and are redirected to local SQL Express.
+            }
+        }
+        return normalized;
     }
 }
 

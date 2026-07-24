@@ -16,9 +16,10 @@ internal sealed class LicenseActivationService
 
     public LicenseActivationService(string server, string username, string password)
     {
-        _server = server.Trim();
-        _username = username.Trim();
-        _password = password;
+        LocalSqlServerPolicy.RequireLocal(server);
+        _server = LocalSqlServerPolicy.DefaultInstance;
+        _username = string.Empty;
+        _password = string.Empty;
     }
 
     public string LicensingConnectionString => ConnectionString(LicensingDatabase);
@@ -42,6 +43,7 @@ ORDER BY name", connection);
 
     public void TestAndPrepareDatabase()
     {
+        LocalSqlServerPolicy.EnsureDatabaseExists(_server, LicensingDatabase, _username, _password);
         using var connection = new SqlConnection(LicensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(SchemaSql, connection) { CommandTimeout = 120 };
@@ -667,10 +669,10 @@ ORDER BY IsPrimary DESC, BusinessName", connection);
     {
         var connectionPayload = new DeviceConnectionPayload
         {
-            Server = _server,
+            Server = LocalSqlServerPolicy.DefaultInstance,
             Database = databaseName,
-            Username = _username,
-            Password = _password
+            Username = string.Empty,
+            Password = string.Empty
         };
         var clearConnection = JsonSerializer.SerializeToUtf8Bytes(connectionPayload, _json);
         var aesKey = RandomNumberGenerator.GetBytes(32);
@@ -854,16 +856,7 @@ VALUES
     }
 
     private string ConnectionString(string database)
-        => new SqlConnectionStringBuilder
-        {
-            DataSource = _server,
-            InitialCatalog = database,
-            UserID = _username,
-            Password = _password,
-            Encrypt = true,
-            TrustServerCertificate = true,
-            ConnectTimeout = 30
-        }.ConnectionString;
+        => LocalSqlServerPolicy.BuildConnectionString(_server, database, _username, _password);
 
     private static ClientSubscription ReadSubscription(SqlDataReader reader)
         => new(

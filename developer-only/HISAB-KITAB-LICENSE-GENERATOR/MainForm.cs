@@ -80,7 +80,11 @@ internal sealed partial class MainForm : Form
         WindowState = FormWindowState.Normal;
         FormBorderStyle = FormBorderStyle.Sizable;
 
-        _server.Text = "hbstoreledger-server.database.windows.net";
+        _server.Text = LocalSqlServerPolicy.DefaultInstance;
+        _username.Clear();
+        _password.Clear();
+        _username.Enabled = false;
+        _password.Enabled = false;
         _storeGuid.CharacterCasing = CharacterCasing.Upper;
         _pcId.CharacterCasing = CharacterCasing.Upper;
         _storeZip.MaxLength = 5;
@@ -115,11 +119,9 @@ internal sealed partial class MainForm : Form
 
     private void Connect()
     {
-        if (string.IsNullOrWhiteSpace(_server.Text) ||
-            string.IsNullOrWhiteSpace(_username.Text) ||
-            string.IsNullOrWhiteSpace(_password.Text))
+        if (string.IsNullOrWhiteSpace(_server.Text))
         {
-            SetStatus("Enter SQL Server, username and password.", true);
+            SetStatus("Enter the local SQL Server instance.", true);
             return;
         }
 

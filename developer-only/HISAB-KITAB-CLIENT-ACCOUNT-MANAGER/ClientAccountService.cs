@@ -60,11 +60,15 @@ internal sealed class ClientAccountService
 
     public ClientAccountService(string server, string username, string password)
     {
-        _server = server.Trim(); _username = username.Trim(); _password = password;
+        LocalSqlServerPolicy.RequireLocal(server);
+        _server = LocalSqlServerPolicy.DefaultInstance;
+        _username = string.Empty;
+        _password = string.Empty;
     }
 
     public void ConnectAndUpgrade()
     {
+        LocalSqlServerPolicy.EnsureDatabaseExists(_server, LicensingDatabase, _username, _password);
         using var connection = Open();
         using var command = new SqlCommand(@"
 IF OBJECT_ID('dbo.Customers', 'U') IS NULL OR OBJECT_ID('dbo.Licenses', 'U') IS NULL
@@ -636,5 +640,6 @@ WHERE c.Id<>@customer AND (c.StoreGuid=@guid OR b.StoreGuid=@guid OR b.DatabaseN
         }
     }
     private SqlConnection Open() { var connection = new SqlConnection(ConnectionString(LicensingDatabase)); connection.Open(); return connection; }
-    private string ConnectionString(string database) => new SqlConnectionStringBuilder { DataSource = _server, InitialCatalog = database, UserID = _username, Password = _password, Encrypt = true, TrustServerCertificate = true, ConnectTimeout = 30 }.ConnectionString;
+    private string ConnectionString(string database)
+        => LocalSqlServerPolicy.BuildConnectionString(_server, database, _username, _password);
 }

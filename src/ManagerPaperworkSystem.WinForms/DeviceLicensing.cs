@@ -476,7 +476,15 @@ internal static class DeviceLicenseService
         var clear = ProtectedData.Unprotect(protectedBytes, ProtectionEntropy, DataProtectionScope.LocalMachine);
         try
         {
-            return JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+            var stored = JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+            if (stored is null)
+                return null;
+
+            LocalSqlServerPolicy.MarkMigrationPendingIfRemote(stored);
+            var local = LocalSqlServerPolicy.Normalize(stored);
+            if (!ConnectionSettingsEqual(stored, local))
+                SaveProtectedConnection(local);
+            return local;
         }
         finally
         {
@@ -486,6 +494,7 @@ internal static class DeviceLicenseService
 
     internal static void SaveProtectedConnection(DatabaseConnectionSettings settings)
     {
+        settings = LocalSqlServerPolicy.Normalize(settings);
         Directory.CreateDirectory(AppBootstrap.AppDataPath);
         var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
         try
@@ -498,6 +507,16 @@ internal static class DeviceLicenseService
             CryptographicOperations.ZeroMemory(clear);
         }
     }
+
+    private static bool ConnectionSettingsEqual(
+        DatabaseConnectionSettings left,
+        DatabaseConnectionSettings right)
+        => string.Equals(left.DatabaseType, right.DatabaseType, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Server, right.Server, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Database, right.Database, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Username, right.Username, StringComparison.Ordinal) &&
+           string.Equals(left.Password, right.Password, StringComparison.Ordinal) &&
+           string.Equals(left.ConnectionString, right.ConnectionString, StringComparison.Ordinal);
 
     private static DeviceIdentityRecord CreateIdentity()
     {

@@ -40,6 +40,8 @@ internal static class LicensedBusinessService
                     business.EncryptedConnection,
                     business.ConnectionNonce,
                     business.ConnectionTag);
+                LocalSqlServerPolicy.MarkMigrationPendingIfRemote(settings);
+                settings = LocalSqlServerPolicy.Normalize(settings);
                 if (!string.Equals(settings.Database, business.DatabaseName, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("A signed business record does not match its encrypted database connection.");
                 businesses.Add(new LicensedBusinessConnection
@@ -94,8 +96,25 @@ internal static class LicensedBusinessService
         var clear = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.LocalMachine);
         try
         {
-            return JsonSerializer.Deserialize<List<LicensedBusinessConnection>>(clear, JsonOptions)
+            var businesses = JsonSerializer.Deserialize<List<LicensedBusinessConnection>>(clear, JsonOptions)
                 ?? new List<LicensedBusinessConnection>();
+            var changed = false;
+            foreach (var business in businesses)
+            {
+                LocalSqlServerPolicy.MarkMigrationPendingIfRemote(business.Connection);
+                var local = LocalSqlServerPolicy.Normalize(business.Connection);
+                if (!string.Equals(business.Connection.Server, local.Server, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(business.Connection.Username, local.Username, StringComparison.Ordinal) ||
+                    !string.Equals(business.Connection.Password, local.Password, StringComparison.Ordinal) ||
+                    !string.Equals(business.Connection.ConnectionString, local.ConnectionString, StringComparison.Ordinal))
+                {
+                    business.Connection = local;
+                    changed = true;
+                }
+            }
+            if (changed)
+                SaveBusinesses(businesses);
+            return businesses;
         }
         finally
         {
@@ -159,6 +178,7 @@ internal static class LicensedBusinessService
 
             try
             {
+                await LocalSqlServerPolicy.EnsureDatabaseExistsAsync(connectionString);
                 await DatabaseSchemaService.EnsureSchemaAsync(connectionString, licensed.BusinessName);
                 var options = new DbContextOptionsBuilder<AppDbContext>()
                     .UseSqlServer(connectionString, sql => sql.CommandTimeout(30))
@@ -185,26 +205,23 @@ internal static class LicensedBusinessService
 
     private static string BuildConnectionString(DatabaseConnectionSettings settings)
     {
-        if (!string.IsNullOrWhiteSpace(settings.ConnectionString))
-            return new SqlConnectionStringBuilder(settings.ConnectionString) { ConnectTimeout = 10, TrustServerCertificate = true }.ConnectionString;
-        var builder = new SqlConnectionStringBuilder
+        var local = LocalSqlServerPolicy.Normalize(settings);
+        return LocalSqlServerPolicy.BuildConnectionString(local.Database);
+    }
+
+    private static void SaveBusinesses(IReadOnlyList<LicensedBusinessConnection> businesses)
+    {
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var clear = JsonSerializer.SerializeToUtf8Bytes(businesses, JsonOptions);
+        try
         {
-            DataSource = settings.Server,
-            InitialCatalog = settings.Database,
-            TrustServerCertificate = true,
-            Encrypt = true,
-            ConnectTimeout = 10,
-            ConnectRetryCount = 2,
-            ConnectRetryInterval = 2
-        };
-        if (string.IsNullOrWhiteSpace(settings.Username))
-            builder.IntegratedSecurity = true;
-        else
-        {
-            builder.UserID = settings.Username;
-            builder.Password = settings.Password;
+            var protectedBytes = ProtectedData.Protect(clear, Entropy, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(ProtectedBusinessesPath, protectedBytes);
         }
-        return builder.ConnectionString;
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
     }
 }
 
