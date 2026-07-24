@@ -27,26 +27,44 @@ internal sealed class LicenseActivationService
 
     public IReadOnlyList<string> ListBusinessDatabases()
     {
-        using var connection = new SqlConnection(LicensingConnectionString);
-        connection.Open();
-        using var command = new SqlCommand(@"
-SELECT DISTINCT DatabaseName
-FROM (
-    SELECT NULLIF(LTRIM(RTRIM(DatabaseName)), '') AS DatabaseName
-    FROM dbo.CustomerBusinesses
-    WHERE IsActive=1
-    UNION
-    SELECT NULLIF(LTRIM(RTRIM(AssignedDatabases)), '')
-    FROM dbo.Licenses
-    WHERE IsActive=1
-) licensed
-WHERE DatabaseName IS NOT NULL
-ORDER BY DatabaseName", connection);
-        using var reader = command.ExecuteReader();
-        var databases = new List<string>();
-        while (reader.Read())
-            databases.Add(reader.GetString(0));
-        return databases;
+        var databases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        using (var connection = new SqlConnection(LicensingConnectionString))
+        {
+            connection.Open();
+            using var command = new SqlCommand(@"
+SELECT DatabaseName
+FROM dbo.CustomerBusinesses
+WHERE IsActive=1
+UNION ALL
+SELECT AssignedDatabases
+FROM dbo.Licenses
+WHERE IsActive=1", connection);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                AddDatabaseNames(databases, reader.IsDBNull(0) ? null : reader.GetString(0));
+        }
+
+        try
+        {
+            using var master = new SqlConnection(ConnectionString("master"));
+            master.Open();
+            using var command = new SqlCommand(@"
+SELECT name
+FROM sys.databases
+WHERE state_desc='ONLINE'
+  AND name LIKE 'HBStoreLedger[_]%'
+ORDER BY name", master);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                databases.Add(reader.GetString(0));
+        }
+        catch (SqlException)
+        {
+            // Keep the licensing metadata list when master database enumeration is restricted.
+        }
+
+        return databases.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     public void TestAndPrepareDatabase()
@@ -641,19 +659,34 @@ END", connection);
         using var connection = new SqlConnection(LicensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(@"
-SELECT Id, BusinessName, StoreAddress, DatabaseName, StoreGuid, IsPrimary
+SELECT Id, ISNULL(BusinessName,''), ISNULL(StoreAddress,''), ISNULL(DatabaseName,''),
+       ISNULL(StoreGuid,''), ISNULL(IsPrimary,CAST(0 AS bit))
 FROM dbo.CustomerBusinesses
 WHERE CustomerId=@customerId AND IsActive=1
 ORDER BY IsPrimary DESC, BusinessName", connection);
         command.Parameters.AddWithValue("@customerId", customerId);
         using var reader = command.ExecuteReader();
         var businesses = new List<CustomerBusiness>();
-        while (reader.Read())
-            businesses.Add(new CustomerBusiness(
-                reader.GetInt32(0), reader.GetString(1), reader.IsDBNull(2) ? "" : reader.GetString(2),
-                reader.GetString(3), reader.IsDBNull(4) ? reader.GetString(3) : reader.GetString(4), reader.GetBoolean(5)));
-        return businesses;
+    while (reader.Read())
+    {
+        var databaseName = reader.GetString(3);
+        var storeGuid = reader.GetString(4);
+        businesses.Add(new CustomerBusiness(
+            reader.GetInt32(0), reader.GetString(1), reader.GetString(2), databaseName,
+            string.IsNullOrWhiteSpace(storeGuid) ? databaseName : storeGuid, reader.GetBoolean(5)));
     }
+    return businesses;
+}
+
+private static void AddDatabaseNames(ISet<string> result, string? value)
+{
+    foreach (var name in (value ?? "").Split(
+                 new[] { ',', ';', '|' },
+                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        result.Add(name);
+    }
+}
 
     private EncryptedConnection EncryptConnection(string databaseName, string devicePublicKey)
     {

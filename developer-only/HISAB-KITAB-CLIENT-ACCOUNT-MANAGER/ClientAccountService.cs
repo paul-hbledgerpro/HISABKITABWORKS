@@ -246,33 +246,57 @@ END;", connection);
 
     public IReadOnlyList<string> Databases()
     {
-        using var connection = Open();
-        using var command = new SqlCommand(@"
-SELECT DISTINCT DatabaseName
-FROM (
-    SELECT NULLIF(LTRIM(RTRIM(DatabaseName)), '') AS DatabaseName
-    FROM dbo.CustomerBusinesses
-    WHERE IsActive=1
-    UNION
-    SELECT NULLIF(LTRIM(RTRIM(AssignedDatabases)), '')
-    FROM dbo.Licenses
-    WHERE IsActive=1
-) licensed
-WHERE DatabaseName IS NOT NULL
-ORDER BY DatabaseName", connection);
-        using var reader = command.ExecuteReader(); var result = new List<string>();
-        while (reader.Read()) result.Add(reader.GetString(0));
-        return result;
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        using (var connection = Open())
+        {
+            using var command = new SqlCommand(@"
+SELECT DatabaseName
+FROM dbo.CustomerBusinesses
+WHERE IsActive=1
+UNION ALL
+SELECT AssignedDatabases
+FROM dbo.Licenses
+WHERE IsActive=1", connection);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                AddDatabaseNames(result, reader.IsDBNull(0) ? null : reader.GetString(0));
+        }
+
+        try
+        {
+            using var master = new SqlConnection(ConnectionString("master"));
+            master.Open();
+            using var command = new SqlCommand(@"
+SELECT name
+FROM sys.databases
+WHERE state_desc='ONLINE'
+  AND name LIKE 'HBStoreLedger[_]%'
+ORDER BY name", master);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                result.Add(reader.GetString(0));
+        }
+        catch (SqlException)
+        {
+            // Keep the licensing metadata list when master database enumeration is restricted.
+        }
+
+        return result.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     public IReadOnlyList<ClientAccount> LoadAccounts()
     {
         using var connection = Open();
         using var command = new SqlCommand(@"
-SELECT c.Id, l.Id, c.BusinessName, c.OwnerName, c.Email, c.Phone,
+SELECT c.Id, l.Id,
+       ISNULL(c.BusinessName,''), ISNULL(c.OwnerName,''), ISNULL(c.Email,''), ISNULL(c.Phone,''),
        ISNULL(c.StoreGuid,''), ISNULL(c.StoreZip,''), ISNULL(cb.StoreAddress,''),
-       ISNULL(cb.DatabaseName, l.AssignedDatabases), l.LicenseKey,
-       l.MaxDevices, l.MaxStores, l.MonthlyFee, l.ExpiresDate, l.EnabledServices, l.IsActive,
+       ISNULL(COALESCE(NULLIF(cb.DatabaseName,''), NULLIF(l.AssignedDatabases,'')), ''),
+       ISNULL(l.LicenseKey,''),
+       ISNULL(l.MaxDevices,1), ISNULL(l.MaxStores,1), ISNULL(l.MonthlyFee,0),
+       ISNULL(l.ExpiresDate,DATEADD(year,1,SYSUTCDATETIME())),
+       ISNULL(l.EnabledServices,''), ISNULL(l.IsActive,CAST(1 AS bit)),
        ISNULL(l.PayrollState,''), ISNULL(l.MonthlyReportEmail,''), ISNULL(l.MonthlyReportDay,3)
 FROM dbo.Customers c
 CROSS APPLY (SELECT TOP 1 * FROM dbo.Licenses x WHERE x.CustomerId=c.Id ORDER BY x.Id DESC) l
@@ -654,7 +678,17 @@ WHERE c.Id<>@customer AND (c.StoreGuid=@guid OR b.StoreGuid=@guid OR b.DatabaseN
         r.GetString(6), r.GetString(7), r.GetString(8), r.GetString(9), r.GetString(10), r.GetInt32(11),
         r.GetInt32(12), r.GetDecimal(13), r.GetDateTime(14), r.GetString(15), r.GetBoolean(16),
         r.IsDBNull(17) ? "" : r.GetString(17), r.IsDBNull(18) ? "" : r.GetString(18),
-        r.IsDBNull(19) ? 3 : Convert.ToInt32(r.GetByte(19)));
+        r.IsDBNull(19) ? 3 : Convert.ToInt32(r.GetValue(19)));
+
+    private static void AddDatabaseNames(ISet<string> result, string? value)
+    {
+        foreach (var name in (value ?? "").Split(
+                     new[] { ',', ';', '|' },
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            result.Add(name);
+        }
+    }
 
     private static string ValidateMonthlyReportEmail(string enabledServices, string value)
     {
