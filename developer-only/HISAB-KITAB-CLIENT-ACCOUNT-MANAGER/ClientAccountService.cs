@@ -72,8 +72,43 @@ internal sealed class ClientAccountService
         LocalSqlServerPolicy.EnsureDatabaseExists(_server, LicensingDatabase, _username, _password);
         using var connection = Open();
         using var command = new SqlCommand(@"
-IF OBJECT_ID('dbo.Customers', 'U') IS NULL OR OBJECT_ID('dbo.Licenses', 'U') IS NULL
-    THROW 51000, 'The HISAB KITAB licensing database has not been initialized. Open the License Generator and connect once first.', 1;
+IF OBJECT_ID(N'dbo.Customers', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Customers
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Customers PRIMARY KEY,
+        BusinessName NVARCHAR(200) NOT NULL,
+        OwnerName NVARCHAR(200) NOT NULL CONSTRAINT DF_Customers_OwnerName DEFAULT(N''),
+        Email NVARCHAR(320) NOT NULL CONSTRAINT DF_Customers_Email DEFAULT(N''),
+        Phone NVARCHAR(50) NOT NULL CONSTRAINT DF_Customers_Phone DEFAULT(N''),
+        Notes NVARCHAR(MAX) NULL,
+        StoreGuid NVARCHAR(128) NULL,
+        StoreZip NVARCHAR(20) NULL
+    );
+END;
+
+IF OBJECT_ID(N'dbo.Licenses', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Licenses
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Licenses PRIMARY KEY,
+        CustomerId INT NOT NULL,
+        LicenseKey NVARCHAR(MAX) NOT NULL,
+        MaxStores INT NOT NULL CONSTRAINT DF_Licenses_MaxStores DEFAULT(1),
+        MaxUsers INT NOT NULL CONSTRAINT DF_Licenses_MaxUsers DEFAULT(1),
+        MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1),
+        MonthlyFee DECIMAL(18,2) NOT NULL CONSTRAINT DF_Licenses_MonthlyFee DEFAULT(0),
+        IsActive BIT NOT NULL CONSTRAINT DF_Licenses_IsActive DEFAULT(1),
+        ActivatedDate DATETIME2 NOT NULL CONSTRAINT DF_Licenses_ActivatedDate DEFAULT(SYSUTCDATETIME()),
+        ExpiresDate DATETIME2 NOT NULL,
+        AssignedDatabases NVARCHAR(MAX) NULL,
+        EnabledServices NVARCHAR(200) NOT NULL CONSTRAINT DF_Licenses_EnabledServices DEFAULT(N'Accounting'),
+        PayrollState NVARCHAR(2) NOT NULL CONSTRAINT DF_Licenses_PayrollState DEFAULT(N''),
+        MonthlyReportEmail NVARCHAR(254) NOT NULL CONSTRAINT DF_Licenses_MonthlyReportEmail DEFAULT(N''),
+        MonthlyReportDay TINYINT NOT NULL CONSTRAINT DF_Licenses_MonthlyReportDay DEFAULT(3)
+    );
+END;
+
 IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     ALTER TABLE dbo.Licenses ADD MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1);
 IF COL_LENGTH('dbo.Licenses', 'EnabledServices') IS NULL
@@ -93,6 +128,36 @@ UPDATE dbo.Licenses
 SET PayrollState=UPPER(LEFT(AssignedDatabases,2))
 WHERE (PayrollState IS NULL OR LEN(LTRIM(RTRIM(PayrollState)))=0)
   AND AssignedDatabases LIKE ''[A-Za-z][A-Za-z][_]%'';');
+
+IF OBJECT_ID(N'dbo.CustomerBusinesses', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.CustomerBusinesses
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_CustomerBusinesses PRIMARY KEY,
+        CustomerId INT NOT NULL,
+        BusinessName NVARCHAR(200) NOT NULL,
+        StoreAddress NVARCHAR(400) NULL,
+        DatabaseName NVARCHAR(128) NOT NULL,
+        StoreGuid NVARCHAR(128) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_CustomerBusinesses_IsPrimary DEFAULT(0),
+        IsActive BIT NOT NULL CONSTRAINT DF_CustomerBusinesses_IsActive DEFAULT(1),
+        CreatedUtc DATETIME2 NOT NULL CONSTRAINT DF_CustomerBusinesses_CreatedUtc DEFAULT(SYSUTCDATETIME())
+    );
+    CREATE UNIQUE INDEX UX_CustomerBusinesses_Customer_Database
+        ON dbo.CustomerBusinesses(CustomerId, DatabaseName);
+END;
+IF COL_LENGTH('dbo.CustomerBusinesses', 'StoreGuid') IS NULL
+    ALTER TABLE dbo.CustomerBusinesses ADD StoreGuid NVARCHAR(128) NULL;
+IF NOT EXISTS
+(
+    SELECT 1
+    FROM sys.indexes
+    WHERE object_id=OBJECT_ID(N'dbo.CustomerBusinesses')
+      AND name=N'UX_CustomerBusinesses_Customer_StoreGuid'
+)
+    CREATE UNIQUE INDEX UX_CustomerBusinesses_Customer_StoreGuid
+        ON dbo.CustomerBusinesses(CustomerId, StoreGuid)
+        WHERE StoreGuid IS NOT NULL;
 
 IF OBJECT_ID('dbo.AccountServicePrices', 'U') IS NULL
 BEGIN

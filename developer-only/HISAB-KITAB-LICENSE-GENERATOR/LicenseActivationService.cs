@@ -877,6 +877,43 @@ VALUES
     }
 
     private const string SchemaSql = @"
+IF OBJECT_ID(N'dbo.Customers', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Customers
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Customers PRIMARY KEY,
+        BusinessName NVARCHAR(200) NOT NULL,
+        OwnerName NVARCHAR(200) NOT NULL CONSTRAINT DF_Customers_OwnerName DEFAULT(N''),
+        Email NVARCHAR(320) NOT NULL CONSTRAINT DF_Customers_Email DEFAULT(N''),
+        Phone NVARCHAR(50) NOT NULL CONSTRAINT DF_Customers_Phone DEFAULT(N''),
+        Notes NVARCHAR(MAX) NULL,
+        StoreGuid NVARCHAR(128) NULL,
+        StoreZip NVARCHAR(20) NULL
+    );
+END;
+
+IF OBJECT_ID(N'dbo.Licenses', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Licenses
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Licenses PRIMARY KEY,
+        CustomerId INT NOT NULL,
+        LicenseKey NVARCHAR(MAX) NOT NULL,
+        MaxStores INT NOT NULL CONSTRAINT DF_Licenses_MaxStores DEFAULT(1),
+        MaxUsers INT NOT NULL CONSTRAINT DF_Licenses_MaxUsers DEFAULT(1),
+        MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1),
+        MonthlyFee DECIMAL(18,2) NOT NULL CONSTRAINT DF_Licenses_MonthlyFee DEFAULT(0),
+        IsActive BIT NOT NULL CONSTRAINT DF_Licenses_IsActive DEFAULT(1),
+        ActivatedDate DATETIME2 NOT NULL CONSTRAINT DF_Licenses_ActivatedDate DEFAULT(SYSUTCDATETIME()),
+        ExpiresDate DATETIME2 NOT NULL,
+        AssignedDatabases NVARCHAR(MAX) NULL,
+        EnabledServices NVARCHAR(200) NOT NULL CONSTRAINT DF_Licenses_EnabledServices DEFAULT(N'Accounting'),
+        PayrollState NVARCHAR(2) NOT NULL CONSTRAINT DF_Licenses_PayrollState DEFAULT(N''),
+        MonthlyReportEmail NVARCHAR(254) NOT NULL CONSTRAINT DF_Licenses_MonthlyReportEmail DEFAULT(N''),
+        MonthlyReportDay TINYINT NOT NULL CONSTRAINT DF_Licenses_MonthlyReportDay DEFAULT(3)
+    );
+END;
+
 IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     ALTER TABLE dbo.Licenses ADD MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1);
 IF COL_LENGTH('dbo.Licenses', 'EnabledServices') IS NULL
