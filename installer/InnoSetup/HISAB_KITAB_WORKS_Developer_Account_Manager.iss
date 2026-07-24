@@ -1,5 +1,7 @@
 #define MyAppName "HISAB KITAB WORKS Account Manager"
+#ifndef MyAppVersion
 #define MyAppVersion "1.0.127"
+#endif
 #define MyAppPublisher "Hisab Kitab Works"
 #define MyAppExeName "HISAB KITAB WORKS Client Account Manager.exe"
 #define MySourceDir "..\publish\account-manager-win-x64"
@@ -15,7 +17,7 @@ DefaultDirName={autopf}\HISAB KITAB WORKS\Developer Tools\Account Manager
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
-OutputBaseFilename=HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.127
+OutputBaseFilename=HISAB_KITAB_WORKS_Account_Manager_Setup_{#MyAppVersion}
 SetupIconFile=..\..\developer-only\HISAB-KITAB-LICENSE-GENERATOR\Assets\HisabKitab.ico
 Compression=lzma2
 SolidCompression=yes
@@ -26,7 +28,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=1.0.127.0
+VersionInfoVersion={#MyAppVersion}.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Installer
 VersionInfoProductName={#MyAppName}

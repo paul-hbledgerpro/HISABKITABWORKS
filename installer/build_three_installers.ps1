@@ -114,7 +114,7 @@ $scripts = @(
 
 foreach ($script in $scripts) {
     Write-Host "Compiling $(Split-Path -Leaf $script) ..." -ForegroundColor Cyan
-    & $iscc $script
+    & $iscc "/DMyAppVersion=$Version" $script
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup compilation failed for $script (exit code $LASTEXITCODE)."
     }
