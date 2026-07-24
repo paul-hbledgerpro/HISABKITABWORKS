@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Text.Json;
+using HisabKitabWorks.DeveloperTools;
 
 namespace HisabKitabWorks.ClientAccountManager.WinForms;
 
@@ -55,8 +56,10 @@ internal sealed class MainForm : Form
         Icon = DeveloperTheme.Icon(); BackColor = DeveloperTheme.Bg; Font = DeveloperTheme.Body();
         StartPosition = FormStartPosition.CenterScreen; Size = new Size(1450, 930); MinimumSize = new Size(1180, 760);
         AutoScaleMode = AutoScaleMode.Dpi; WindowState = FormWindowState.Normal;
-        _server.Text = LocalSqlServerPolicy.DefaultInstance;
-        _username.Clear(); _password.Clear(); _username.Enabled = false; _password.Enabled = false;
+        var connectionProfile = DeveloperLicensingConnection.Load(LocalSqlServerPolicy.DefaultInstance);
+        _server.Text = connectionProfile.Server;
+        _username.Text = connectionProfile.Username;
+        _password.Text = connectionProfile.Password;
         _guid.CharacterCasing = CharacterCasing.Upper; _zip.MaxLength = 5; _subscription.ReadOnly = true;
         _addressState.ReadOnly = true; _addressState.TabStop = false; _addressState.BackColor = DeveloperTheme.PaleBlue;
         _monthlyReportEmail.Enabled = false; _monthlyReportDay.Enabled = false;
@@ -226,7 +229,19 @@ internal sealed class MainForm : Form
 
     private void Connect()
     {
-        try { Cursor=Cursors.WaitCursor; var service=new ClientAccountService(_server.Text,_username.Text,_password.Text); service.ConnectAndUpgrade(); _service=service; _database.DataSource=service.Databases(); _connection.Text="●  Connected"; _connection.ForeColor=DeveloperTheme.Green; RefreshAccounts(); SetStatus("Connected. Create a client account and select its paid services before issuing the PC license.",false); }
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            var service = new ClientAccountService(_server.Text, _username.Text, _password.Text);
+            service.ConnectAndUpgrade();
+            DeveloperLicensingConnection.Save(_server.Text, _username.Text, _password.Text);
+            _service = service;
+            _database.DataSource = service.Databases();
+            _connection.Text = "●  Connected";
+            _connection.ForeColor = DeveloperTheme.Green;
+            RefreshAccounts();
+            SetStatus("Connected. Create a client account and select its paid services before issuing the PC license.", false);
+        }
         catch(Exception ex) { _service=null; _connection.Text="●  Connection failed"; _connection.ForeColor=DeveloperTheme.Red; SetStatus(ex.Message,true); }
         finally { Cursor=Cursors.Default; }
     }

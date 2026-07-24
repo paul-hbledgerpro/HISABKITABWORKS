@@ -885,10 +885,10 @@ ORDER BY IsPrimary DESC, BusinessName", connection);
     {
         var connectionPayload = new DeviceConnectionPayload
         {
-            Server = _server,
+            Server = LocalSqlServerPolicy.ClientStoreInstance,
             Database = databaseName,
-            Username = _username,
-            Password = _password
+            Username = string.Empty,
+            Password = string.Empty
         };
         var clearConnection = JsonSerializer.SerializeToUtf8Bytes(connectionPayload, _json);
         var aesKey = RandomNumberGenerator.GetBytes(32);

@@ -60,10 +60,11 @@ internal sealed class ClientAccountService
 
     public ClientAccountService(string server, string username, string password)
     {
-        LocalSqlServerPolicy.RequireLocal(server);
-        _server = LocalSqlServerPolicy.DefaultInstance;
-        _username = string.Empty;
-        _password = string.Empty;
+        if (string.IsNullOrWhiteSpace(server))
+            throw new ArgumentException("Enter the shared licensing SQL Server.", nameof(server));
+        _server = server.Trim();
+        _username = username.Trim();
+        _password = password;
     }
 
     public void ConnectAndUpgrade()
@@ -180,9 +181,20 @@ END;", connection);
 
     public IReadOnlyList<string> Databases()
     {
-        using var connection = new SqlConnection(ConnectionString("master")); connection.Open();
-        using var command = new SqlCommand("SELECT name FROM sys.databases WHERE database_id>4 AND state_desc='ONLINE' AND name<>@license ORDER BY name", connection);
-        command.Parameters.AddWithValue("@license", LicensingDatabase);
+        using var connection = Open();
+        using var command = new SqlCommand(@"
+SELECT DISTINCT DatabaseName
+FROM (
+    SELECT NULLIF(LTRIM(RTRIM(DatabaseName)), '') AS DatabaseName
+    FROM dbo.CustomerBusinesses
+    WHERE IsActive=1
+    UNION
+    SELECT NULLIF(LTRIM(RTRIM(AssignedDatabases)), '')
+    FROM dbo.Licenses
+    WHERE IsActive=1
+) licensed
+WHERE DatabaseName IS NOT NULL
+ORDER BY DatabaseName", connection);
         using var reader = command.ExecuteReader(); var result = new List<string>();
         while (reader.Read()) result.Add(reader.GetString(0));
         return result;

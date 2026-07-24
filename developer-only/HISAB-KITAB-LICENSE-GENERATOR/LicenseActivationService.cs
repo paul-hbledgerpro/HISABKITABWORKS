@@ -16,24 +16,32 @@ internal sealed class LicenseActivationService
 
     public LicenseActivationService(string server, string username, string password)
     {
-        LocalSqlServerPolicy.RequireLocal(server);
-        _server = LocalSqlServerPolicy.DefaultInstance;
-        _username = string.Empty;
-        _password = string.Empty;
+        if (string.IsNullOrWhiteSpace(server))
+            throw new ArgumentException("Enter the shared licensing SQL Server.", nameof(server));
+        _server = server.Trim();
+        _username = username.Trim();
+        _password = password;
     }
 
     public string LicensingConnectionString => ConnectionString(LicensingDatabase);
 
     public IReadOnlyList<string> ListBusinessDatabases()
     {
-        using var connection = new SqlConnection(ConnectionString("master"));
+        using var connection = new SqlConnection(LicensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(@"
-SELECT name
-FROM sys.databases
-WHERE database_id > 4 AND state_desc='ONLINE' AND name<>@licensingDatabase
-ORDER BY name", connection);
-        command.Parameters.AddWithValue("@licensingDatabase", LicensingDatabase);
+SELECT DISTINCT DatabaseName
+FROM (
+    SELECT NULLIF(LTRIM(RTRIM(DatabaseName)), '') AS DatabaseName
+    FROM dbo.CustomerBusinesses
+    WHERE IsActive=1
+    UNION
+    SELECT NULLIF(LTRIM(RTRIM(AssignedDatabases)), '')
+    FROM dbo.Licenses
+    WHERE IsActive=1
+) licensed
+WHERE DatabaseName IS NOT NULL
+ORDER BY DatabaseName", connection);
         using var reader = command.ExecuteReader();
         var databases = new List<string>();
         while (reader.Read())
@@ -122,14 +130,12 @@ ORDER BY name", connection);
 
             EnsureBusinessCanBelongToCustomer(
                 subscription.CustomerId, storeGuid, databaseName, allowBusinessTransfer);
-            EnsurePhysicalDatabase(databaseName);
             UpsertAdditionalBusiness(subscription.CustomerId, storeGuid, databaseName, businessName);
             addedBusiness = !alreadyApproved;
         }
         else
         {
             SaveCustomerActivationMetadata(subscription.CustomerId, storeGuid, storeZip);
-            EnsurePhysicalDatabase(databaseName);
         }
 
         var devices = LoadDevices(subscription.LicenseId);
@@ -516,22 +522,6 @@ END", connection);
         command.ExecuteNonQuery();
     }
 
-    private void EnsurePhysicalDatabase(string storeGuid)
-    {
-        using var connection = new SqlConnection(ConnectionString("master"));
-        connection.Open();
-        using (var exists = new SqlCommand("SELECT COUNT(*) FROM sys.databases WHERE name=@name", connection))
-        {
-            exists.Parameters.AddWithValue("@name", storeGuid);
-            if (Convert.ToInt32(exists.ExecuteScalar()) > 0)
-                return;
-        }
-
-        var quoted = storeGuid.Replace("]", "]]", StringComparison.Ordinal);
-        using var create = new SqlCommand($"CREATE DATABASE [{quoted}]", connection) { CommandTimeout = 120 };
-        create.ExecuteNonQuery();
-    }
-
     private static DeviceLicenseRequestV2 RequestFromRegisteredPc(
         ClientSubscription subscription,
         IReadOnlyList<RegisteredLicensePc> devices,
@@ -669,7 +659,7 @@ ORDER BY IsPrimary DESC, BusinessName", connection);
     {
         var connectionPayload = new DeviceConnectionPayload
         {
-            Server = LocalSqlServerPolicy.DefaultInstance,
+            Server = LocalSqlServerPolicy.ClientStoreInstance,
             Database = databaseName,
             Username = string.Empty,
             Password = string.Empty

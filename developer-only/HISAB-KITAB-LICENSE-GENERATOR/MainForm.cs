@@ -1,3 +1,5 @@
+using HisabKitabWorks.DeveloperTools;
+
 namespace HisabKitabWorks.LicenseGenerator.WinForms;
 
 internal sealed partial class MainForm : Form
@@ -80,11 +82,10 @@ internal sealed partial class MainForm : Form
         WindowState = FormWindowState.Normal;
         FormBorderStyle = FormBorderStyle.Sizable;
 
-        _server.Text = LocalSqlServerPolicy.DefaultInstance;
-        _username.Clear();
-        _password.Clear();
-        _username.Enabled = false;
-        _password.Enabled = false;
+        var connectionProfile = DeveloperLicensingConnection.Load(LocalSqlServerPolicy.DefaultInstance);
+        _server.Text = connectionProfile.Server;
+        _username.Text = connectionProfile.Username;
+        _password.Text = connectionProfile.Password;
         _storeGuid.CharacterCasing = CharacterCasing.Upper;
         _pcId.CharacterCasing = CharacterCasing.Upper;
         _storeZip.MaxLength = 5;
@@ -121,7 +122,7 @@ internal sealed partial class MainForm : Form
     {
         if (string.IsNullOrWhiteSpace(_server.Text))
         {
-            SetStatus("Enter the local SQL Server instance.", true);
+            SetStatus("Enter the shared licensing SQL Server.", true);
             return;
         }
 
@@ -130,6 +131,7 @@ internal sealed partial class MainForm : Form
         {
             var service = new LicenseActivationService(_server.Text, _username.Text, _password.Text);
             service.TestAndPrepareDatabase();
+            DeveloperLicensingConnection.Save(_server.Text, _username.Text, _password.Text);
             _service = service;
             _isConnected = true;
             LoadDatabaseChoices();

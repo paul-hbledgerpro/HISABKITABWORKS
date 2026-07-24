@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "1.0.126"
+    [string]$Version = "1.0.127"
 )
 
 $ErrorActionPreference = "Stop"
