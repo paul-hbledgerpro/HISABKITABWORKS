@@ -124,13 +124,16 @@ internal static class LicensedBusinessService
 
     public static async Task SynchronizeAsync(IServiceProvider services)
     {
-        var businesses = Load();
-        if (businesses.Count == 0)
+        var licensedBusinesses = Load();
+        if (licensedBusinesses.Count == 0)
             return;
 
-        if (businesses.Count(x => x.IsPrimary) != 1)
+        if (licensedBusinesses.Count(x => x.IsPrimary) != 1)
             throw new InvalidOperationException("The licensed business directory does not contain exactly one primary business.");
 
+        var businesses = StoreDirectoryPreferencesStore
+            .GetOrderedBusinesses(licensedBusinesses)
+            .ToList();
         await UpgradeLicensedDatabasesAsync(businesses);
 
         using var scope = services.CreateScope();
@@ -140,7 +143,7 @@ internal static class LicensedBusinessService
         var matchedIds = new HashSet<int>();
         var connections = new Dictionary<string, string>();
 
-        foreach (var licensed in businesses.OrderByDescending(x => x.IsPrimary).ThenBy(x => x.BusinessName))
+        foreach (var licensed in businesses)
         {
             var store = existing.FirstOrDefault(x => NamesMatch(x.Name, licensed.BusinessName));
             if (store is null)

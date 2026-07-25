@@ -911,12 +911,23 @@ internal sealed partial class MainForm : Form
         try
         {
             using var db = _dbFactory.CreateDbContext();
-            var stores = await db.Stores.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync();
+            var businesses = LicensedBusinessService.Load();
+            var stores = (await db.Stores.AsNoTracking()
+                    .Where(s => s.IsActive)
+                    .ToListAsync())
+                .OrderBy(store =>
+                    StoreDirectoryPreferencesStore.OrderOf(store.Name, businesses))
+                .ThenBy(store => store.Name)
+                .ToList();
             _storeCombo.DataSource = stores;
             _storeCombo.DisplayMember = nameof(Store.Name);
             _storeCombo.ValueMember = nameof(Store.Id);
+            var preferredBusiness =
+                StoreDirectoryPreferencesStore.GetDefaultBusiness(businesses);
             var selected = stores.FirstOrDefault(s => s.Id == _currentConnectionStoreId)
                 ?? stores.FirstOrDefault(s => StoreNamesMatch(s.Name, _session.StoreName))
+                ?? stores.FirstOrDefault(s =>
+                    StoreNamesMatch(s.Name, preferredBusiness?.BusinessName))
                 ?? stores.FirstOrDefault();
             if (selected is not null)
             {
@@ -944,7 +955,6 @@ internal sealed partial class MainForm : Form
         {
             var settings = await _settingsService.GetSettingsAsync();
             settings.LastStoreId = storeId;
-            settings.DefaultStoreId = storeId;
             settings.StoreName = storeName;
             if (!string.IsNullOrWhiteSpace(storeAddress))
                 settings.StoreAddress = storeAddress;

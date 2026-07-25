@@ -499,7 +499,17 @@ internal sealed class LoginForm : Form
         _storePicker.DisplayMember = nameof(LoginStoreOption.StoreName);
         _storePicker.DataSource = stores;
         if (_storePicker.Items.Count > 0)
-            _storePicker.SelectedIndex = 0;
+        {
+            var businesses = LicensedBusinessService.Load();
+            var preferred = StoreDirectoryPreferencesStore.GetDefaultBusiness(businesses);
+            var preferredIndex = preferred is null
+                ? -1
+                : stores.FindIndex(store =>
+                    StoreDirectoryPreferencesStore.NamesMatch(
+                        store.StoreName,
+                        preferred.BusinessName));
+            _storePicker.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
+        }
 
         _usernameLabel!.Visible = false;
         _usernameShell!.Visible = false;
@@ -699,10 +709,12 @@ internal sealed class LoginForm : Form
                 });
             }
 
+            var businesses = LicensedBusinessService.Load();
             return choices
                 .GroupBy(x => x.StoreId)
                 .Select(g => g.OrderByDescending(x => !string.IsNullOrWhiteSpace(x.ConnectionString)).First())
-                .OrderBy(x => x.StoreName)
+                .OrderBy(x => StoreDirectoryPreferencesStore.OrderOf(x.StoreName, businesses))
+                .ThenBy(x => x.StoreName)
                 .ToList();
         });
     }
@@ -775,10 +787,12 @@ internal sealed class LoginForm : Form
         var selectedStoreId = _storePicker.SelectedItem is LoginStoreOption current ? current.StoreId : null;
         _storePicker.DataSource = null;
         _storePicker.DisplayMember = nameof(LoginStoreOption.StoreName);
+        var businesses = LicensedBusinessService.Load();
         _storePicker.DataSource = _availableStores
             .GroupBy(x => x.StoreId)
             .Select(g => g.OrderByDescending(x => !string.IsNullOrWhiteSpace(x.ConnectionString)).First())
             .OrderBy(x => x.StoreId is null ? 0 : 1)
+            .ThenBy(x => StoreDirectoryPreferencesStore.OrderOf(x.StoreName, businesses))
             .ThenBy(x => x.StoreName)
             .ToList();
         if (selectedStoreId is int id)
@@ -1037,7 +1051,6 @@ internal sealed class LoginForm : Form
 
             var settings = settingsService.GetSettingsAsync().GetAwaiter().GetResult();
             settings.LastStoreId = store.StoreId;
-            settings.DefaultStoreId = store.StoreId;
             settings.StoreName = store.StoreName;
             settings.StoreAddress = store.StoreAddress;
             settingsService.SaveSettingsAsync(settings).GetAwaiter().GetResult();

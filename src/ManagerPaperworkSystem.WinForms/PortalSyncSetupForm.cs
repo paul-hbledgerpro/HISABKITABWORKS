@@ -52,16 +52,14 @@ internal sealed class PortalSyncSetupForm : Form
     {
         _paths = paths;
         _document = PortalSyncSettingsStore.Load();
-        _licensedBusinesses = LicensedBusinessService.Load()
-            .OrderByDescending(item => item.IsPrimary)
-            .ThenBy(item => item.BusinessName)
-            .ToList();
+        _licensedBusinesses = StoreDirectoryPreferencesStore.GetOrderedBusinesses(
+            LicensedBusinessService.Load());
 
         WinTheme.Apply(this);
         Text = "POS Portal Auto Sync - HISAB KITAB";
         StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(960, 720);
-        Size = new Size(1080, 790);
+        MinimumSize = new Size(760, 600);
+        Size = new Size(980, 720);
         AutoScaleMode = AutoScaleMode.Dpi;
         Controls.Add(BuildContent());
 
@@ -93,31 +91,31 @@ internal sealed class PortalSyncSetupForm : Form
         {
             Dock = DockStyle.Fill,
             BackColor = WinTheme.Bg,
-            Padding = new Padding(24),
+            Padding = new Padding(16),
             ColumnCount = 1,
             RowCount = 4
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
 
         var heading = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.BlueDark };
         heading.Controls.Add(new Label
         {
             Text = "AUTOMATIC POS REPORT SYNC",
             Dock = DockStyle.Top,
-            Height = 58,
-            Padding = new Padding(24, 14, 0, 0),
+            Height = 50,
+            Padding = new Padding(18, 10, 0, 0),
             ForeColor = Color.White,
-            Font = WinTheme.HeaderFont(22)
+            Font = WinTheme.HeaderFont(19)
         });
         heading.Controls.Add(new Label
         {
             Text = "One-time Google Chrome enrollment • encrypted credentials • unattended daily import",
             Dock = DockStyle.Bottom,
-            Height = 36,
-            Padding = new Padding(26, 0, 0, 10),
+            Height = 32,
+            Padding = new Padding(20, 0, 0, 8),
             ForeColor = Color.FromArgb(205, 224, 244),
             Font = WinTheme.BodyFont(10)
         });
@@ -126,23 +124,26 @@ internal sealed class PortalSyncSetupForm : Form
         var card = WinTheme.BorderedPanel(14);
         card.Dock = DockStyle.Fill;
         card.Margin = new Padding(0, 14, 0, 8);
+        card.AutoScroll = true;
         root.Controls.Add(card, 0, 1);
 
         var form = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = WinTheme.Panel,
-            Padding = new Padding(22, 18, 22, 18),
+            Padding = new Padding(16, 12, 16, 12),
             ColumnCount = 4,
-            RowCount = 8
+            RowCount = 7,
+            AutoScroll = true,
+            AutoScrollMinSize = new Size(680, 480)
         };
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24));
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24));
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
-        for (var row = 0; row < 7; row++)
-            form.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
-        form.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        for (var row = 0; row < 6; row++)
+            form.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        form.RowStyles.Add(new RowStyle(SizeType.Absolute, 144));
         card.Controls.Add(form);
 
         AddField(form, "LICENSED HISAB KITAB STORE *", _business, 0, 0, 2);
@@ -177,27 +178,25 @@ internal sealed class PortalSyncSetupForm : Form
         }, 0, 6);
         form.SetColumnSpan(form.GetControlFromPosition(0, 6)!, 4);
 
-        var actions = new TableLayoutPanel
+        var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = WinTheme.Bg,
-            ColumnCount = 4,
-            RowCount = 1
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            AutoScroll = true,
+            Padding = new Padding(0, 5, 0, 5)
         };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16));
         root.Controls.Add(actions, 0, 2);
 
-        var save = ActionButton("SAVE SETUP", true);
-        var enroll = ActionButton("OPEN ONE-TIME CHROME");
-        var test = ActionButton("TEST / SYNC NOW", true);
-        var close = ActionButton("CLOSE");
-        actions.Controls.Add(save, 0, 0);
-        actions.Controls.Add(enroll, 1, 0);
-        actions.Controls.Add(test, 2, 0);
-        actions.Controls.Add(close, 3, 0);
+        var save = ActionButton("SAVE SETUP", true, 180);
+        var enroll = ActionButton("ONE-TIME SETUP", false, 205);
+        var test = ActionButton("TEST / SYNC NOW", true, 190);
+        var close = ActionButton("CLOSE", false, 120);
+        actions.Controls.Add(save);
+        actions.Controls.Add(enroll);
+        actions.Controls.Add(test);
+        actions.Controls.Add(close);
 
         save.Click += (_, _) => SaveSettings(showConfirmation: true);
         enroll.Click += (_, _) =>
@@ -218,7 +217,7 @@ internal sealed class PortalSyncSetupForm : Form
         {
             try
             {
-                SaveSettings(showConfirmation: false);
+                var selectedSettings = SaveSettings(showConfirmation: false);
                 _syncRunning = true;
                 ToggleActions(actions, false);
                 _status.Text =
@@ -227,6 +226,7 @@ internal sealed class PortalSyncSetupForm : Form
                     _paths,
                     true,
                     true,
+                    onlyStoreConfigurationId: selectedSettings.Id,
                     waitForExistingRun: true,
                     cancellationToken: _syncCancellation.Token);
                 if (!CanUpdateWindow())
@@ -360,10 +360,11 @@ internal sealed class PortalSyncSetupForm : Form
             control.Enabled = enabled;
     }
 
-    private static Button ActionButton(string text, bool primary = false)
+    private static Button ActionButton(string text, bool primary = false, int width = 180)
     {
         var button = WinTheme.Button(text, primary);
-        button.Dock = DockStyle.Fill;
+        button.Width = width;
+        button.Height = 44;
         button.Margin = new Padding(5);
         return button;
     }

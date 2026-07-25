@@ -56,6 +56,14 @@ internal static class PortalSyncService
 
     public static void OpenEnrollmentChrome(PortalStoreSyncSettings settings)
     {
+        if (!StoreDirectoryPreferencesStore.IsConnected(
+                settings.StoreGuid,
+                settings.DatabaseName))
+        {
+            throw new InvalidOperationException(
+                "This store is disconnected from the current PC login. Reconnect it in Stores before running One-Time Setup.");
+        }
+
         var chrome = FindGoogleChrome()
                      ?? throw new InvalidOperationException(
                          "Google Chrome is not installed. Install Chrome, then try the one-time setup again.");
@@ -133,7 +141,11 @@ internal static class PortalSyncService
 
     public static void EnsureConfiguredDailyTasks()
     {
-        foreach (var settings in PortalSyncSettingsStore.Load().Stores.Where(item => item.Enabled))
+        foreach (var settings in PortalSyncSettingsStore.Load().Stores.Where(item =>
+                     item.Enabled &&
+                     StoreDirectoryPreferencesStore.IsConnected(
+                         item.StoreGuid,
+                         item.DatabaseName)))
             EnsureDailyTask(
                 settings.Id,
                 new TimeOnly(settings.DailyHour, settings.DailyMinute));
@@ -185,6 +197,9 @@ internal static class PortalSyncService
             var results = new List<PortalSyncRunResult>();
             var configuredStores = document.Stores
                 .Where(item => item.Enabled &&
+                               StoreDirectoryPreferencesStore.IsConnected(
+                                   item.StoreGuid,
+                                   item.DatabaseName) &&
                                (onlyStoreConfigurationId is null ||
                                 item.Id == onlyStoreConfigurationId.Value))
                 .ToList();
@@ -194,7 +209,7 @@ internal static class PortalSyncService
                     "",
                     false,
                     false,
-                    $"The scheduled POS configuration {onlyStoreConfigurationId:D} was not found or is disabled.");
+                    $"The scheduled POS configuration {onlyStoreConfigurationId:D} was not found, is disabled, or its store is disconnected.");
                 results.Add(missing);
                 WriteLog(missing);
                 return results;
@@ -2351,36 +2366,20 @@ internal static class PortalSyncService
 
     private static AppDbContext CreateStoreDatabase(PortalStoreSyncSettings settings)
     {
-        var licensed = LicensedBusinessService.Load().FirstOrDefault(item =>
+        var businesses = LicensedBusinessService.Load();
+        var licensed = businesses.FirstOrDefault(item =>
             string.Equals(item.DatabaseName, settings.DatabaseName, StringComparison.OrdinalIgnoreCase) ||
             (!string.IsNullOrWhiteSpace(settings.StoreGuid) &&
              string.Equals(item.StoreGuid, settings.StoreGuid, StringComparison.OrdinalIgnoreCase)));
         if (licensed is null)
             throw new InvalidOperationException(
                 $"'{settings.BusinessName}' is no longer included in this PC license.");
-
-        var builder = new SqlConnectionStringBuilder
-        {
-            DataSource = licensed.Connection.Server,
-            InitialCatalog = licensed.Connection.Database,
-            TrustServerCertificate = true,
-            Encrypt = true,
-            ConnectTimeout = 15,
-            ConnectRetryCount = 2,
-            ConnectRetryInterval = 2
-        };
-        if (!string.IsNullOrWhiteSpace(licensed.Connection.ConnectionString))
-            builder.ConnectionString = licensed.Connection.ConnectionString;
-        else if (string.IsNullOrWhiteSpace(licensed.Connection.Username))
-            builder.IntegratedSecurity = true;
-        else
-        {
-            builder.UserID = licensed.Connection.Username;
-            builder.Password = licensed.Connection.Password;
-        }
+        if (!StoreDirectoryPreferencesStore.IsConnected(licensed, businesses))
+            throw new InvalidOperationException(
+                $"'{settings.BusinessName}' is disconnected from this PC login.");
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlServer(builder.ConnectionString)
+            .UseSqlServer(LocalSqlServerPolicy.BuildConnectionString(licensed.DatabaseName))
             .Options;
         return new AppDbContext(options);
     }

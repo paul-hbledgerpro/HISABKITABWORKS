@@ -92,6 +92,12 @@ internal sealed class DeviceActivationForm : Form
         }
 
         Controls.Add(BuildLayout());
+        if (addingLicensedStore)
+        {
+            SetStatus(
+                "Paste or import the signed updated license directly. Enter the new store details only when creating a new request.",
+                false);
+        }
         _copyRequest.Click += (_, _) => CopyActivationRequest();
         _copyStoreGuid.Click += (_, _) => CopyStoreGuid();
         _copyStoreName.Click += (_, _) => CopyField(_storeName.Text, "Store Name");
@@ -535,8 +541,13 @@ internal sealed class DeviceActivationForm : Form
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(_storeGuid.Text) || string.IsNullOrWhiteSpace(_storeName.Text) || string.IsNullOrWhiteSpace(_storeZip.Text))
+            if (!_addingLicensedStore &&
+                (string.IsNullOrWhiteSpace(_storeGuid.Text) ||
+                 string.IsNullOrWhiteSpace(_storeName.Text) ||
+                 string.IsNullOrWhiteSpace(_storeZip.Text)))
+            {
                 throw new InvalidOperationException("Enter the Store GUID, Store Name and ZIP code before activating.");
+            }
             var activationText = _pendingLicenseText ?? _licenseKey.Text;
             if (string.IsNullOrWhiteSpace(activationText))
                 throw new InvalidOperationException("Paste the License Key first.");
@@ -546,9 +557,9 @@ internal sealed class DeviceActivationForm : Form
                     "The short License Key identifies the license, but offline activation also needs its protected code. Use COPY LICENSE KEY in the generator and PASTE KEY here, or import the license file.");
             var result = DeviceLicenseService.InstallLicenseCode(
                 activationText,
-                _storeName.Text,
-                _storeGuid.Text,
-                _storeZip.Text,
+                _addingLicensedStore ? "" : _storeName.Text,
+                _addingLicensedStore ? "" : _storeGuid.Text,
+                _addingLicensedStore ? "" : _storeZip.Text,
                 _requiredExistingDatabases,
                 _addingLicensedStore);
             if (result.Status != DeviceLicenseStatus.Valid)
@@ -608,8 +619,8 @@ internal sealed class DeviceActivationForm : Form
             var result = DeviceLicenseService.InstallLicense(
                 dialog.FileName,
                 _requiredExistingDatabases,
-                _addingLicensedStore ? _storeGuid.Text : "",
-                _addingLicensedStore ? _storeName.Text : "");
+                "",
+                "");
             if (result.Status != DeviceLicenseStatus.Valid)
             {
                 SetStatus(result.Message, true);

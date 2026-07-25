@@ -36,10 +36,11 @@ internal sealed class StoreManagerForm : Form
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 104));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
         var message = WinTheme.Label(
             "These businesses are digitally signed into this PC license.\r\n"
-            + "To add or remove one, the developer updates the client account and reissues this PC license.");
+            + "Choose the login default, arrange the store lineup, or disconnect an additional store from this PC. "
+            + "Disconnecting hides it from login without deleting its database or paid license.");
         message.Dock = DockStyle.Fill;
         message.TextAlign = ContentAlignment.MiddleLeft;
         message.ForeColor = WinTheme.Muted;
@@ -48,20 +49,22 @@ internal sealed class StoreManagerForm : Form
         root.Controls.Add(message, 0, 0);
         _grid.Margin = new Padding(4, 0, 4, 10);
         root.Controls.Add(_grid, 0, 1);
-        var actions = new TableLayoutPanel
+        var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 4,
-            RowCount = 1,
-            Margin = new Padding(4, 2, 4, 0)
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            AutoScroll = true,
+            Margin = new Padding(4, 2, 4, 0),
+            Padding = new Padding(0, 4, 0, 4)
         };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 165));
-        actions.Controls.Add(Button("Import Updated License", ImportUpdatedLicense), 1, 0);
-        actions.Controls.Add(Button("Add Store", AddLicensedStore, true), 2, 0);
-        actions.Controls.Add(Button("Close", () => Close()), 3, 0);
+        actions.Controls.Add(Button("Add Store", AddLicensedStore, true, 150));
+        actions.Controls.Add(Button("Import Updated License", ImportUpdatedLicense, false, 220));
+        actions.Controls.Add(Button("Set as Login Default", SetSelectedAsDefault, true, 210));
+        actions.Controls.Add(Button("Move Up", () => MoveSelected(-1), false, 130));
+        actions.Controls.Add(Button("Move Down", () => MoveSelected(1), false, 140));
+        actions.Controls.Add(Button("Disconnect / Reconnect", ToggleSelectedConnection, false, 220));
+        actions.Controls.Add(Button("Close", () => Close(), false, 120));
         root.Controls.Add(actions, 0, 2);
         return root;
     }
@@ -88,32 +91,44 @@ internal sealed class StoreManagerForm : Form
         }
     }
 
-    private Button Button(string text, Action action, bool filled = false)
+    private Button Button(string text, Action action, bool filled = false, int width = 170)
     {
         var b = WinTheme.Button(text, filled);
-        b.Dock = DockStyle.Fill;
-        b.Margin = new Padding(6, 8, 0, 8);
+        b.Width = width;
+        b.Height = 44;
+        b.Margin = new Padding(5);
         b.Click += (_, _) => action();
         return b;
     }
 
     private void RefreshGrid()
     {
-        _grid.DataSource = LicensedBusinessService.Load()
-            .OrderByDescending(x => x.IsPrimary)
-            .ThenBy(x => x.BusinessName)
-            .Select(x => new
+        var businesses = LicensedBusinessService.Load();
+        var ordered = StoreDirectoryPreferencesStore.GetOrderedBusinesses(
+            businesses,
+            includeDisconnected: true);
+        _grid.DataSource = ordered
+            .Select((business, index) => new
             {
-                x.BusinessId,
-                Name = x.BusinessName,
-                x.StoreGuid,
-                x.Address,
-                Database = x.DatabaseName,
-                Type = x.IsPrimary ? "Primary Login Business" : "Additional Business",
-                Licensed = true
+                StoreKey = StoreDirectoryPreferencesStore.Key(business),
+                Order = index + 1,
+                business.BusinessId,
+                Name = business.BusinessName,
+                business.StoreGuid,
+                business.Address,
+                Database = business.DatabaseName,
+                Type = business.IsPrimary ? "Primary Login Business" : "Additional Business",
+                Default = StoreDirectoryPreferencesStore.IsDefault(business, businesses) ? "Yes" : "",
+                Connection = StoreDirectoryPreferencesStore.IsConnected(business, businesses)
+                    ? "Connected"
+                    : "Disconnected"
             })
             .ToList();
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        if (_grid.Columns.Contains("StoreKey"))
+            _grid.Columns["StoreKey"]!.Visible = false;
+        if (_grid.Columns.Contains("Order"))
+            _grid.Columns["Order"]!.FillWeight = 45;
         if (_grid.Columns.Contains("BusinessId"))
         {
             _grid.Columns["BusinessId"]!.HeaderText = "Business ID";
@@ -132,8 +147,151 @@ internal sealed class StoreManagerForm : Form
             _grid.Columns["Database"]!.FillWeight = 145;
         if (_grid.Columns.Contains("Type"))
             _grid.Columns["Type"]!.FillWeight = 135;
-        if (_grid.Columns.Contains("Licensed"))
-            _grid.Columns["Licensed"]!.FillWeight = 70;
+        if (_grid.Columns.Contains("Default"))
+            _grid.Columns["Default"]!.FillWeight = 60;
+        if (_grid.Columns.Contains("Connection"))
+            _grid.Columns["Connection"]!.FillWeight = 90;
+    }
+
+    private LicensedBusinessConnection? SelectedBusiness()
+    {
+        if (_grid.CurrentRow is null || !_grid.Columns.Contains("StoreKey"))
+            return null;
+        var key = _grid.CurrentRow.Cells["StoreKey"].Value?.ToString();
+        return LicensedBusinessService.Load().FirstOrDefault(business =>
+            string.Equals(
+                StoreDirectoryPreferencesStore.Key(business),
+                key,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void SetSelectedAsDefault()
+    {
+        var business = SelectedBusiness();
+        if (business is null)
+        {
+            MessageBox.Show(this, "Select the store to use by default at login.",
+                "Licensed Businesses", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            var businesses = LicensedBusinessService.Load();
+            StoreDirectoryPreferencesStore.SetDefault(business, businesses);
+            RefreshGrid();
+            MessageBox.Show(this,
+                $"{business.BusinessName} will be preselected the next time a user logs in.",
+                "Login Default Updated", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, AppBootstrap.RedactSensitiveText(exception.Message),
+                "Default Store", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void MoveSelected(int direction)
+    {
+        var business = SelectedBusiness();
+        if (business is null)
+            return;
+        var businesses = LicensedBusinessService.Load();
+        StoreDirectoryPreferencesStore.Move(business, businesses, direction);
+        RefreshGrid();
+        SelectBusiness(business);
+    }
+
+    private async void ToggleSelectedConnection()
+    {
+        var business = SelectedBusiness();
+        if (business is null)
+        {
+            MessageBox.Show(this, "Select the store to disconnect or reconnect.",
+                "Licensed Businesses", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var businesses = LicensedBusinessService.Load();
+        var connected = StoreDirectoryPreferencesStore.IsConnected(business, businesses);
+        var action = connected ? "disconnect" : "reconnect";
+        var detail = connected
+            ? "It will disappear from login and the store selector on this PC. Its database and license will not be deleted."
+            : "It will return to login and the store selector on this PC.";
+        if (MessageBox.Show(
+                this,
+                $"{char.ToUpperInvariant(action[0])}{action[1..]} {business.BusinessName}?\r\n\r\n{detail}",
+                $"{char.ToUpperInvariant(action[0])}{action[1..]} Store",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            StoreDirectoryPreferencesStore.SetConnected(
+                business,
+                businesses,
+                connected: !connected);
+            if (connected)
+                DisablePortalSync(business);
+            await LicensedBusinessService.SynchronizeAsync(_services);
+            RefreshGrid();
+            MessageBox.Show(this,
+                connected
+                    ? $"{business.BusinessName} was disconnected from this PC login. You can reconnect it here later."
+                    : $"{business.BusinessName} was reconnected to this PC login.",
+                "Store Connection Updated",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, AppBootstrap.RedactSensitiveText(exception.Message),
+                "Store Connection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void SelectBusiness(LicensedBusinessConnection business)
+    {
+        var key = StoreDirectoryPreferencesStore.Key(business);
+        foreach (DataGridViewRow row in _grid.Rows)
+        {
+            if (string.Equals(
+                    row.Cells["StoreKey"].Value?.ToString(),
+                    key,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                row.Selected = true;
+                _grid.CurrentCell = row.Cells.Cast<DataGridViewCell>()
+                    .First(cell => cell.Visible);
+                return;
+            }
+        }
+    }
+
+    private static void DisablePortalSync(LicensedBusinessConnection business)
+    {
+        var document = PortalSyncSettingsStore.Load();
+        var changed = false;
+        foreach (var settings in document.Stores.Where(settings =>
+                     string.Equals(
+                         settings.DatabaseName,
+                         business.DatabaseName,
+                         StringComparison.OrdinalIgnoreCase) ||
+                     (!string.IsNullOrWhiteSpace(business.StoreGuid) &&
+                      string.Equals(
+                          settings.StoreGuid,
+                          business.StoreGuid,
+                          StringComparison.OrdinalIgnoreCase))))
+        {
+            settings.Enabled = false;
+            settings.LastStatus = "Store disconnected from this PC login.";
+            changed = true;
+        }
+        if (changed)
+            PortalSyncSettingsStore.Save(document);
     }
 
     private void ImportUpdatedLicense()
