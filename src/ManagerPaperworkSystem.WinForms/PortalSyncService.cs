@@ -29,6 +29,13 @@ internal sealed record GeneratedPortalReport(
     string RenderedText,
     string? ExportError);
 internal sealed record CapturedZReport(PosReportData Report, string SourcePath);
+internal sealed class ZReportDateMismatchException(
+    string message,
+    IReadOnlyList<DateOnly> actualDates) : InvalidOperationException(message)
+{
+    public IReadOnlyList<DateOnly> ActualDates { get; } = actualDates;
+}
+
 internal sealed record PortalTargetStatus(bool CashSummaryPresent, int ZReportCount)
 {
     public bool IsComplete(int expectedZReports) =>
@@ -406,8 +413,10 @@ internal static class PortalSyncService
         // The database is the accounting source of truth. A missing internal feed copy
         // must never cause the same store/date to be imported a second time.
         var needsCashSummary = !targetStatus.CashSummaryPresent;
-        var needsZReports =
-            targetStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports);
+        var needsZReports = !IsZReportRequirementSatisfied(
+            settings,
+            targetDate,
+            targetStatus.ZReportCount);
         if (!needsCashSummary && !needsZReports)
         {
             return new PortalSyncRunResult(
@@ -454,8 +463,10 @@ internal static class PortalSyncService
                 zResult.Total + recovered.Total,
                 zResult.Imported + recovered.Imported,
                 zResult.Updated + recovered.Updated);
-            needsZReports =
-                verifiedZBatches.Count < Math.Max(1, settings.ExpectedDailyZReports);
+            needsZReports = !IsZReportRequirementSatisfied(
+                settings,
+                targetDate,
+                verifiedZBatches.Count);
         }
 
         if (!needsCashSummary && !needsZReports)
@@ -501,6 +512,7 @@ internal static class PortalSyncService
         string? cashSummaryPath = null;
         var zReportPaths = new List<string>();
         var rejectedZReportDetails = new List<string>();
+        var zReportShortfallAccepted = false;
         Exception? cashSummaryError = null;
         Exception? zReportsError = null;
         try
@@ -582,6 +594,7 @@ internal static class PortalSyncService
                             "AdventPOS did not provide any batch numbers for the Close-Out Report (Z-Report).");
                     }
 
+                    var scannedPastTargetDate = false;
                     foreach (var batch in candidateBatches)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
@@ -680,6 +693,13 @@ internal static class PortalSyncService
                         {
                             throw;
                         }
+                        catch (ZReportDateMismatchException mismatch)
+                        {
+                            if (mismatch.ActualDates.Any(date => date < targetDate))
+                                scannedPastTargetDate = true;
+                            rejectedZReportDetails.Add(
+                                $"batch {batch}: {FirstSentence(mismatch.Message)}");
+                        }
                         catch (Exception exception)
                         {
                             rejectedZReportDetails.Add(
@@ -687,7 +707,32 @@ internal static class PortalSyncService
                         }
                     }
 
-                    if (verifiedZBatches.Count == 0)
+                    if (verifiedZBatches.Count >= expectedReports)
+                    {
+                        RemoveVerifiedZReportShortfall(settings, targetDate);
+                    }
+                    else
+                    {
+                        // Register close-out counts can legitimately vary by date.
+                        // Keep retrying recent shortages, but once the portal scan has
+                        // crossed into older batches, preserve the actual count for
+                        // this date so one permanently short day cannot block every
+                        // subsequent scheduled run.
+                        var canAcceptShortfall =
+                            scannedPastTargetDate &&
+                            (verifiedZBatches.Count > 0 || ageInDays >= 7) &&
+                            ageInDays >= 2;
+                        if (canAcceptShortfall)
+                        {
+                            RecordVerifiedZReportShortfall(
+                                settings,
+                                targetDate,
+                                verifiedZBatches.Count);
+                            zReportShortfallAccepted = true;
+                        }
+                    }
+
+                    if (verifiedZBatches.Count == 0 && !zReportShortfallAccepted)
                     {
                         throw new InvalidOperationException(
                             $"None of the newest AdventPOS Close-Out batches had Start Date " +
@@ -765,7 +810,8 @@ internal static class PortalSyncService
         }
 
         var finalStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
-        if (!finalStatus.IsComplete(settings.ExpectedDailyZReports))
+        if (!finalStatus.CashSummaryPresent ||
+            !IsZReportRequirementSatisfied(settings, targetDate, finalStatus.ZReportCount))
         {
             var reportErrors = new List<string>();
             if (cashSummaryError is not null)
@@ -797,14 +843,19 @@ internal static class PortalSyncService
         }
 
         var imported = cashSummaryImported || zResult.Imported > 0;
+        var zReportDescription = zReportShortfallAccepted
+            ? $"{finalStatus.ZReportCount} actual register report(s) verified; " +
+              $"AdventPOS was searched through older batches and this date was recorded " +
+              $"below the usual {Math.Max(1, settings.ExpectedDailyZReports)} report(s)"
+            : $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s), " +
+              $"{finalStatus.ZReportCount} register report(s) verified in Shift Cash Drop";
         return new PortalSyncRunResult(
             settings.BusinessName,
             true,
             imported,
             $"POS sync for {targetDate:M/d/yyyy}: Cash & Sales Summary " +
             $"{(cashSummaryImported ? "imported into Cash Sales Summary" : "already present")}; " +
-            $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s), " +
-            $"{finalStatus.ZReportCount} register report(s) verified in Shift Cash Drop.");
+            $"{zReportDescription}.");
     }
 
     private static async Task CloseDedicatedProfileBrowserAsync(
@@ -904,6 +955,64 @@ internal static class PortalSyncService
         var separator = compact.IndexOf(". ", StringComparison.Ordinal);
         return separator < 0 ? compact.TrimEnd('.') : compact[..separator].TrimEnd('.');
     }
+
+    private static bool IsZReportRequirementSatisfied(
+        PortalStoreSyncSettings settings,
+        DateOnly targetDate,
+        int actualCount)
+    {
+        if (actualCount >= Math.Max(1, settings.ExpectedDailyZReports))
+            return true;
+
+        var verifiedCounts = settings.VerifiedDailyZReportCounts;
+        return verifiedCounts is not null &&
+               verifiedCounts.TryGetValue(ZReportDateKey(targetDate), out var verifiedCount) &&
+               actualCount >= Math.Max(0, verifiedCount);
+    }
+
+    private static void RecordVerifiedZReportShortfall(
+        PortalStoreSyncSettings settings,
+        DateOnly targetDate,
+        int actualCount)
+    {
+        settings.VerifiedDailyZReportCounts ??=
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        settings.VerifiedDailyZReportCounts[ZReportDateKey(targetDate)] =
+            Math.Max(0, actualCount);
+        PruneVerifiedZReportCounts(settings);
+    }
+
+    private static void RemoveVerifiedZReportShortfall(
+        PortalStoreSyncSettings settings,
+        DateOnly targetDate)
+    {
+        settings.VerifiedDailyZReportCounts?.Remove(ZReportDateKey(targetDate));
+        PruneVerifiedZReportCounts(settings);
+    }
+
+    private static void PruneVerifiedZReportCounts(PortalStoreSyncSettings settings)
+    {
+        if (settings.VerifiedDailyZReportCounts is not { Count: > 0 } verifiedCounts)
+            return;
+
+        var oldest = DateOnly.FromDateTime(DateTime.Today).AddDays(-120);
+        foreach (var key in verifiedCounts.Keys.ToList())
+        {
+            if (!DateOnly.TryParseExact(
+                    key,
+                    "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var date) ||
+                date < oldest)
+            {
+                verifiedCounts.Remove(key);
+            }
+        }
+    }
+
+    private static string ZReportDateKey(DateOnly date) =>
+        date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private static string FormatExportError(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "" : $" Portal export error: {value}";
@@ -1904,10 +2013,15 @@ internal static class PortalSyncService
             .Select(report => report.ReportDate!.Value.ToString("M/d/yyyy", CultureInfo.InvariantCulture))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        throw new InvalidOperationException(
+        throw new ZReportDateMismatchException(
             actualDates.Count == 0
                 ? $"batch {expectedBatch} did not expose a valid Start Date"
-                : $"batch {expectedBatch} has Start Date {string.Join(", ", actualDates)}, not {targetDate:M/d/yyyy}");
+                : $"batch {expectedBatch} has Start Date {string.Join(", ", actualDates)}, not {targetDate:M/d/yyyy}",
+            reports
+                .Where(report => report.ReportDate.HasValue)
+                .Select(report => report.ReportDate!.Value)
+                .Distinct()
+                .ToList());
     }
 
     private static PosReportData ParseRenderedZReport(
@@ -1926,10 +2040,15 @@ internal static class PortalSyncService
         }
         if (report.ReportDate != targetDate)
         {
+            if (report.ReportDate.HasValue)
+            {
+                throw new ZReportDateMismatchException(
+                    $"batch {expectedBatch} has Start Date {report.ReportDate:M/d/yyyy}, not {targetDate:M/d/yyyy}",
+                    [report.ReportDate.Value]);
+            }
+
             throw new InvalidOperationException(
-                report.ReportDate.HasValue
-                    ? $"batch {expectedBatch} has Start Date {report.ReportDate:M/d/yyyy}, not {targetDate:M/d/yyyy}"
-                    : $"batch {expectedBatch} did not expose a valid Start Date");
+                $"batch {expectedBatch} did not expose a valid Start Date");
         }
         return report;
     }
@@ -1995,7 +2114,6 @@ internal static class PortalSyncService
                     candidates.Add(date);
             }
 
-            var expectedZReports = Math.Max(1, settings.ExpectedDailyZReports);
             var pending = candidates
                 .Where(date =>
                 {
@@ -2006,7 +2124,8 @@ internal static class PortalSyncService
                         .Select(item => item.PosReportKey)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .Count();
-                    return !cashSummaryPresent || zReportCount < expectedZReports;
+                    return !cashSummaryPresent ||
+                           !IsZReportRequirementSatisfied(settings, date, zReportCount);
                 })
                 .ToList();
             // Always repair yesterday first. Limit each automatic run to two
