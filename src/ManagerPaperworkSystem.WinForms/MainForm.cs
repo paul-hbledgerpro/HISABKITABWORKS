@@ -84,8 +84,9 @@ internal sealed partial class MainForm : Form
         Text = $"HISAB KITAB - v{AppUpdateStartupService.CurrentVersion}";
         if (LicenseRuntime.IsReadOnly)
             Text += " - READ-ONLY (SUBSCRIPTION EXPIRED)";
+        AutoScaleMode = AutoScaleMode.Dpi;
         WindowState = FormWindowState.Maximized;
-        MinimumSize = new Size(1280, 760);
+        MinimumSize = new Size(1024, 640);
 
         Controls.Add(BuildRoot());
         _monthlyDeliveryTimer.Tick += async (_, _) => await BeginMonthlyBankStatementDeliveryAsync();
@@ -804,6 +805,7 @@ internal sealed partial class MainForm : Form
                 "Reports" => BuildReports(),
                 _ => BuildDashboard()
             };
+            ConfigureResponsiveModuleActionBars(control);
             ApplyLightModuleTheme(control);
             if (LicenseRuntime.IsReadOnly)
                 ApplyReadOnlyMode(control);
@@ -1379,6 +1381,102 @@ internal sealed partial class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
         return root;
+    }
+
+    private static void ConfigureResponsiveModuleActionBars(Control root)
+    {
+        foreach (Control child in root.Controls)
+        {
+            if (child is FlowLayoutPanel panel
+                && panel.FlowDirection is FlowDirection.LeftToRight or FlowDirection.RightToLeft
+                && panel.Controls.OfType<Button>().Any())
+            {
+                ConfigureResponsiveActionBar(panel);
+            }
+
+            ConfigureResponsiveModuleActionBars(child);
+        }
+    }
+
+    private static void ConfigureResponsiveActionBar(FlowLayoutPanel panel)
+    {
+        panel.WrapContents = true;
+        panel.AutoScroll = true;
+
+        if (panel.Parent is not TableLayoutPanel table)
+            return;
+
+        var position = table.GetPositionFromControl(panel);
+        if (position.Row < 0 || position.Row >= table.RowStyles.Count)
+            return;
+
+        var rowStyle = table.RowStyles[position.Row];
+        if (rowStyle.SizeType != SizeType.Absolute)
+            return;
+
+        var minimumHeight = Math.Clamp((int)Math.Ceiling(rowStyle.Height), 64, 82);
+        var adjusting = false;
+
+        void AdjustActionRow()
+        {
+            if (adjusting || panel.IsDisposed || table.IsDisposed)
+                return;
+
+            var availableWidth = panel.ClientSize.Width - panel.Padding.Horizontal;
+            if (availableWidth <= 0)
+                return;
+
+            adjusting = true;
+            try
+            {
+                var desiredHeight = panel.Padding.Vertical;
+                var currentRowWidth = 0;
+                var currentRowHeight = 0;
+
+                foreach (Control control in panel.Controls)
+                {
+                    if (!control.Visible)
+                        continue;
+
+                    var controlWidth = Math.Min(
+                        availableWidth,
+                        Math.Max(control.Width, control.MinimumSize.Width) + control.Margin.Horizontal);
+                    var controlHeight =
+                        Math.Max(control.Height, control.MinimumSize.Height) + control.Margin.Vertical;
+
+                    if (currentRowWidth > 0 && currentRowWidth + controlWidth > availableWidth)
+                    {
+                        desiredHeight += currentRowHeight;
+                        currentRowWidth = 0;
+                        currentRowHeight = 0;
+                    }
+
+                    currentRowWidth += controlWidth;
+                    currentRowHeight = Math.Max(currentRowHeight, controlHeight);
+                }
+
+                desiredHeight += currentRowHeight;
+                desiredHeight = Math.Max(minimumHeight, desiredHeight);
+
+                var maximumHeight = Math.Max(
+                    minimumHeight,
+                    Math.Min(220, Math.Max(minimumHeight, table.ClientSize.Height / 3)));
+                var targetHeight = Math.Min(desiredHeight, maximumHeight);
+
+                if (Math.Abs(rowStyle.Height - targetHeight) >= 1f)
+                    rowStyle.Height = targetHeight;
+            }
+            finally
+            {
+                adjusting = false;
+            }
+        }
+
+        panel.SizeChanged += (_, _) => AdjustActionRow();
+        panel.ControlAdded += (_, _) => AdjustActionRow();
+        panel.ControlRemoved += (_, _) => AdjustActionRow();
+        panel.VisibleChanged += (_, _) => AdjustActionRow();
+        AdjustActionRow();
     }
 
     private static TableLayoutPanel SectionCard(string title, int rows)
