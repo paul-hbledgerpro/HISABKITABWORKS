@@ -111,11 +111,16 @@ ORDER BY name", master);
         var subscription = addingBusiness
             ? FindSubscriptionByKey(parentSubscriptionKey)
             : FindSubscription(storeGuid);
+        if (addingBusiness && subscription is null && protectedRequest is not null)
+        {
+            subscription = FindActiveSuccessorSubscription(parentSubscriptionKey)
+                           ?? FindUniqueActiveSubscriptionByDevice(protectedRequest);
+        }
         var createdStore = false;
         var addedBusiness = false;
         if (addingBusiness && subscription is null)
             throw new InvalidOperationException(
-                "The existing client subscription in this protected request was not found or is inactive. Generate the request again from the licensed PC.");
+                "The existing client subscription in this protected request was not found or is inactive, and the signed PC identity did not uniquely match an active subscription. Renew the licensed PC first, then generate the request again.");
 
         if (subscription is null)
         {
@@ -292,6 +297,66 @@ ORDER BY l.Id DESC", connection);
         return reader.Read()
             ? ReadSubscription(reader)
             : null;
+    }
+
+    private ClientSubscription? FindActiveSuccessorSubscription(string previousSubscriptionKey)
+    {
+        using var connection = new SqlConnection(LicensingConnectionString);
+        connection.Open();
+        using var command = new SqlCommand(@"
+SELECT TOP 2 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState,
+       l.MonthlyReportEmail, l.MonthlyReportDay
+FROM dbo.Licenses previous
+INNER JOIN dbo.Licenses l ON l.CustomerId=previous.CustomerId AND l.IsActive=1
+INNER JOIN dbo.Customers c ON c.Id=l.CustomerId
+WHERE previous.LicenseKey=@previousSubscriptionKey
+ORDER BY l.Id DESC", connection);
+        command.Parameters.AddWithValue("@previousSubscriptionKey", previousSubscriptionKey);
+        using var reader = command.ExecuteReader();
+        return ReadUniqueSubscription(
+            reader,
+            "The previous subscription key maps to multiple active subscriptions. Select the client in Manage Businesses and renew the PC before adding another store.");
+    }
+
+    private ClientSubscription? FindUniqueActiveSubscriptionByDevice(DeviceLicenseRequestV2 request)
+    {
+        using var connection = new SqlConnection(LicensingConnectionString);
+        connection.Open();
+        using var command = new SqlCommand(@"
+SELECT TOP 2 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState,
+       l.MonthlyReportEmail, l.MonthlyReportDay
+FROM dbo.LicenseDevices d
+INNER JOIN dbo.Licenses l ON l.Id=d.LicenseId AND l.IsActive=1
+INNER JOIN dbo.Customers c ON c.Id=l.CustomerId
+WHERE d.Status='Active'
+  AND d.DeviceId=@deviceId
+  AND d.InstallationId=@installationId
+  AND d.DevicePublicKey=@devicePublicKey
+  AND d.FingerprintHash=@fingerprintHash
+ORDER BY l.Id DESC", connection);
+        command.Parameters.AddWithValue("@deviceId", request.DeviceId);
+        command.Parameters.AddWithValue("@installationId", request.InstallationId);
+        command.Parameters.AddWithValue("@devicePublicKey", request.DevicePublicKey);
+        command.Parameters.AddWithValue("@fingerprintHash", request.FingerprintHash);
+        using var reader = command.ExecuteReader();
+        return ReadUniqueSubscription(
+            reader,
+            "This signed PC is registered to multiple active subscriptions, so the old subscription key cannot be recovered safely. Renew the intended subscription before adding another store.");
+    }
+
+    private static ClientSubscription? ReadUniqueSubscription(
+        SqlDataReader reader,
+        string ambiguousMessage)
+    {
+        if (!reader.Read())
+            return null;
+
+        var subscription = ReadSubscription(reader);
+        if (reader.Read())
+            throw new InvalidOperationException(ambiguousMessage);
+        return subscription;
     }
 
     private ClientSubscription CreateSubscription(
