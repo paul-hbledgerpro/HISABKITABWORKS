@@ -31,6 +31,12 @@ internal static class Program
                 return;
         }
 
+        if (args.Any(x => x.Equals("--invoice-email-sync", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunInvoiceEmailSync();
+            return;
+        }
+
         var portalStoreArgument = Array.FindIndex(
             args,
             x => x.Equals("--portal-sync-store", StringComparison.OrdinalIgnoreCase));
@@ -154,6 +160,45 @@ internal static class Program
             {
                 // Scheduled background execution has no interactive error path.
             }
+        }
+    }
+
+    private static void RunInvoiceEmailSync()
+    {
+        try
+        {
+            var licenseStatus = DeviceLicenseService.ValidateInstalledLicense().Status;
+            if (licenseStatus != DeviceLicenseStatus.Valid)
+            {
+                InvoiceEmailBackgroundSyncService.WriteLog(
+                    "Scheduler",
+                    "",
+                    false,
+                    $"Scheduled invoice sync stopped because the device license status is {licenseStatus}.");
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            using var services = AppBootstrap.BuildServices();
+            ProgramServices.Set(services);
+            AppBootstrap.InitializeDatabaseAsync(services).GetAwaiter().GetResult();
+            LicensedBusinessService.SynchronizeAsync(services).GetAwaiter().GetResult();
+            var results = InvoiceEmailBackgroundSyncService.RunDueAsync(
+                    services,
+                    force: false)
+                .GetAwaiter()
+                .GetResult();
+            if (results.Any(result => !result.Success))
+                Environment.ExitCode = 1;
+        }
+        catch (Exception exception)
+        {
+            Environment.ExitCode = 1;
+            InvoiceEmailBackgroundSyncService.WriteLog(
+                "Scheduler",
+                "",
+                false,
+                exception.Message);
         }
     }
 }

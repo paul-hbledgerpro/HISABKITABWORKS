@@ -96,6 +96,18 @@ internal sealed partial class MainForm : Form
             _ = BeginMonthlyReportDeliveryAsync();
             _ = BeginMonthlyBankStatementDeliveryAsync();
             _ = BeginDuePosPortalSyncAsync();
+            try
+            {
+                InvoiceEmailBackgroundSyncService.EnsureTask(_invoiceEmailSyncService);
+            }
+            catch (Exception exception)
+            {
+                InvoiceEmailBackgroundSyncService.WriteLog(
+                    "Scheduler",
+                    CurrentInvoiceEmailStoreKey(),
+                    false,
+                    exception.Message);
+            }
             _ = BeginDueInvoiceEmailSyncAsync();
             _monthlyDeliveryTimer.Start();
             _invoiceEmailSyncTimer.Start();
@@ -152,45 +164,91 @@ internal sealed partial class MainForm : Form
         var cloudConfigured = HasCloudInvoiceInbox(business);
         var cloudDue = !_cloudInvoiceLastSyncUtc.TryGetValue(storeKey, out var lastCloudSync)
                        || DateTime.UtcNow - lastCloudSync >= TimeSpan.FromHours(4);
-        if ((cloudConfigured ? !cloudDue : !_invoiceEmailSyncService.IsDue(storeKey, TimeSpan.FromHours(4)))
+        var directEmailDue = _invoiceEmailSyncService.IsDue(
+            storeKey,
+            TimeSpan.FromHours(4));
+        if ((!cloudConfigured || !cloudDue) && !directEmailDue
             || !await _invoiceEmailSyncGate.WaitAsync(0))
             return;
 
         try
         {
-            if (cloudConfigured && business is not null)
+            var statusMessages = new List<string>();
+            if (cloudConfigured && cloudDue && business is not null)
             {
-                var result = await _cloudInvoiceInboxService.SyncAsync(
-                    business,
-                    storeKey,
-                    _currentStoreId,
-                    _session.UserId,
-                    _session.DisplayName);
-                _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
-                if (!IsDisposed && (result.InvoicesImported > 0 || result.NeedsReview > 0))
+                try
                 {
-                    BeginInvoke(() =>
-                        _status.Text = $"Protected invoice inbox: {result.InvoicesImported} imported; {result.NeedsReview} need review.");
+                    var result = await _cloudInvoiceInboxService.SyncAsync(
+                        business,
+                        storeKey,
+                        _currentStoreId,
+                        _session.UserId,
+                        _session.DisplayName);
+                    _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
+                    var message =
+                        $"Protected invoice inbox: {result.InvoicesImported} imported; " +
+                        $"{result.NeedsReview} need review.";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Protected cloud inbox",
+                        storeKey,
+                        true,
+                        message);
+                    if (result.InvoicesImported > 0 || result.NeedsReview > 0)
+                        statusMessages.Add(message);
+                }
+                catch (Exception exception)
+                {
+                    var message =
+                        $"Protected invoice inbox failed: " +
+                        $"{AppBootstrap.RedactSensitiveText(exception.Message)}";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Protected cloud inbox",
+                        storeKey,
+                        false,
+                        message);
+                    statusMessages.Add(message);
                 }
             }
-            else
+
+            if (directEmailDue)
             {
-                var result = await _invoiceEmailSyncService.SyncAsync(
-                    storeKey,
-                    _currentStoreId,
-                    _session.UserId,
-                    _session.DisplayName);
-                if (!IsDisposed && (result.InvoicesImported > 0 || result.NeedsReview > 0))
+                try
                 {
-                    BeginInvoke(() =>
-                        _status.Text = $"Invoice email sync: {result.InvoicesImported} imported; {result.NeedsReview} need review.");
+                    var result = await _invoiceEmailSyncService.SyncAsync(
+                        storeKey,
+                        _currentStoreId,
+                        _session.UserId,
+                        _session.DisplayName);
+                    var message =
+                        $"Invoice email sync: {result.InvoicesImported} imported; " +
+                        $"{result.NeedsReview} need review.";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Gmail/IMAP",
+                        storeKey,
+                        true,
+                        message);
+                    if (result.InvoicesImported > 0 || result.NeedsReview > 0)
+                        statusMessages.Add(message);
+                }
+                catch (Exception exception)
+                {
+                    var message =
+                        $"Invoice email sync failed: " +
+                        $"{AppBootstrap.RedactSensitiveText(exception.Message)}";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Gmail/IMAP",
+                        storeKey,
+                        false,
+                        message);
+                    statusMessages.Add(message);
                 }
             }
-        }
-        catch
-        {
-            // Automatic invoice sync is non-blocking and retries at the next interval.
-            // Manual Sync from Purchases displays the actionable error to the client.
+
+            if (statusMessages.Count > 0 && !IsDisposed)
+            {
+                var statusMessage = string.Join("  ", statusMessages);
+                BeginInvoke(() => _status.Text = statusMessage);
+            }
         }
         finally
         {

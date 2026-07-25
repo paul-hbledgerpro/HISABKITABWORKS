@@ -387,6 +387,8 @@ internal sealed class InvoiceEmailSetupForm : Form
         {
             await _service.TestConnectionAsync(_storeKey, settings);
             _service.SaveSettings(_storeKey, settings);
+            if (settings.Enabled)
+                InvoiceEmailBackgroundSyncService.EnsureTask(_service);
             _status.Text = settings.Enabled
                 ? "Email connection succeeded. Automatic invoice checks are enabled for this store."
                 : "Email connection succeeded. Manual sync is ready; automatic checks remain disabled.";

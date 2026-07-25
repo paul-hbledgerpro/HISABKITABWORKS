@@ -233,10 +233,28 @@ internal static class PortalSyncService
                 foreach (var targetDate in pendingDates)
                 {
                     PortalSyncRunResult result;
+                    using var targetTimeout =
+                        CancellationTokenSource.CreateLinkedTokenSource(
+                            cancellationToken);
+                    targetTimeout.CancelAfter(TimeSpan.FromMinutes(20));
                     try
                     {
                         result = await RunStoreWithRetriesAsync(
-                            settings, paths, targetDate, visibleChrome, cancellationToken);
+                            settings,
+                            paths,
+                            targetDate,
+                            visibleChrome,
+                            targetTimeout.Token);
+                    }
+                    catch (OperationCanceledException)
+                        when (!cancellationToken.IsCancellationRequested)
+                    {
+                        result = new PortalSyncRunResult(
+                            settings.BusinessName,
+                            false,
+                            false,
+                            $"POS sync for {targetDate:M/d/yyyy} exceeded 20 minutes and was stopped. " +
+                            "The next scheduled run will retry without blocking newer report dates.");
                     }
                     catch (Exception exception)
                     {
@@ -526,10 +544,19 @@ internal static class PortalSyncService
                 {
                     await OpenCloseOutZReportAsync(page);
                     var expectedReports = Math.Max(1, settings.ExpectedDailyZReports);
-                    // The catch-up window is 30 days. Keep enough recent batches
-                    // available to recover two-register stores even after several
-                    // missed days.
-                    var candidateLimit = Math.Max(80, expectedReports * 40);
+                    // Search enough descending batches to reach the target date,
+                    // with a small buffer for voided or extra batches. An old,
+                    // permanently incomplete day must not make every daily run
+                    // render 80 unrelated reports.
+                    var ageInDays = Math.Clamp(
+                        DateOnly.FromDateTime(DateTime.Today.AddDays(-1)).DayNumber -
+                        targetDate.DayNumber,
+                        0,
+                        30);
+                    var candidateLimit = Math.Clamp(
+                        expectedReports * (ageInDays + 3),
+                        expectedReports * 6,
+                        80);
                     var candidateBatches = await GetRecentBatchNumbersAsync(
                         page,
                         candidateLimit,
@@ -1954,7 +1981,7 @@ internal static class PortalSyncService
             }
 
             var expectedZReports = Math.Max(1, settings.ExpectedDailyZReports);
-            return candidates
+            var pending = candidates
                 .Where(date =>
                 {
                     var cashSummaryPresent = summaryRanges.Any(range =>
@@ -1966,6 +1993,14 @@ internal static class PortalSyncService
                         .Count();
                     return !cashSummaryPresent || zReportCount < expectedZReports;
                 })
+                .ToList();
+            // Always repair yesterday first. Limit each automatic run to two
+            // additional recent gaps so one bad historical day cannot block
+            // current reports or keep the scheduled process alive for hours.
+            return pending
+                .OrderBy(date => date == yesterday ? 0 : 1)
+                .ThenByDescending(date => date)
+                .Take(3)
                 .ToList();
         }
         catch

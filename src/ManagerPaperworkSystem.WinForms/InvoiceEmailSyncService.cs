@@ -85,6 +85,13 @@ internal sealed class InvoiceEmailSyncService
         SaveAll(all);
     }
 
+    public IReadOnlyList<string> GetEnabledStoreKeys()
+        => LoadAll()
+            .Where(pair => pair.Value.Enabled)
+            .Select(pair => pair.Key)
+            .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
     public bool IsDue(string storeKey, TimeSpan minimumInterval)
     {
         var settings = GetSettings(storeKey);
