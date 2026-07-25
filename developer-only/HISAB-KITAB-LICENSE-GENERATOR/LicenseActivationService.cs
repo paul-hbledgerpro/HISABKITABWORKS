@@ -332,14 +332,10 @@ INNER JOIN dbo.Licenses l ON l.Id=d.LicenseId AND l.IsActive=1
 INNER JOIN dbo.Customers c ON c.Id=l.CustomerId
 WHERE d.Status='Active'
   AND d.DeviceId=@deviceId
-  AND d.InstallationId=@installationId
   AND d.DevicePublicKey=@devicePublicKey
-  AND d.FingerprintHash=@fingerprintHash
 ORDER BY l.Id DESC", connection);
         command.Parameters.AddWithValue("@deviceId", request.DeviceId);
-        command.Parameters.AddWithValue("@installationId", request.InstallationId);
         command.Parameters.AddWithValue("@devicePublicKey", request.DevicePublicKey);
-        command.Parameters.AddWithValue("@fingerprintHash", request.FingerprintHash);
         using var reader = command.ExecuteReader();
         return ReadUniqueSubscription(
             reader,
