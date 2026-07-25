@@ -52,7 +52,7 @@ internal sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "HISAB KITAB WORKS - Developer Client Account Manager";
+        Text = $"HISAB KITAB WORKS - Developer Client Account Manager - v{HisabKitabWorks.DeveloperUpdates.DeveloperAutoUpdateService.InstalledVersion}";
         Icon = DeveloperTheme.Icon(); BackColor = DeveloperTheme.Bg; Font = DeveloperTheme.Body();
         StartPosition = FormStartPosition.CenterScreen; Size = new Size(1450, 930); MinimumSize = new Size(1180, 760);
         AutoScaleMode = AutoScaleMode.Dpi; WindowState = FormWindowState.Normal;

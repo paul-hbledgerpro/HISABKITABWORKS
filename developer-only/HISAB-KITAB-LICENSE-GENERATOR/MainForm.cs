@@ -70,7 +70,7 @@ internal sealed partial class MainForm : Form
 
     public MainForm()
     {
-        Text = "HISAB KITAB WORKS - Developer License Generator";
+        Text = $"HISAB KITAB WORKS - Developer License Generator - v{HisabKitabWorks.DeveloperUpdates.DeveloperAutoUpdateService.InstalledVersion}";
         Icon = AdminTheme.LoadIcon();
         BackColor = AdminTheme.Bg;
         ForeColor = AdminTheme.Text;

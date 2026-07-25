@@ -10,6 +10,8 @@ internal static class DeveloperAutoUpdateService
     private const string LatestReleaseApi =
         "https://api.github.com/repos/paul-hbledgerpro/HISABKITABWORKS/releases/latest";
 
+    public static string InstalledVersion => CurrentVersion();
+
     public static bool InstallLatestIfAvailable(
         string applicationName,
         string updateAssetPrefix,
