@@ -37,6 +37,12 @@ internal static class Program
             return;
         }
 
+        if (args.Any(x => x.Equals("--database-cloud-backup", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunDatabaseCloudBackup();
+            return;
+        }
+
         var portalStoreArgument = Array.FindIndex(
             args,
             x => x.Equals("--portal-sync-store", StringComparison.OrdinalIgnoreCase));
@@ -196,6 +202,38 @@ internal static class Program
             Environment.ExitCode = 1;
             InvoiceEmailBackgroundSyncService.WriteLog(
                 "Scheduler",
+                "",
+                false,
+                exception.Message);
+        }
+    }
+
+    private static void RunDatabaseCloudBackup()
+    {
+        try
+        {
+            var validation = DeviceLicenseService.ValidateInstalledLicense();
+            LicenseRuntime.CurrentLicense = validation.Payload;
+            if (validation.Status != DeviceLicenseStatus.Valid)
+            {
+                DatabaseCloudBackupService.WriteLog(
+                    "",
+                    false,
+                    $"Scheduled database backup stopped because the device license status is {validation.Status}.");
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            var results = DatabaseCloudBackupService.RunDueAsync(force: false)
+                .GetAwaiter()
+                .GetResult();
+            if (results.Any(result => !result.Success))
+                Environment.ExitCode = 1;
+        }
+        catch (Exception exception)
+        {
+            Environment.ExitCode = 1;
+            DatabaseCloudBackupService.WriteLog(
                 "",
                 false,
                 exception.Message);

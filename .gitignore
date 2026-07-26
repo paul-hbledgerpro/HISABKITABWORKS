@@ -67,6 +67,7 @@ gmail-oauth-client.json
 # Node.js and Cloudflare local state
 **/node_modules/
 **/.wrangler/
+**/.wrangler-dry-run/
 
 # OS and temporary files
 .DS_Store

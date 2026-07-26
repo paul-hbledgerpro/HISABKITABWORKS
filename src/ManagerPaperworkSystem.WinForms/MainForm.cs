@@ -99,6 +99,15 @@ internal sealed partial class MainForm : Form
             _ = BeginDuePosPortalSyncAsync();
             try
             {
+                DatabaseCloudBackupService.EnsureDailyTask();
+            }
+            catch (Exception exception)
+            {
+                DatabaseCloudBackupService.WriteLog("", false, exception.Message);
+            }
+            _ = BeginDueDatabaseCloudBackupAsync();
+            try
+            {
                 InvoiceEmailBackgroundSyncService.EnsureTask(_invoiceEmailSyncService);
             }
             catch (Exception exception)
@@ -274,6 +283,21 @@ internal sealed partial class MainForm : Form
         {
             var results = await PortalSyncService.RunDueAsync(_paths, force: false, visibleChrome: false);
             var message = results.LastOrDefault()?.Message;
+            if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
+                BeginInvoke(() => _status.Text = message);
+        }
+        catch
+        {
+            // The scheduled task and the next app startup retry automatically.
+        }
+    }
+
+    private async Task BeginDueDatabaseCloudBackupAsync()
+    {
+        try
+        {
+            var results = await DatabaseCloudBackupService.RunDueAsync(force: false);
+            var message = results.LastOrDefault(result => result.Uploaded)?.Message;
             if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
                 BeginInvoke(() => _status.Text = message);
         }
