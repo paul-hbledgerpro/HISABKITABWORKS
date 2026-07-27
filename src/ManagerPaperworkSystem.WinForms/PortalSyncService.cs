@@ -648,10 +648,28 @@ internal static class PortalSyncService
                         })
                         .ToList();
 
-                // Existing Shift Cash Drop data is the Z-report cursor. Once a
-                // numeric batch exists, process every later portal batch in
-                // ascending order. A brand-new store bootstraps from the requested
-                // Cash Summary date instead of importing the entire portal history.
+                    // Genuine AdventPOS-keyed rows are the primary cursor. Older
+                    // databases may predate PosReportKey, so only accept a legacy
+                    // numeric Shift No when that same number exists in this
+                    // portal's batch list. Other shift systems can use much larger
+                    // numeric identifiers and must not make Z sync appear caught up.
+                    if (!latestImportedZBatch.HasValue)
+                    {
+                        latestImportedZBatch =
+                            await GetLatestMatchingLegacyZBatchAsync(
+                                db,
+                                dataStoreId,
+                                numericPortalBatches
+                                    .Select(item => item.Number)
+                                    .ToHashSet(),
+                                cancellationToken);
+                        lastProcessedZBatch = latestImportedZBatch;
+                    }
+
+                    // Once a trustworthy cursor exists, process every later
+                    // portal batch in ascending order. A brand-new store
+                    // bootstraps from the requested date instead of importing
+                    // the entire portal history.
                     var candidateBatches = latestImportedZBatch.HasValue
                         ? numericPortalBatches
                             .Where(item => item.Number > latestImportedZBatch.Value)
@@ -1976,19 +1994,51 @@ internal static class PortalSyncService
         int storeId,
         CancellationToken cancellationToken)
     {
-        // Include both automatically keyed rows and older Shift Cash Drop rows
-        // that predate PosReportKey. The visible numeric Shift No/Batch column is
-        // the durable cursor the customer expects the portal sync to continue from.
+        // Never use every numeric Shift No as a portal cursor. A store can retain
+        // rows from another register system whose identifiers are unrelated to
+        // AdventPOS and much larger than its current batch numbers.
         var shiftNumbers = await db.ShiftLogs
             .AsNoTracking()
             .Where(item =>
                 item.StoreId == storeId &&
-                item.ShiftNo != null)
+                item.ShiftNo != null &&
+                item.PosReportKey != null &&
+                item.PosReportKey.StartsWith("ADVENTPOS-Z|"))
             .Select(item => item.ShiftNo!)
             .ToListAsync(cancellationToken);
 
+        return LatestNumericBatch(shiftNumbers);
+    }
+
+    private static async Task<long?> GetLatestMatchingLegacyZBatchAsync(
+        AppDbContext db,
+        int storeId,
+        IReadOnlySet<long> portalBatches,
+        CancellationToken cancellationToken)
+    {
+        if (portalBatches.Count == 0)
+            return null;
+
+        var shiftNumbers = await db.ShiftLogs
+            .AsNoTracking()
+            .Where(item =>
+                item.StoreId == storeId &&
+                item.ShiftNo != null &&
+                (item.PosReportKey == null || item.PosReportKey == ""))
+            .Select(item => item.ShiftNo!)
+            .ToListAsync(cancellationToken);
+
+        return LatestNumericBatch(
+            shiftNumbers,
+            batch => portalBatches.Contains(batch));
+    }
+
+    private static long? LatestNumericBatch(
+        IEnumerable<string> values,
+        Func<long, bool>? include = null)
+    {
         long? latest = null;
-        foreach (var value in shiftNumbers)
+        foreach (var value in values)
         {
             if (!long.TryParse(
                     value.Trim(),
@@ -1998,6 +2048,8 @@ internal static class PortalSyncService
             {
                 continue;
             }
+            if (include is not null && !include(batch))
+                continue;
 
             if (!latest.HasValue || batch > latest.Value)
                 latest = batch;
