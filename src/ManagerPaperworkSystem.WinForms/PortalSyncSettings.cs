@@ -4,9 +4,15 @@ using System.Text.Json;
 
 namespace ManagerPaperworkSystem.WinForms;
 
+internal enum PortalSyncReportKind
+{
+    CashSalesSummary,
+    ZReports
+}
+
 internal sealed class PortalSyncSettingsDocument
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
     public List<PortalStoreSyncSettings> Stores { get; set; } = [];
 }
 
@@ -28,9 +34,36 @@ internal sealed class PortalStoreSyncSettings
     public DateTime? LastAttemptUtc { get; set; }
     public DateTime? LastSuccessUtc { get; set; }
     public DateOnly? LastImportedReportDate { get; set; }
+    public bool CashSalesSummaryEnabled { get; set; } = true;
+    public int CashSalesDailyHour { get; set; } = 1;
+    public int CashSalesDailyMinute { get; set; } = 15;
+    public DateTime? LastCashSummaryAttemptUtc { get; set; }
+    public DateTime? LastCashSummarySuccessUtc { get; set; }
     public DateOnly? LastCashSummaryReportDate { get; set; }
+    public string LastCashSummaryStatus { get; set; } = "Not run yet";
+    public bool ZReportsEnabled { get; set; } = true;
+    public int ZReportsDailyHour { get; set; } = 1;
+    public int ZReportsDailyMinute { get; set; } = 30;
+    public DateTime? LastZReportAttemptUtc { get; set; }
+    public DateTime? LastZReportSuccessUtc { get; set; }
     public DateOnly? LastZReportDate { get; set; }
+    public string LastZReportStatus { get; set; } = "Not run yet";
     public string LastStatus { get; set; } = "Not run yet";
+
+    public bool IsEnabled(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? CashSalesSummaryEnabled
+            : ZReportsEnabled;
+
+    public TimeOnly GetRunTime(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? new TimeOnly(CashSalesDailyHour, CashSalesDailyMinute)
+            : new TimeOnly(ZReportsDailyHour, ZReportsDailyMinute);
+
+    public string GetLastStatus(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? LastCashSummaryStatus
+            : LastZReportStatus;
 }
 
 internal static class PortalSyncSettingsStore
@@ -102,8 +135,9 @@ internal static class PortalSyncSettingsStore
             var clear = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.CurrentUser);
             try
             {
-                return JsonSerializer.Deserialize<PortalSyncSettingsDocument>(clear, JsonOptions)
-                       ?? new PortalSyncSettingsDocument();
+                var document = JsonSerializer.Deserialize<PortalSyncSettingsDocument>(clear, JsonOptions)
+                               ?? new PortalSyncSettingsDocument();
+                return Normalize(document);
             }
             finally
             {
@@ -119,6 +153,7 @@ internal static class PortalSyncSettingsStore
     public static void Save(PortalSyncSettingsDocument document)
     {
         Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        Normalize(document);
         var clear = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
         try
         {
@@ -131,6 +166,66 @@ internal static class PortalSyncSettingsStore
         {
             CryptographicOperations.ZeroMemory(clear);
         }
+    }
+
+    private static PortalSyncSettingsDocument Normalize(PortalSyncSettingsDocument document)
+    {
+        document.Stores ??= [];
+        if (document.Version < 2)
+        {
+            foreach (var settings in document.Stores)
+            {
+                settings.CashSalesSummaryEnabled = settings.Enabled;
+                settings.ZReportsEnabled = settings.Enabled;
+                settings.CashSalesDailyHour = settings.DailyHour;
+                settings.CashSalesDailyMinute = settings.DailyMinute;
+                settings.ZReportsDailyHour = settings.DailyHour;
+                settings.ZReportsDailyMinute = settings.DailyMinute;
+                settings.LastCashSummaryAttemptUtc = settings.LastAttemptUtc;
+                settings.LastCashSummarySuccessUtc = settings.LastSuccessUtc;
+                settings.LastZReportAttemptUtc = settings.LastAttemptUtc;
+                settings.LastZReportSuccessUtc = settings.LastSuccessUtc;
+                settings.LastCashSummaryStatus = settings.LastStatus;
+                settings.LastZReportStatus = settings.LastStatus;
+            }
+        }
+
+        foreach (var settings in document.Stores)
+        {
+            settings.CashSalesDailyHour = Math.Clamp(settings.CashSalesDailyHour, 0, 23);
+            settings.CashSalesDailyMinute = Math.Clamp(settings.CashSalesDailyMinute, 0, 59);
+            settings.ZReportsDailyHour = Math.Clamp(settings.ZReportsDailyHour, 0, 23);
+            settings.ZReportsDailyMinute = Math.Clamp(settings.ZReportsDailyMinute, 0, 59);
+
+            // Keep the original fields populated so older installed versions can
+            // still read the protected document while clients roll forward.
+            settings.Enabled = settings.CashSalesSummaryEnabled || settings.ZReportsEnabled;
+            settings.DailyHour = settings.CashSalesDailyHour;
+            settings.DailyMinute = settings.CashSalesDailyMinute;
+            settings.LastAttemptUtc = Latest(
+                settings.LastCashSummaryAttemptUtc,
+                settings.LastZReportAttemptUtc);
+            settings.LastSuccessUtc = Latest(
+                settings.LastCashSummarySuccessUtc,
+                settings.LastZReportSuccessUtc);
+            settings.LastStatus = string.Join(" | ", new[]
+            {
+                $"Cash & Sales: {settings.LastCashSummaryStatus}",
+                $"Z Reports: {settings.LastZReportStatus}"
+            });
+        }
+
+        document.Version = 2;
+        return document;
+    }
+
+    private static DateTime? Latest(DateTime? left, DateTime? right)
+    {
+        if (!left.HasValue)
+            return right;
+        if (!right.HasValue)
+            return left;
+        return left.Value >= right.Value ? left : right;
     }
 
     private static string ResolveAutomationDirectory(

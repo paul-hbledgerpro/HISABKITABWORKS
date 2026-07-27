@@ -52,13 +52,13 @@ internal static class Program
             if (portalStoreArgument + 1 < args.Length &&
                 Guid.TryParse(args[portalStoreArgument + 1], out var parsedId))
                 storeConfigurationId = parsedId;
-            RunPortalSync(storeConfigurationId);
+            RunPortalSync(storeConfigurationId, ParsePortalSyncReportKind(args));
             return;
         }
 
         if (args.Any(x => x.Equals("--portal-sync", StringComparison.OrdinalIgnoreCase)))
         {
-            RunPortalSync(null);
+            RunPortalSync(null, ParsePortalSyncReportKind(args));
             return;
         }
 
@@ -121,7 +121,25 @@ internal static class Program
         }
     }
 
-    private static void RunPortalSync(Guid? storeConfigurationId)
+    private static PortalSyncReportKind? ParsePortalSyncReportKind(string[] args)
+    {
+        var reportArgument = Array.FindIndex(
+            args,
+            value => value.Equals("--portal-sync-report", StringComparison.OrdinalIgnoreCase));
+        if (reportArgument < 0 || reportArgument + 1 >= args.Length)
+            return null;
+
+        return args[reportArgument + 1].Trim().ToLowerInvariant() switch
+        {
+            "cash-sales" => PortalSyncReportKind.CashSalesSummary,
+            "z-reports" => PortalSyncReportKind.ZReports,
+            _ => null
+        };
+    }
+
+    private static void RunPortalSync(
+        Guid? storeConfigurationId,
+        PortalSyncReportKind? reportKind)
     {
         try
         {
@@ -144,7 +162,8 @@ internal static class Program
                     paths,
                     force: false,
                     visibleChrome: false,
-                    onlyStoreConfigurationId: storeConfigurationId)
+                    onlyStoreConfigurationId: storeConfigurationId,
+                    onlyReportKind: reportKind)
                 .GetAwaiter()
                 .GetResult();
             if (results.Any(result => !result.Success))

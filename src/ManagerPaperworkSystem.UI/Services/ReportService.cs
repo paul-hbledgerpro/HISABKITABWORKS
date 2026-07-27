@@ -200,10 +200,15 @@ public sealed class ReportService : IReportService
 
         using var db = CreateDb();
 
-        var shiftLogs = await db.ShiftLogs.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+        // P&L revenue comes from the consolidated Cash & Sales Summary. Shift
+        // Cash Drop contains register-level Z reports for over/short review and
+        // must not duplicate business sales in the operating statement.
+        var salesSummaries = await db.PosSalesSummaries.AsNoTracking()
+            .Where(x =>
+                x.StoreId == storeId &&
+                x.ReportTo >= from &&
+                x.ReportFrom <= to)
             .ToListAsync(ct);
-        var effShifts = EffectiveRows(shiftLogs, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
 
         var cashEntries = await db.CashOnHand.AsNoTracking()
             .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
@@ -221,8 +226,8 @@ public sealed class ReportService : IReportService
 
         var data = new ProfitLossData
         {
-            GrossSales = effShifts.Sum(x => x.NetSales),
-            SalesTax = effShifts.Sum(x => x.Tax),
+            GrossSales = salesSummaries.Sum(x => x.NetSales),
+            SalesTax = salesSummaries.Sum(x => x.Taxes),
             CashPayouts = effCash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount),
             CheckPayouts = effChecks.Sum(x => x.CheckAmount),
             Purchases = purchases.Sum(x => x.Total)

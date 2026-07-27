@@ -2184,10 +2184,12 @@ internal sealed partial class MainForm : Form
         var upload = MockActionButton("", "Import Z Report", width: 190);
         upload.Click += (_, _) => UploadPosReport(date, employee, shift, cash, card, net, tax, drop, posReport);
         actions.Controls.Add(upload);
-        var posAutoSync = MockActionButton("", "POS Auto Sync", width: 175);
+        var posAutoSync = MockActionButton("", "Z Report Auto Sync", width: 205);
         posAutoSync.Click += (_, _) =>
         {
-            using var autoSyncForm = _services.GetRequiredService<PortalSyncSetupForm>();
+            using var autoSyncForm = ActivatorUtilities.CreateInstance<PortalSyncSetupForm>(
+                _services,
+                PortalSyncReportKind.ZReports);
             autoSyncForm.ShowDialog(this);
             refresh();
         };
@@ -8398,69 +8400,12 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             return;
 
         await using var db = CreateDb();
-        var rows = await db.ShiftLogs
-            .AsNoTracking()
-            .Where(item =>
-                item.StoreId == _currentStoreId &&
-                item.Date == date &&
-                item.PosSalesSummaryId == null)
-            .OrderBy(item => item.CreatedUtc)
-            .ToListAsync();
-        var effective = EffectiveRows(
-            rows,
-            item => item.IsCorrection,
-            item => item.CorrectsId,
-            item => item.Id,
-            item => item.CreatedUtc);
-
-        var summary = await db.PosSalesSummaries
-            .Where(item =>
-                item.StoreId == _currentStoreId &&
-                item.ReportFrom == date &&
-                item.ReportTo == date)
-            .OrderByDescending(item => item.ImportedUtc)
-            .FirstOrDefaultAsync();
-        if (summary is null)
-            return;
-
-        summary.CashDropReceived = effective.Sum(item => item.CashDropReceived);
-        summary.RegisterPayout = effective.Sum(item => item.RegisterPayout);
-        summary.PayoutReason = BuildCombinedShiftPayoutReason(effective);
-
-        var hasManagerReconciliation = effective.Any(item =>
-            item.CashDropReceived != 0m ||
-            item.RegisterPayout != 0m ||
-            !string.IsNullOrWhiteSpace(item.PayoutReason));
-        if (hasManagerReconciliation)
-        {
-            summary.IsReconciled = true;
-            summary.ReconciledByUserId = _session.UserId;
-            summary.ReconciledByName = _session.DisplayName;
-            summary.ReconciledUtc = DateTime.UtcNow;
-        }
-        else
-        {
-            summary.IsReconciled = false;
-            summary.ReconciledByUserId = null;
-            summary.ReconciledByName = "";
-            summary.ReconciledUtc = null;
-        }
-
-        await db.SaveChangesAsync();
-    }
-
-    private static string BuildCombinedShiftPayoutReason(IEnumerable<ShiftLogEntry> rows)
-    {
-        var reasons = rows
-            .Where(item => !string.IsNullOrWhiteSpace(item.PayoutReason))
-            .Select(item =>
-                string.IsNullOrWhiteSpace(item.ShiftNo)
-                    ? item.PayoutReason.Trim()
-                    : $"Batch {item.ShiftNo}: {item.PayoutReason.Trim()}")
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var combined = string.Join("; ", reasons);
-        return combined.Length <= 300 ? combined : combined[..300];
+        await CashDropRollupService.SyncDateAsync(
+            db,
+            _currentStoreId,
+            date,
+            _session.UserId,
+            _session.DisplayName);
     }
 
     private async Task SyncShiftLogCashDropsToCashOnHandAsync(DateOnly date)

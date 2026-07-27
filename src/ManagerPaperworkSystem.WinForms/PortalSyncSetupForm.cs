@@ -5,6 +5,7 @@ namespace ManagerPaperworkSystem.WinForms;
 internal sealed class PortalSyncSetupForm : Form
 {
     private readonly IAppPaths _paths;
+    private readonly PortalSyncReportKind _reportKind;
     private readonly CancellationTokenSource _syncCancellation = new();
     private bool _syncRunning;
     private readonly ComboBox _business = WinTheme.ComboBox();
@@ -49,14 +50,20 @@ internal sealed class PortalSyncSetupForm : Form
     private readonly IReadOnlyList<LicensedBusinessConnection> _licensedBusinesses;
 
     public PortalSyncSetupForm(IAppPaths paths)
+        : this(paths, PortalSyncReportKind.CashSalesSummary)
+    {
+    }
+
+    public PortalSyncSetupForm(IAppPaths paths, PortalSyncReportKind reportKind)
     {
         _paths = paths;
+        _reportKind = reportKind;
         _document = PortalSyncSettingsStore.Load();
         _licensedBusinesses = StoreDirectoryPreferencesStore.GetOrderedBusinesses(
             LicensedBusinessService.Load());
 
         WinTheme.Apply(this);
-        Text = "POS Portal Auto Sync - HISAB KITAB";
+        Text = $"{ReportDisplayName} Auto Sync - HISAB KITAB";
         StartPosition = FormStartPosition.CenterParent;
         MinimumSize = new Size(760, 600);
         Size = new Size(980, 720);
@@ -67,6 +74,10 @@ internal sealed class PortalSyncSetupForm : Form
         _storePassword.UseSystemPasswordChar = true;
         _portalUrl.Text = "https://posweboffice.com/";
         _runTime.Value = DateTime.Today.AddHours(1).AddMinutes(15);
+        _enabled.Text = $"Enable unattended daily {ReportDisplayName.ToLowerInvariant()} sync";
+        _zBatchMode.Text = _reportKind == PortalSyncReportKind.ZReports
+            ? "NEXT BATCH AUTOMATIC"
+            : "NEXT DATE AUTOMATIC";
         _business.DataSource = _licensedBusinesses.ToList();
         _business.DisplayMember = nameof(LicensedBusinessConnection.BusinessName);
         _business.SelectedIndexChanged += (_, _) => LoadSelectedBusiness();
@@ -84,6 +95,11 @@ internal sealed class PortalSyncSetupForm : Form
                 _syncCancellation.Dispose();
         };
     }
+
+    private string ReportDisplayName =>
+        _reportKind == PortalSyncReportKind.CashSalesSummary
+            ? "Cash & Sales Summary"
+            : "Z Reports";
 
     private Control BuildContent()
     {
@@ -103,7 +119,7 @@ internal sealed class PortalSyncSetupForm : Form
         var heading = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.BlueDark };
         heading.Controls.Add(new Label
         {
-            Text = "AUTOMATIC POS REPORT SYNC",
+            Text = $"AUTOMATIC {ReportDisplayName.ToUpperInvariant()} SYNC",
             Dock = DockStyle.Top,
             Height = 50,
             Padding = new Padding(18, 10, 0, 0),
@@ -112,7 +128,7 @@ internal sealed class PortalSyncSetupForm : Form
         });
         heading.Controls.Add(new Label
         {
-            Text = "One-time Google Chrome enrollment • encrypted credentials • unattended daily import",
+            Text = "Separate per-store schedule • encrypted credentials • unattended daily import",
             Dock = DockStyle.Bottom,
             Height = 32,
             Padding = new Padding(20, 0, 0, 8),
@@ -148,7 +164,7 @@ internal sealed class PortalSyncSetupForm : Form
 
         AddField(form, "LICENSED HISAB KITAB STORE *", _business, 0, 0, 2);
         AddField(form, "DAILY RUN TIME", _runTime, 2, 0, 1);
-        AddField(form, "Z REPORT CATCH-UP", _zBatchMode, 3, 0, 1);
+        AddField(form, "SYNC CURSOR", _zBatchMode, 3, 0, 1);
         AddField(form, "ADVENTPOS WEB PORTAL", _portalUrl, 0, 1, 4);
         AddField(form, "PORTAL EMAIL *", _email, 0, 2, 2);
         AddField(form, "PORTAL PASSWORD *", _portalPassword, 2, 2, 2);
@@ -167,10 +183,13 @@ internal sealed class PortalSyncSetupForm : Form
                 "1. Save the settings.  2. Open the dedicated Chrome profile.  " +
                 "3. Complete any AdventPOS verification and select the correct store.  " +
                 "4. Close Chrome and use TEST / SYNC NOW.\n\n" +
-                "Cash & Sales Summary resumes with the calendar day after the latest report already imported. " +
-                "Shift Cash Drop resumes with the next AdventPOS batch after its highest numeric Shift No/Batch. " +
-                "Each Z report is saved on its own Start Date. If the PC is off, HISAB KITAB catches up " +
-                "sequentially the next time it opens.",
+                (_reportKind == PortalSyncReportKind.CashSalesSummary
+                    ? "This schedule fetches only Cash & Sales Summary reports. It resumes with the calendar day after " +
+                      "the latest summary already imported. Cash drop is supplied separately from matching Z-report " +
+                      "rows in Shift Cash Drop."
+                    : "This schedule fetches only Close-Out Z Reports. It resumes with the next AdventPOS batch after " +
+                      "the highest numeric Shift/Batch already present in Shift Cash Drop.") +
+                " If the PC is off, HISAB KITAB catches up automatically the next time Windows can run the task.",
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,
             Font = WinTheme.BodyFont(10),
@@ -191,7 +210,12 @@ internal sealed class PortalSyncSetupForm : Form
 
         var save = ActionButton("SAVE SETUP", true, 180);
         var enroll = ActionButton("ONE-TIME SETUP", false, 205);
-        var test = ActionButton("TEST / SYNC NOW", true, 190);
+        var test = ActionButton(
+            _reportKind == PortalSyncReportKind.CashSalesSummary
+                ? "SYNC CASH & SALES NOW"
+                : "SYNC Z REPORTS NOW",
+            true,
+            215);
         var close = ActionButton("CLOSE", false, 120);
         actions.Controls.Add(save);
         actions.Controls.Add(enroll);
@@ -221,12 +245,13 @@ internal sealed class PortalSyncSetupForm : Form
                 _syncRunning = true;
                 ToggleActions(actions, false);
                 _status.Text =
-                    "Waiting for any automatic run to finish, then requesting yesterday's reports...";
+                    $"Waiting for any automatic run to finish, then requesting {ReportDisplayName}...";
                 var results = await PortalSyncService.RunDueAsync(
                     _paths,
                     true,
                     true,
                     onlyStoreConfigurationId: selectedSettings.Id,
+                    onlyReportKind: _reportKind,
                     waitForExistingRun: true,
                     cancellationToken: _syncCancellation.Token);
                 if (!CanUpdateWindow())
@@ -235,7 +260,7 @@ internal sealed class PortalSyncSetupForm : Form
                     ? "No enabled store configuration was found."
                     : string.Join("  ", results.Select(result => result.Message));
                 if (results.Any(result => !result.Success))
-                    MessageBox.Show(this, _status.Text, "POS Auto Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(this, _status.Text, $"{ReportDisplayName} Auto Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             catch (OperationCanceledException)
             {
@@ -291,25 +316,41 @@ internal sealed class PortalSyncSetupForm : Form
         settings.PortalPassword = _portalPassword.Text;
         settings.StoreUserName = _storeUser.Text.Trim();
         settings.StorePassword = _storePassword.Text;
-        settings.Enabled = _enabled.Checked;
-        settings.DailyHour = _runTime.Value.Hour;
-        settings.DailyMinute = _runTime.Value.Minute;
+        if (_reportKind == PortalSyncReportKind.CashSalesSummary)
+        {
+            settings.CashSalesSummaryEnabled = _enabled.Checked;
+            settings.CashSalesDailyHour = _runTime.Value.Hour;
+            settings.CashSalesDailyMinute = _runTime.Value.Minute;
+        }
+        else
+        {
+            settings.ZReportsEnabled = _enabled.Checked;
+            settings.ZReportsDailyHour = _runTime.Value.Hour;
+            settings.ZReportsDailyMinute = _runTime.Value.Minute;
+        }
+        settings.Enabled = settings.CashSalesSummaryEnabled || settings.ZReportsEnabled;
+        settings.DailyHour = settings.CashSalesDailyHour;
+        settings.DailyMinute = settings.CashSalesDailyMinute;
         if (!_document.Stores.Contains(settings))
             _document.Stores.Add(settings);
         PortalSyncSettingsStore.Save(_document);
 
-        if (settings.Enabled)
+        if (settings.IsEnabled(_reportKind))
             PortalSyncService.EnsureDailyTask(
                 settings.Id,
-                new TimeOnly(settings.DailyHour, settings.DailyMinute));
+                _reportKind,
+                settings.GetRunTime(_reportKind));
+        else
+            PortalSyncService.RemoveDailyTask(settings.Id, _reportKind);
 
         _status.Text =
-            $"Saved for {business.BusinessName}. Daily Windows task: {_runTime.Value:h:mm tt}. " +
-            $"Last result: {settings.LastStatus}";
+            $"Saved {ReportDisplayName} sync for {business.BusinessName}. " +
+            $"Daily Windows task: {_runTime.Value:h:mm tt}. " +
+            $"Last result: {settings.GetLastStatus(_reportKind)}";
         if (showConfirmation)
             MessageBox.Show(this,
-                "The protected store settings and daily Windows task were saved.",
-                "POS Auto Sync",
+                $"The protected {ReportDisplayName} settings and its separate daily Windows task were saved.",
+                $"{ReportDisplayName} Auto Sync",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         return settings;
@@ -326,13 +367,15 @@ internal sealed class PortalSyncSetupForm : Form
         _portalPassword.Text = settings?.PortalPassword ?? "";
         _storeUser.Text = settings?.StoreUserName ?? "";
         _storePassword.Text = settings?.StorePassword ?? "";
-        _enabled.Checked = settings?.Enabled ?? true;
-        _runTime.Value = DateTime.Today
-            .AddHours(settings?.DailyHour ?? 1)
-            .AddMinutes(settings?.DailyMinute ?? 15);
+        _enabled.Checked = settings?.IsEnabled(_reportKind) ?? true;
+        var runTime = settings?.GetRunTime(_reportKind) ??
+                      (_reportKind == PortalSyncReportKind.CashSalesSummary
+                          ? new TimeOnly(1, 15)
+                          : new TimeOnly(1, 30));
+        _runTime.Value = DateTime.Today.Add(runTime.ToTimeSpan());
         _status.Text = settings is null
-            ? $"No automatic POS setup exists for {business.BusinessName}."
-            : $"Last result: {settings.LastStatus}";
+            ? $"No automatic {ReportDisplayName} setup exists for {business.BusinessName}."
+            : $"Last {ReportDisplayName} result: {settings.GetLastStatus(_reportKind)}";
     }
 
     private PortalStoreSyncSettings? FindSettings(LicensedBusinessConnection business) =>
@@ -346,7 +389,7 @@ internal sealed class PortalSyncSetupForm : Form
         if (!CanUpdateWindow())
             return;
         _status.Text = AppBootstrap.RedactSensitiveText(exception.Message);
-        MessageBox.Show(this, _status.Text, "POS Auto Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        MessageBox.Show(this, _status.Text, $"{ReportDisplayName} Auto Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private bool CanUpdateWindow() =>

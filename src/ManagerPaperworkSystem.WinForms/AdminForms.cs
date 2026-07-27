@@ -287,7 +287,13 @@ internal sealed class StoreManagerForm : Form
                           StringComparison.OrdinalIgnoreCase))))
         {
             settings.Enabled = false;
+            settings.CashSalesSummaryEnabled = false;
+            settings.ZReportsEnabled = false;
             settings.LastStatus = "Store disconnected from this PC login.";
+            settings.LastCashSummaryStatus = settings.LastStatus;
+            settings.LastZReportStatus = settings.LastStatus;
+            foreach (var reportKind in Enum.GetValues<PortalSyncReportKind>())
+                PortalSyncService.RemoveDailyTask(settings.Id, reportKind);
             changed = true;
         }
         if (changed)
