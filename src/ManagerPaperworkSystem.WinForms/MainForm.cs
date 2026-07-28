@@ -53,6 +53,8 @@ internal sealed partial class MainForm : Form
     private bool _loadingStores;
     private string _currentModule = "Dashboard";
     private bool _syncingShiftDrops;
+    private bool _developerSettingsUnlocked;
+    private readonly List<Control> _developerOnlyControls = [];
     private Func<Task>? _pendingModuleActivation;
 
     public MainForm(IServiceProvider services, IDbContextFactory<AppDbContext> dbFactory, ISettingsService settingsService, IReportService reportService, IAppPaths paths, SessionState session, ActiveConnectionInfo connectionInfo, InvoiceImportService invoiceImportService, PosReportImportService posImporter, CheckPrintService checkPrintService)
@@ -87,6 +89,8 @@ internal sealed partial class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         WindowState = FormWindowState.Maximized;
         MinimumSize = new Size(1024, 640);
+        KeyPreview = true;
+        KeyDown += MainFormDeveloperShortcutKeyDown;
 
         Controls.Add(BuildRoot());
         _monthlyDeliveryTimer.Tick += async (_, _) => await BeginMonthlyBankStatementDeliveryAsync();
@@ -576,6 +580,70 @@ internal sealed partial class MainForm : Form
 
     private AppDbContext CreateDb() => _storeConnections.CreateDbContext();
 
+    private void MainFormDeveloperShortcutKeyDown(
+        object? sender,
+        KeyEventArgs eventArgs)
+    {
+        if (!eventArgs.Control || eventArgs.KeyCode != Keys.D)
+            return;
+
+        eventArgs.Handled = true;
+        eventArgs.SuppressKeyPress = true;
+        UnlockDeveloperSettings();
+    }
+
+    private void UnlockDeveloperSettings()
+    {
+        if (_developerSettingsUnlocked)
+        {
+            _status.Text =
+                "Developer automation settings are already unlocked for this application session.";
+            return;
+        }
+
+        var passwordState = DeveloperAccessService.GetPasswordState();
+        if (passwordState == DeveloperPasswordState.Unreadable)
+        {
+            MessageBox.Show(
+                this,
+                "The protected developer password cannot be read by this Windows account. " +
+                "The automation settings remain locked. Ask the developer to repair the protected developer access file.",
+                "Developer Settings Locked",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var access = new DeveloperAccessForm(passwordState);
+        if (access.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        _developerSettingsUnlocked = true;
+        ApplyDeveloperControlVisibility();
+        _status.Text =
+            "Developer automation settings unlocked until HISAB KITAB is closed.";
+    }
+
+    private T RegisterDeveloperOnly<T>(T control)
+        where T : Control
+    {
+        control.Visible = _developerSettingsUnlocked;
+        control.Enabled = _developerSettingsUnlocked;
+        _developerOnlyControls.Add(control);
+        return control;
+    }
+
+    private void ApplyDeveloperControlVisibility()
+    {
+        foreach (var control in _developerOnlyControls
+                     .Where(control => !control.IsDisposed))
+        {
+            control.Visible = _developerSettingsUnlocked;
+            control.Enabled = _developerSettingsUnlocked;
+            control.Parent?.PerformLayout();
+        }
+    }
+
     private Control BuildRoot()
     {
         var root = new TableLayoutPanel
@@ -807,6 +875,7 @@ internal sealed partial class MainForm : Form
         }
 
         _content.SuspendLayout();
+        _developerOnlyControls.Clear();
         _content.Controls.Clear();
         try
         {
@@ -2194,6 +2263,7 @@ internal sealed partial class MainForm : Form
             refresh();
         };
         actions.Controls.Add(posAutoSync);
+        RegisterDeveloperOnly(posAutoSync);
         var clear = MockActionButton("", "Clear Imported", width: 190);
         clear.Click += (_, _) => clearImported();
         actions.Controls.Add(clear);
@@ -4540,7 +4610,7 @@ internal sealed partial class MainForm : Form
             clearPurchaseForm();
             await refreshAsync();
         }, true, 160);
-        AddSectionButton(actions, "Email Invoices", async () =>
+        var emailInvoices = AddSectionButton(actions, "Email Invoices", async () =>
         {
             var storeKey = CurrentInvoiceEmailStoreKey();
             var business = CurrentLicensedBusiness();
@@ -4627,7 +4697,8 @@ internal sealed partial class MainForm : Form
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
             }
-        }, width: 205, enabled: _session.IsAdmin);
+        }, width: 205);
+        RegisterDeveloperOnly(emailInvoices);
         AddSectionButton(actions, "Update Selected", updateSelectedInvoiceAsync, width: 210, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Delete Selected", async () =>
         {
@@ -8260,15 +8331,16 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
         return form;
     }
 
-    private static void AddSectionButton(FlowLayoutPanel actions, string text, EventHandler click, bool filled = false, int width = 170, bool enabled = true)
+    private static Button AddSectionButton(FlowLayoutPanel actions, string text, EventHandler click, bool filled = false, int width = 170, bool enabled = true)
     {
         var button = MockActionButton("", text, filled, width);
         button.Enabled = enabled;
         button.Click += click;
         actions.Controls.Add(button);
+        return button;
     }
 
-    private static void AddSectionButton(FlowLayoutPanel actions, string text, Func<Task> click, bool filled = false, int width = 170, bool enabled = true)
+    private static Button AddSectionButton(FlowLayoutPanel actions, string text, Func<Task> click, bool filled = false, int width = 170, bool enabled = true)
     {
         var button = MockActionButton("", text, filled, width);
         button.Enabled = enabled;
@@ -8279,6 +8351,7 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             finally { button.Enabled = enabled; }
         };
         actions.Controls.Add(button);
+        return button;
     }
 
     private static string MoneyText(decimal value) => value.ToString("C2", CultureInfo.CurrentCulture);

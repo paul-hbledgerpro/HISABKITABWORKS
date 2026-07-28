@@ -65,6 +65,7 @@ internal sealed partial class MainForm
         autoSync.Margin = new Padding(6);
         autoSync.Enabled = _session.IsAdmin;
         filters.Controls.Add(autoSync, 6, 0);
+        RegisterDeveloperOnly(autoSync);
 
         var refresh = WinTheme.Button("REFRESH");
         refresh.Dock = DockStyle.Fill;
