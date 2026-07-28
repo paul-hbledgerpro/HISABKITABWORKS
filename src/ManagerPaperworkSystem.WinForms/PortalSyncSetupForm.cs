@@ -55,6 +55,15 @@ internal sealed class PortalSyncSetupForm : Form
     }
 
     public PortalSyncSetupForm(IAppPaths paths, PortalSyncReportKind reportKind)
+        : this(paths, reportKind, 0, "")
+    {
+    }
+
+    public PortalSyncSetupForm(
+        IAppPaths paths,
+        PortalSyncReportKind reportKind,
+        int preferredBusinessId,
+        string preferredDatabaseName)
     {
         _paths = paths;
         _reportKind = reportKind;
@@ -81,7 +90,20 @@ internal sealed class PortalSyncSetupForm : Form
         _business.DataSource = _licensedBusinesses.ToList();
         _business.DisplayMember = nameof(LicensedBusinessConnection.BusinessName);
         _business.SelectedIndexChanged += (_, _) => LoadSelectedBusiness();
-        if (_business.Items.Count > 0)
+        var preferredBusiness = _licensedBusinesses.FirstOrDefault(business =>
+                                    preferredBusinessId > 0 &&
+                                    business.BusinessId == preferredBusinessId)
+                                ?? _licensedBusinesses.FirstOrDefault(business =>
+                                    !string.IsNullOrWhiteSpace(preferredDatabaseName) &&
+                                    string.Equals(
+                                        business.DatabaseName,
+                                        preferredDatabaseName,
+                                        StringComparison.OrdinalIgnoreCase));
+        if (preferredBusiness is not null)
+            _business.SelectedItem = preferredBusiness;
+        else if (_business.Items.Count > 0)
+            _business.SelectedIndex = 0;
+        if (_business.SelectedItem is not null)
             LoadSelectedBusiness();
 
         FormClosing += (_, _) =>
@@ -307,9 +329,7 @@ internal sealed class PortalSyncSetupForm : Form
                 "The AdventPOS store user name and password are required for unattended daily sign-in.");
 
         var settings = FindSettings(business) ?? new PortalStoreSyncSettings();
-        settings.BusinessName = business.BusinessName;
-        settings.StoreGuid = business.StoreGuid;
-        settings.DatabaseName = business.DatabaseName;
+        PortalSyncSettingsStore.BindToBusiness(settings, business);
         settings.PortalUrl = _portalUrl.Text.Trim();
         settings.PortalStoreName = _portalStore.Text.Trim();
         settings.PortalEmail = _email.Text.Trim();
@@ -379,10 +399,7 @@ internal sealed class PortalSyncSetupForm : Form
     }
 
     private PortalStoreSyncSettings? FindSettings(LicensedBusinessConnection business) =>
-        _document.Stores.FirstOrDefault(item =>
-            string.Equals(item.DatabaseName, business.DatabaseName, StringComparison.OrdinalIgnoreCase) ||
-            (!string.IsNullOrWhiteSpace(business.StoreGuid) &&
-             string.Equals(item.StoreGuid, business.StoreGuid, StringComparison.OrdinalIgnoreCase)));
+        PortalSyncSettingsStore.FindForBusiness(_document.Stores, business);
 
     private void ShowError(Exception exception)
     {

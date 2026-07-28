@@ -2256,9 +2256,12 @@ internal sealed partial class MainForm : Form
         var posAutoSync = MockActionButton("", "Z Report Auto Sync", width: 205);
         posAutoSync.Click += (_, _) =>
         {
+            var currentBusiness = CurrentLicensedBusiness();
             using var autoSyncForm = ActivatorUtilities.CreateInstance<PortalSyncSetupForm>(
                 _services,
-                PortalSyncReportKind.ZReports);
+                PortalSyncReportKind.ZReports,
+                currentBusiness?.BusinessId ?? 0,
+                currentBusiness?.DatabaseName ?? "");
             autoSyncForm.ShowDialog(this);
             refresh();
         };

@@ -12,7 +12,7 @@ internal enum PortalSyncReportKind
 
 internal sealed class PortalSyncSettingsDocument
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
     public List<PortalStoreSyncSettings> Stores { get; set; } = [];
 }
 
@@ -20,6 +20,7 @@ internal sealed class PortalStoreSyncSettings
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public bool Enabled { get; set; } = true;
+    public int BusinessId { get; set; }
     public string BusinessName { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
@@ -168,6 +169,109 @@ internal static class PortalSyncSettingsStore
         }
     }
 
+    public static PortalStoreSyncSettings? FindForBusiness(
+        IEnumerable<PortalStoreSyncSettings> stores,
+        LicensedBusinessConnection business)
+    {
+        if (business.BusinessId > 0)
+        {
+            var byBusinessId = stores.FirstOrDefault(settings =>
+                settings.BusinessId == business.BusinessId);
+            if (byBusinessId is not null)
+                return byBusinessId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(business.DatabaseName))
+        {
+            var byDatabase = stores.FirstOrDefault(settings =>
+                string.Equals(
+                    settings.DatabaseName,
+                    business.DatabaseName,
+                    StringComparison.OrdinalIgnoreCase));
+            if (byDatabase is not null)
+                return byDatabase;
+        }
+
+        // Store GUID is only a legacy fallback when there is no database identity.
+        // Older databases can share a migrated GUID, so a GUID must never override
+        // a different database or business ID.
+        if (!string.IsNullOrWhiteSpace(business.DatabaseName) ||
+            string.IsNullOrWhiteSpace(business.StoreGuid))
+        {
+            return null;
+        }
+
+        var guidMatches = stores
+            .Where(settings =>
+                settings.BusinessId <= 0 &&
+                string.IsNullOrWhiteSpace(settings.DatabaseName) &&
+                string.Equals(
+                    settings.StoreGuid,
+                    business.StoreGuid,
+                    StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+        return guidMatches.Count == 1 ? guidMatches[0] : null;
+    }
+
+    public static LicensedBusinessConnection? FindLicensedBusiness(
+        PortalStoreSyncSettings settings,
+        IReadOnlyList<LicensedBusinessConnection> businesses)
+    {
+        if (settings.BusinessId > 0)
+        {
+            var byBusinessId = businesses.FirstOrDefault(business =>
+                business.BusinessId == settings.BusinessId);
+            if (byBusinessId is not null)
+                return byBusinessId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.DatabaseName))
+        {
+            return businesses.FirstOrDefault(business =>
+                string.Equals(
+                    business.DatabaseName,
+                    settings.DatabaseName,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.StoreGuid))
+            return null;
+
+        var guidMatches = businesses
+            .Where(business =>
+                string.Equals(
+                    business.StoreGuid,
+                    settings.StoreGuid,
+                    StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+        return guidMatches.Count == 1 ? guidMatches[0] : null;
+    }
+
+    public static bool IsForBusiness(
+        PortalStoreSyncSettings settings,
+        LicensedBusinessConnection business) =>
+        ReferenceEquals(FindForBusiness([settings], business), settings);
+
+    public static void BindToBusiness(
+        PortalStoreSyncSettings settings,
+        LicensedBusinessConnection business)
+    {
+        settings.BusinessId = business.BusinessId;
+        settings.BusinessName = business.BusinessName;
+        settings.StoreGuid = business.StoreGuid;
+        settings.DatabaseName = business.DatabaseName;
+    }
+
+    public static bool IsConnected(PortalStoreSyncSettings settings)
+    {
+        var businesses = LicensedBusinessService.Load();
+        var business = FindLicensedBusiness(settings, businesses);
+        return business is not null &&
+               StoreDirectoryPreferencesStore.IsConnected(business, businesses);
+    }
+
     private static PortalSyncSettingsDocument Normalize(PortalSyncSettingsDocument document)
     {
         document.Stores ??= [];
@@ -187,6 +291,17 @@ internal static class PortalSyncSettingsStore
                 settings.LastZReportSuccessUtc = settings.LastSuccessUtc;
                 settings.LastCashSummaryStatus = settings.LastStatus;
                 settings.LastZReportStatus = settings.LastStatus;
+            }
+        }
+
+        if (document.Version < 3)
+        {
+            var businesses = LicensedBusinessService.Load();
+            foreach (var settings in document.Stores)
+            {
+                var business = FindLicensedBusiness(settings, businesses);
+                if (business is not null)
+                    BindToBusiness(settings, business);
             }
         }
 
@@ -215,7 +330,7 @@ internal static class PortalSyncSettingsStore
             });
         }
 
-        document.Version = 2;
+        document.Version = 3;
         return document;
     }
 

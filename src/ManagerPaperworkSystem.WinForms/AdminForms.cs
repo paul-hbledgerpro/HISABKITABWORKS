@@ -276,15 +276,7 @@ internal sealed class StoreManagerForm : Form
         var document = PortalSyncSettingsStore.Load();
         var changed = false;
         foreach (var settings in document.Stores.Where(settings =>
-                     string.Equals(
-                         settings.DatabaseName,
-                         business.DatabaseName,
-                         StringComparison.OrdinalIgnoreCase) ||
-                     (!string.IsNullOrWhiteSpace(business.StoreGuid) &&
-                      string.Equals(
-                          settings.StoreGuid,
-                          business.StoreGuid,
-                          StringComparison.OrdinalIgnoreCase))))
+                     PortalSyncSettingsStore.IsForBusiness(settings, business)))
         {
             settings.Enabled = false;
             settings.CashSalesSummaryEnabled = false;

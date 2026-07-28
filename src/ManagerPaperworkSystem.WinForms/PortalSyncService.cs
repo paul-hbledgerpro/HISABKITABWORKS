@@ -52,9 +52,7 @@ internal static class PortalSyncService
 
     public static void OpenEnrollmentChrome(PortalStoreSyncSettings settings)
     {
-        if (!StoreDirectoryPreferencesStore.IsConnected(
-                settings.StoreGuid,
-                settings.DatabaseName))
+        if (!PortalSyncSettingsStore.IsConnected(settings))
         {
             throw new InvalidOperationException(
                 "This store is disconnected from the current PC login. Reconnect it in Stores before running One-Time Setup.");
@@ -148,9 +146,7 @@ internal static class PortalSyncService
         foreach (var settings in PortalSyncSettingsStore.Load().Stores)
         {
             RemoveScheduledTask($"{LegacyTaskName} - {settings.Id:N}");
-            var connected = StoreDirectoryPreferencesStore.IsConnected(
-                settings.StoreGuid,
-                settings.DatabaseName);
+            var connected = PortalSyncSettingsStore.IsConnected(settings);
             foreach (var reportKind in Enum.GetValues<PortalSyncReportKind>())
             {
                 if (connected && settings.IsEnabled(reportKind))
@@ -207,9 +203,7 @@ internal static class PortalSyncService
             var document = PortalSyncSettingsStore.Load();
             var results = new List<PortalSyncRunResult>();
             var configuredStores = document.Stores
-                .Where(item => StoreDirectoryPreferencesStore.IsConnected(
-                                   item.StoreGuid,
-                                   item.DatabaseName) &&
+                .Where(item => PortalSyncSettingsStore.IsConnected(item) &&
                                (onlyStoreConfigurationId is null ||
                                  item.Id == onlyStoreConfigurationId.Value))
                 .ToList();
@@ -2399,10 +2393,7 @@ internal static class PortalSyncService
     private static AppDbContext CreateStoreDatabase(PortalStoreSyncSettings settings)
     {
         var businesses = LicensedBusinessService.Load();
-        var licensed = businesses.FirstOrDefault(item =>
-            string.Equals(item.DatabaseName, settings.DatabaseName, StringComparison.OrdinalIgnoreCase) ||
-            (!string.IsNullOrWhiteSpace(settings.StoreGuid) &&
-             string.Equals(item.StoreGuid, settings.StoreGuid, StringComparison.OrdinalIgnoreCase)));
+        var licensed = PortalSyncSettingsStore.FindLicensedBusiness(settings, businesses);
         if (licensed is null)
             throw new InvalidOperationException(
                 $"'{settings.BusinessName}' is no longer included in this PC license.");

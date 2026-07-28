@@ -641,9 +641,12 @@ internal sealed partial class MainForm
 
         autoSync.Click += async (_, _) =>
         {
+            var currentBusiness = CurrentLicensedBusiness();
             using var form = ActivatorUtilities.CreateInstance<PortalSyncSetupForm>(
                 _services,
-                PortalSyncReportKind.CashSalesSummary);
+                PortalSyncReportKind.CashSalesSummary,
+                currentBusiness?.BusinessId ?? 0,
+                currentBusiness?.DatabaseName ?? "");
             form.ShowDialog(this);
             await RefreshAsync();
         };
