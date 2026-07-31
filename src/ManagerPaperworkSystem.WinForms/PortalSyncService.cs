@@ -11,6 +11,7 @@ using ManagerPaperworkSystem.Data.Db;
 using ManagerPaperworkSystem.UI.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Win32;
 using PuppeteerSharp;
 using PuppeteerSharp.Media;
 
@@ -30,10 +31,13 @@ internal sealed record GeneratedPortalReport(
     string? ExportError);
 internal sealed record CapturedZReport(PosReportData Report, string SourcePath);
 internal sealed record PortalTargetStatus(bool CashSummaryPresent, int ZReportCount);
+internal sealed record PortalSyncScheduleResult(bool WindowsTaskCreated, string Message);
 
 internal static class PortalSyncService
 {
     private const string LegacyTaskName = "HISAB KITAB - Daily POS Report Sync";
+    private const string StartupRunName = "HISAB KITAB POS Report Sync";
+    private const string CurrentUserRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private static readonly SemaphoreSlim RunGate = new(1, 1);
 
     public static string? FindGoogleChrome()
@@ -78,7 +82,7 @@ internal static class PortalSyncService
         });
     }
 
-    public static void EnsureDailyTask(
+    public static PortalSyncScheduleResult EnsureDailyTask(
         Guid storeConfigurationId,
         PortalSyncReportKind reportKind,
         TimeOnly runAt)
@@ -87,6 +91,20 @@ internal static class PortalSyncService
         if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
             throw new InvalidOperationException("The installed HISAB KITAB executable could not be located.");
 
+        Exception? startupFallbackError = null;
+        try
+        {
+            EnsureStartupFallback(executable);
+        }
+        catch (Exception exception)
+        {
+            startupFallbackError = exception;
+        }
+
+        // Older releases used a shared task name. That task may have been
+        // created by an administrator or a different Windows account, which
+        // prevents a standard client account from replacing it.
+        RemoveScheduledTask(LegacyScheduledTaskName(storeConfigurationId, reportKind));
         var taskName = ScheduledTaskName(storeConfigurationId, reportKind);
         var temporaryXml = Path.Combine(
             Path.GetTempPath(),
@@ -118,10 +136,24 @@ internal static class PortalSyncService
                 var error = process.StandardError.ReadToEnd().Trim();
                 if (string.IsNullOrWhiteSpace(error))
                     error = process.StandardOutput.ReadToEnd().Trim();
-                throw new InvalidOperationException(
-                    "The daily sync task could not be created. " +
-                    (string.IsNullOrWhiteSpace(error) ? "Run HISAB KITAB once as administrator." : error));
+
+                if (startupFallbackError is not null)
+                {
+                    throw new InvalidOperationException(
+                        "Windows rejected both automatic sync startup methods. " +
+                        $"Task Scheduler: {(string.IsNullOrWhiteSpace(error) ? "access denied" : error)} " +
+                        $"Windows sign-in fallback: {startupFallbackError.Message}");
+                }
+
+                return new PortalSyncScheduleResult(
+                    false,
+                    "Settings saved. Windows blocked the timed task, so automatic catch-up will run " +
+                    "at Windows sign-in and whenever HISAB KITAB starts.");
             }
+
+            return new PortalSyncScheduleResult(
+                true,
+                $"Daily Windows task scheduled for {runAt.ToString("h:mm tt", CultureInfo.CurrentCulture)}.");
         }
         finally
         {
@@ -138,8 +170,11 @@ internal static class PortalSyncService
 
     public static void RemoveDailyTask(
         Guid storeConfigurationId,
-        PortalSyncReportKind reportKind) =>
+        PortalSyncReportKind reportKind)
+    {
         RemoveScheduledTask(ScheduledTaskName(storeConfigurationId, reportKind));
+        RemoveScheduledTask(LegacyScheduledTaskName(storeConfigurationId, reportKind));
+    }
 
     public static void EnsureConfiguredDailyTasks()
     {
@@ -424,7 +459,21 @@ internal static class PortalSyncService
     private static string ScheduledTaskName(
         Guid storeConfigurationId,
         PortalSyncReportKind reportKind) =>
+        $"{LegacyScheduledTaskName(storeConfigurationId, reportKind)} - U{CurrentWindowsUserScope()}";
+
+    private static string LegacyScheduledTaskName(
+        Guid storeConfigurationId,
+        PortalSyncReportKind reportKind) =>
         $"HISAB KITAB - Daily {ReportDisplayName(reportKind)} Sync - {storeConfigurationId:N}";
+
+    private static string CurrentWindowsUserScope()
+    {
+        var identity = WindowsIdentity.GetCurrent().User?.Value;
+        if (string.IsNullOrWhiteSpace(identity))
+            identity = $"{Environment.UserDomainName}\\{Environment.UserName}";
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
+        return Convert.ToHexString(digest.AsSpan(0, 6));
+    }
 
     private static string ReportDisplayName(PortalSyncReportKind reportKind) =>
         reportKind == PortalSyncReportKind.CashSalesSummary
@@ -435,6 +484,17 @@ internal static class PortalSyncService
         reportKind == PortalSyncReportKind.CashSalesSummary
             ? "cash-sales"
             : "z-reports";
+
+    private static void EnsureStartupFallback(string executable)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(CurrentUserRunKey, writable: true)
+                        ?? throw new InvalidOperationException(
+                            "The current Windows user's startup settings could not be opened.");
+        key.SetValue(
+            StartupRunName,
+            $"\"{executable}\" --portal-sync",
+            RegistryValueKind.String);
+    }
 
     private static void RemoveScheduledTask(string taskName)
     {

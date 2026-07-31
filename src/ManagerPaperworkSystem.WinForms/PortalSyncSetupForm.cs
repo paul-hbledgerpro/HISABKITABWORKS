@@ -355,24 +355,28 @@ internal sealed class PortalSyncSetupForm : Form
             _document.Stores.Add(settings);
         PortalSyncSettingsStore.Save(_document);
 
+        PortalSyncScheduleResult? scheduleResult = null;
         if (settings.IsEnabled(_reportKind))
-            PortalSyncService.EnsureDailyTask(
+            scheduleResult = PortalSyncService.EnsureDailyTask(
                 settings.Id,
                 _reportKind,
                 settings.GetRunTime(_reportKind));
         else
             PortalSyncService.RemoveDailyTask(settings.Id, _reportKind);
 
+        var scheduleStatus = scheduleResult?.Message ?? "Automatic sync is disabled for this report.";
         _status.Text =
             $"Saved {ReportDisplayName} sync for {business.BusinessName}. " +
-            $"Daily Windows task: {_runTime.Value:h:mm tt}. " +
+            $"{scheduleStatus} " +
             $"Last result: {settings.GetLastStatus(_reportKind)}";
         if (showConfirmation)
             MessageBox.Show(this,
-                $"The protected {ReportDisplayName} settings and its separate daily Windows task were saved.",
+                $"The protected {ReportDisplayName} settings were saved.\r\n\r\n{scheduleStatus}",
                 $"{ReportDisplayName} Auto Sync",
                 MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+                scheduleResult is { WindowsTaskCreated: false }
+                    ? MessageBoxIcon.Warning
+                    : MessageBoxIcon.Information);
         return settings;
     }
 
