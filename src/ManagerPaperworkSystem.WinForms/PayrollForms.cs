@@ -766,6 +766,7 @@ internal sealed class ScheduleManagerForm : Form
     private readonly Func<AppDbContext> _createDb;
     private readonly int _storeId;
     private readonly string _user;
+    private readonly bool _developerSettingsUnlocked;
     private readonly DataGridView _grid = WinTheme.Grid();
     private readonly ComboBox _employee = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly DateTimePicker _date = new() { Format = DateTimePickerFormat.Short, Width = 150 };
@@ -776,9 +777,16 @@ internal sealed class ScheduleManagerForm : Form
     private readonly TextBox _notes = PayrollUi.TextBox();
     private int? _shiftId;
 
-    public ScheduleManagerForm(Func<AppDbContext> createDb, int storeId, string user)
+    public ScheduleManagerForm(
+        Func<AppDbContext> createDb,
+        int storeId,
+        string user,
+        bool developerSettingsUnlocked = false)
     {
-        _createDb = createDb; _storeId = storeId; _user = user;
+        _createDb = createDb;
+        _storeId = storeId;
+        _user = user;
+        _developerSettingsUnlocked = developerSettingsUnlocked;
         PayrollUi.Prepare(this, "Employee Scheduling - HISAB KITAB", new Size(1320, 820));
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, BackColor = WinTheme.Bg, Padding = new Padding(16) };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -792,6 +800,8 @@ internal sealed class ScheduleManagerForm : Form
         var publishPeriod = PayrollUi.Button("PUBLISH PERIOD / EXPORT PDF", true, 260); publishPeriod.Click += async (_, _) => await PublishPeriodAndExportAsync();
         var delete = PayrollUi.Button("DELETE DRAFT"); delete.Click += async (_, _) => await DeleteAsync();
         var textWeek = PayrollUi.Button("TEXT PUBLISHED WEEK", true, 220); textWeek.Click += async (_, _) => await TextPublishedScheduleAsync();
+        textWeek.Visible = _developerSettingsUnlocked;
+        textWeek.Enabled = _developerSettingsUnlocked;
         actions.Controls.AddRange(new Control[] { publishPeriod, textWeek, save, add, delete }); root.Controls.Add(actions, 0, 2); root.Controls.Add(_grid, 0, 3); Controls.Add(root);
         _grid.SelectionChanged += async (_, _) => await SelectAsync();
         Shown += async (_, _) => { await LoadEmployeesAsync(); await RefreshAsync(); };
@@ -889,6 +899,17 @@ internal sealed class ScheduleManagerForm : Form
 
     private async Task TextPublishedScheduleAsync()
     {
+        if (!_developerSettingsUnlocked)
+        {
+            MessageBox.Show(
+                this,
+                "Schedule SMS controls are protected. Press Ctrl+D in the main HISAB KITAB window and enter the developer password first.",
+                "Developer Settings Required",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
         var selectedDate = DateOnly.FromDateTime(_date.Value);
         var defaultFrom = selectedDate.AddDays(-(int)selectedDate.DayOfWeek);
         if (!ScheduleSendRangeDialog.TrySelect(this, defaultFrom, defaultFrom.AddDays(6), out var from, out var to)) return;

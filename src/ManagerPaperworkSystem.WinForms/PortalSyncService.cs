@@ -199,8 +199,23 @@ internal static class PortalSyncService
         Guid? onlyStoreConfigurationId = null,
         PortalSyncReportKind? onlyReportKind = null,
         bool waitForExistingRun = false,
+        DateOnly? historicalStartDate = null,
+        DateOnly? historicalEndDate = null,
         CancellationToken cancellationToken = default)
     {
+        var historicalBackfill = historicalStartDate.HasValue || historicalEndDate.HasValue;
+        if (historicalBackfill)
+        {
+            if (!historicalStartDate.HasValue || !historicalEndDate.HasValue)
+                throw new InvalidOperationException("Select both a historical start date and end date.");
+            if (historicalEndDate.Value < historicalStartDate.Value)
+                throw new InvalidOperationException("Historical end date must be on or after the start date.");
+            if (historicalEndDate.Value.DayNumber - historicalStartDate.Value.DayNumber > 365)
+                throw new InvalidOperationException("Historical backfill is limited to 366 days per run.");
+            if (!onlyStoreConfigurationId.HasValue || !onlyReportKind.HasValue)
+                throw new InvalidOperationException("Historical backfill must target one licensed store and one report type.");
+        }
+
         var gateAcquired = waitForExistingRun
             ? await RunGate.WaitAsync(TimeSpan.FromMinutes(3), cancellationToken)
             : await RunGate.WaitAsync(0, cancellationToken);
@@ -245,7 +260,8 @@ internal static class PortalSyncService
             if (onlyStoreConfigurationId is not null &&
                 (configuredStores.Count == 0 ||
                  (onlyReportKind.HasValue &&
-                  !configuredStores[0].IsEnabled(onlyReportKind.Value))))
+                  !configuredStores[0].IsEnabled(onlyReportKind.Value) &&
+                  !historicalBackfill)))
             {
                 var missing = new PortalSyncRunResult(
                     "",
@@ -266,18 +282,33 @@ internal static class PortalSyncService
                     : Enum.GetValues<PortalSyncReportKind>();
                 foreach (var reportKind in reportKinds)
                 {
-                    if (!settings.IsEnabled(reportKind))
+                    if (!settings.IsEnabled(reportKind) && !historicalBackfill)
                         continue;
                     if (!force &&
                         DateTime.Now.TimeOfDay < settings.GetRunTime(reportKind).ToTimeSpan())
                         continue;
 
-                    var pendingDates = reportKind == PortalSyncReportKind.CashSalesSummary
-                        ? await GetPendingCashSummaryDatesAsync(
-                            settings,
-                            yesterday,
-                            cancellationToken)
-                        : [yesterday];
+                    List<DateOnly> pendingDates;
+                    if (historicalBackfill)
+                    {
+                        pendingDates = reportKind == PortalSyncReportKind.CashSalesSummary
+                            ? Enumerable.Range(
+                                    0,
+                                    historicalEndDate!.Value.DayNumber -
+                                    historicalStartDate!.Value.DayNumber + 1)
+                                .Select(offset => historicalStartDate.Value.AddDays(offset))
+                                .ToList()
+                            : [historicalEndDate!.Value];
+                    }
+                    else
+                    {
+                        pendingDates = reportKind == PortalSyncReportKind.CashSalesSummary
+                            ? await GetPendingCashSummaryDatesAsync(
+                                settings,
+                                yesterday,
+                                cancellationToken)
+                            : [yesterday];
+                    }
                     if (!force &&
                         reportKind == PortalSyncReportKind.CashSalesSummary &&
                         pendingDates.Count == 0)
@@ -305,7 +336,10 @@ internal static class PortalSyncService
                         using var targetTimeout =
                             CancellationTokenSource.CreateLinkedTokenSource(
                                 cancellationToken);
-                        targetTimeout.CancelAfter(TimeSpan.FromMinutes(20));
+                        targetTimeout.CancelAfter(
+                            historicalBackfill
+                                ? TimeSpan.FromHours(2)
+                                : TimeSpan.FromMinutes(20));
                         try
                         {
                             result = await RunStoreWithRetriesAsync(
@@ -314,6 +348,8 @@ internal static class PortalSyncService
                                 targetDate,
                                 reportKind,
                                 visibleChrome,
+                                historicalStartDate,
+                                historicalEndDate,
                                 targetTimeout.Token);
                         }
                         catch (OperationCanceledException)
@@ -323,7 +359,8 @@ internal static class PortalSyncService
                                 settings.BusinessName,
                                 false,
                                 false,
-                                $"{ReportDisplayName(reportKind)} sync exceeded 20 minutes and was stopped. " +
+                                $"{ReportDisplayName(reportKind)} sync exceeded " +
+                                $"{(historicalBackfill ? "2 hours" : "20 minutes")} and was stopped. " +
                                 "The next scheduled run will resume from its stored cursor.");
                         }
                         catch (Exception exception)
@@ -372,8 +409,12 @@ internal static class PortalSyncService
             if (result.Success)
             {
                 settings.LastCashSummarySuccessUtc = now;
-                settings.LastCashSummaryReportDate = targetDate;
-                settings.LastImportedReportDate = targetDate;
+                settings.LastCashSummaryReportDate = LatestDate(
+                    settings.LastCashSummaryReportDate,
+                    targetDate);
+                settings.LastImportedReportDate = LatestDate(
+                    settings.LastImportedReportDate,
+                    targetDate);
             }
         }
         else
@@ -383,13 +424,20 @@ internal static class PortalSyncService
             if (result.Success)
             {
                 settings.LastZReportSuccessUtc = now;
-                settings.LastZReportDate = targetDate;
+                settings.LastZReportDate = LatestDate(
+                    settings.LastZReportDate,
+                    targetDate);
             }
         }
 
         if (result.Success)
             settings.LastSuccessUtc = now;
     }
+
+    private static DateOnly LatestDate(DateOnly? existing, DateOnly candidate) =>
+        existing.HasValue && existing.Value > candidate
+            ? existing.Value
+            : candidate;
 
     internal static void WriteDiagnostic(
         string businessName,
@@ -524,6 +572,8 @@ internal static class PortalSyncService
         DateOnly targetDate,
         PortalSyncReportKind reportKind,
         bool visibleChrome,
+        DateOnly? historicalStartDate,
+        DateOnly? historicalEndDate,
         CancellationToken cancellationToken)
     {
         Exception? lastError = null;
@@ -537,6 +587,8 @@ internal static class PortalSyncService
                     targetDate,
                     reportKind,
                     visibleChrome,
+                    historicalStartDate,
+                    historicalEndDate,
                     cancellationToken);
             }
             catch (Exception exception) when (attempt < 3)
@@ -554,6 +606,8 @@ internal static class PortalSyncService
         DateOnly targetDate,
         PortalSyncReportKind reportKind,
         bool visibleChrome,
+        DateOnly? historicalStartDate,
+        DateOnly? historicalEndDate,
         CancellationToken cancellationToken)
     {
         var chrome = FindGoogleChrome()
@@ -724,14 +778,21 @@ internal static class PortalSyncService
                     // portal batch in ascending order. A brand-new store
                     // bootstraps from the requested date instead of importing
                     // the entire portal history.
-                    var candidateBatches = latestImportedZBatch.HasValue
+                    var historicalZBackfill =
+                        historicalStartDate.HasValue &&
+                        historicalEndDate.HasValue;
+                    var candidateBatches = historicalZBackfill
                         ? numericPortalBatches
-                            .Where(item => item.Number > latestImportedZBatch.Value)
-                            .OrderBy(item => item.Number)
-                            .ToList()
-                        : numericPortalBatches
                             .OrderByDescending(item => item.Number)
-                            .ToList();
+                            .ToList()
+                        : latestImportedZBatch.HasValue
+                            ? numericPortalBatches
+                                .Where(item => item.Number > latestImportedZBatch.Value)
+                                .OrderBy(item => item.Number)
+                                .ToList()
+                            : numericPortalBatches
+                                .OrderByDescending(item => item.Number)
+                                .ToList();
 
                     foreach (var candidate in candidateBatches)
                     {
@@ -791,12 +852,22 @@ internal static class PortalSyncService
 
                         var actualDate = report.ReportDate!.Value;
                         var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
-                        if (latestImportedZBatch.HasValue && actualDate > yesterday)
-                            break;
-                        if (!latestImportedZBatch.HasValue && actualDate > targetDate)
-                            continue;
-                        if (!latestImportedZBatch.HasValue && actualDate < targetDate)
-                            break;
+                        if (historicalZBackfill)
+                        {
+                            if (actualDate > historicalEndDate!.Value)
+                                continue;
+                            if (actualDate < historicalStartDate!.Value)
+                                break;
+                        }
+                        else
+                        {
+                            if (latestImportedZBatch.HasValue && actualDate > yesterday)
+                                break;
+                            if (!latestImportedZBatch.HasValue && actualDate > targetDate)
+                                continue;
+                            if (!latestImportedZBatch.HasValue && actualDate < targetDate)
+                                break;
+                        }
 
                         ZReportImportOutcome result;
                         if (importPdf)
@@ -835,7 +906,10 @@ internal static class PortalSyncService
                                 dataStoreId,
                                 actualDate,
                                 cancellationToken: cancellationToken);
-                            lastProcessedZBatch = candidate.Number;
+                            lastProcessedZBatch = historicalZBackfill &&
+                                                  lastProcessedZBatch.HasValue
+                                ? Math.Max(lastProcessedZBatch.Value, candidate.Number)
+                                : candidate.Number;
                         }
                         catch (OperationCanceledException)
                         {
@@ -854,7 +928,15 @@ internal static class PortalSyncService
                         }
                     }
 
-                    if (!latestImportedZBatch.HasValue && zResult.Total == 0)
+                    if (historicalZBackfill && zResult.Total == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"No AdventPOS Close-Out batch had a Start Date from " +
+                            $"{historicalStartDate:M/d/yyyy} through {historicalEndDate:M/d/yyyy}.");
+                    }
+                    if (!historicalZBackfill &&
+                        !latestImportedZBatch.HasValue &&
+                        zResult.Total == 0)
                     {
                         throw new InvalidOperationException(
                             $"No AdventPOS Close-Out batch had Start Date {targetDate:M/d/yyyy}. " +
@@ -984,7 +1066,10 @@ internal static class PortalSyncService
             settings.BusinessName,
             true,
             zResult.Imported > 0,
-            $"Z Report sync: {zReportDescription}.");
+            historicalStartDate.HasValue && historicalEndDate.HasValue
+                ? $"Z Report historical sync {historicalStartDate:M/d/yyyy} - " +
+                  $"{historicalEndDate:M/d/yyyy}: {zReportDescription}."
+                : $"Z Report sync: {zReportDescription}.");
     }
 
     private static async Task CloseDedicatedProfileBrowserAsync(

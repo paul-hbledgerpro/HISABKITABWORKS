@@ -22,6 +22,20 @@ internal sealed class PortalSyncSetupForm : Form
         Dock = DockStyle.Fill,
         Font = WinTheme.BodyFont(10)
     };
+    private readonly DateTimePicker _historicalFrom = new()
+    {
+        Format = DateTimePickerFormat.Custom,
+        CustomFormat = "MM/dd/yyyy",
+        Dock = DockStyle.Fill,
+        Font = WinTheme.BodyFont(10)
+    };
+    private readonly DateTimePicker _historicalThrough = new()
+    {
+        Format = DateTimePickerFormat.Custom,
+        CustomFormat = "MM/dd/yyyy",
+        Dock = DockStyle.Fill,
+        Font = WinTheme.BodyFont(10)
+    };
     private readonly Label _zBatchMode = new()
     {
         Text = "NEXT BATCH AUTOMATIC",
@@ -74,8 +88,8 @@ internal sealed class PortalSyncSetupForm : Form
         WinTheme.Apply(this);
         Text = $"{ReportDisplayName} Auto Sync - HISAB KITAB";
         StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(760, 600);
-        Size = new Size(980, 720);
+        MinimumSize = new Size(760, 650);
+        Size = new Size(980, 780);
         AutoScaleMode = AutoScaleMode.Dpi;
         Controls.Add(BuildContent());
 
@@ -83,6 +97,11 @@ internal sealed class PortalSyncSetupForm : Form
         _storePassword.UseSystemPasswordChar = true;
         _portalUrl.Text = "https://posweboffice.com/";
         _runTime.Value = DateTime.Today.AddHours(1).AddMinutes(15);
+        var yesterday = DateTime.Today.AddDays(-1);
+        _historicalFrom.MaxDate = yesterday;
+        _historicalThrough.MaxDate = yesterday;
+        _historicalFrom.Value = DateTime.Today.AddDays(-30);
+        _historicalThrough.Value = yesterday;
         _enabled.Text = $"Enable unattended daily {ReportDisplayName.ToLowerInvariant()} sync";
         _zBatchMode.Text = _reportKind == PortalSyncReportKind.ZReports
             ? "NEXT BATCH AUTOMATIC"
@@ -171,9 +190,9 @@ internal sealed class PortalSyncSetupForm : Form
             BackColor = WinTheme.Panel,
             Padding = new Padding(16, 12, 16, 12),
             ColumnCount = 4,
-            RowCount = 7,
+            RowCount = 8,
             AutoScroll = true,
-            AutoScrollMinSize = new Size(680, 480)
+            AutoScrollMinSize = new Size(680, 550)
         };
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24));
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
@@ -181,6 +200,7 @@ internal sealed class PortalSyncSetupForm : Form
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
         for (var row = 0; row < 6; row++)
             form.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        form.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         form.RowStyles.Add(new RowStyle(SizeType.Absolute, 144));
         card.Controls.Add(form);
 
@@ -197,6 +217,8 @@ internal sealed class PortalSyncSetupForm : Form
         form.SetColumnSpan(_enabled, 4);
         _enabled.Anchor = AnchorStyles.Left | AnchorStyles.Top;
         _enabled.Margin = new Padding(6, 12, 6, 0);
+        AddField(form, "GO BACK TO DATE (CALENDAR)", _historicalFrom, 0, 6, 2);
+        AddField(form, "IMPORT THROUGH (CALENDAR)", _historicalThrough, 2, 6, 2);
 
         form.Controls.Add(new Label
         {
@@ -211,13 +233,16 @@ internal sealed class PortalSyncSetupForm : Form
                       "rows in Shift Cash Drop."
                     : "This schedule fetches only Close-Out Z Reports. It resumes with the next AdventPOS batch after " +
                       "the highest numeric Shift/Batch already present in Shift Cash Drop.") +
-                " If the PC is off, HISAB KITAB catches up automatically the next time Windows can run the task.",
+                " If the PC is off, HISAB KITAB catches up automatically the next time Windows can run the task.\n\n" +
+                "DEVELOPER HISTORICAL BACKFILL\n" +
+                "Choose a past date range and click BACKFILL PAST REPORTS. This imports only the selected store and " +
+                "does not move its normal daily sync cursor backward.",
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Text,
             Font = WinTheme.BodyFont(10),
             Padding = new Padding(8, 12, 8, 4)
-        }, 0, 6);
-        form.SetColumnSpan(form.GetControlFromPosition(0, 6)!, 4);
+        }, 0, 7);
+        form.SetColumnSpan(form.GetControlFromPosition(0, 7)!, 4);
 
         var actions = new FlowLayoutPanel
         {
@@ -238,10 +263,12 @@ internal sealed class PortalSyncSetupForm : Form
                 : "SYNC Z REPORTS NOW",
             true,
             215);
+        var backfill = ActionButton("BACKFILL PAST REPORTS", false, 230);
         var close = ActionButton("CLOSE", false, 120);
         actions.Controls.Add(save);
         actions.Controls.Add(enroll);
         actions.Controls.Add(test);
+        actions.Controls.Add(backfill);
         actions.Controls.Add(close);
 
         save.Click += (_, _) => SaveSettings(showConfirmation: true);
@@ -259,47 +286,54 @@ internal sealed class PortalSyncSetupForm : Form
                 ShowError(exception);
             }
         };
-        test.Click += async (_, _) =>
+        test.Click += async (_, _) => await RunSelectedSyncAsync(actions);
+        backfill.Click += async (_, _) =>
         {
-            try
+            var from = DateOnly.FromDateTime(_historicalFrom.Value);
+            var through = DateOnly.FromDateTime(_historicalThrough.Value);
+            var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
+            if (through > yesterday)
             {
-                var selectedSettings = SaveSettings(showConfirmation: false);
-                _syncRunning = true;
-                ToggleActions(actions, false);
-                _status.Text =
-                    $"Waiting for any automatic run to finish, then requesting {ReportDisplayName}...";
-                var results = await PortalSyncService.RunDueAsync(
-                    _paths,
-                    true,
-                    true,
-                    onlyStoreConfigurationId: selectedSettings.Id,
-                    onlyReportKind: _reportKind,
-                    waitForExistingRun: true,
-                    cancellationToken: _syncCancellation.Token);
-                if (!CanUpdateWindow())
-                    return;
-                _status.Text = results.Count == 0
-                    ? "No enabled store configuration was found."
-                    : string.Join("  ", results.Select(result => result.Message));
-                if (results.Any(result => !result.Success))
-                    MessageBox.Show(this, _status.Text, $"{ReportDisplayName} Auto Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(
+                    this,
+                    "Historical backfill can run only through yesterday.",
+                    $"{ReportDisplayName} Historical Backfill",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
             }
-            catch (OperationCanceledException)
+            if (through < from)
             {
-                // Closing this setup window intentionally cancels its visible test run.
+                MessageBox.Show(
+                    this,
+                    "The historical through date must be on or after the start date.",
+                    $"{ReportDisplayName} Historical Backfill",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
             }
-            catch (Exception exception)
+            if (through.DayNumber - from.DayNumber > 365)
             {
-                ShowError(exception);
+                MessageBox.Show(
+                    this,
+                    "Historical backfill is limited to 366 days per run. Choose a shorter range and run another backfill if needed.",
+                    $"{ReportDisplayName} Historical Backfill",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
             }
-            finally
+            if (MessageBox.Show(
+                    this,
+                    $"Backfill {ReportDisplayName} for the selected store from " +
+                    $"{from:M/d/yyyy} through {through:M/d/yyyy}?\r\n\r\n" +
+                    "The process may take several minutes and will preserve the normal daily sync cursor.",
+                    $"{ReportDisplayName} Historical Backfill",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question) != DialogResult.Yes)
             {
-                _syncRunning = false;
-                if (CanUpdateWindow())
-                    ToggleActions(actions, true);
-                else
-                    _syncCancellation.Dispose();
+                return;
             }
+            await RunSelectedSyncAsync(actions, from, through);
         };
         close.Click += (_, _) => Close();
 
@@ -310,6 +344,88 @@ internal sealed class PortalSyncSetupForm : Form
         _status.Padding = new Padding(12, 0, 12, 0);
         root.Controls.Add(statusCard, 0, 3);
         return root;
+    }
+
+    private async Task RunSelectedSyncAsync(
+        Control actions,
+        DateOnly? historicalFrom = null,
+        DateOnly? historicalThrough = null)
+    {
+        try
+        {
+            var selectedSettings = SaveSettings(showConfirmation: false);
+            _syncRunning = true;
+            ToggleActions(actions, false);
+            _status.Text = historicalFrom.HasValue
+                ? $"Waiting for any automatic run to finish, then backfilling {ReportDisplayName} " +
+                  $"from {historicalFrom:M/d/yyyy} through {historicalThrough:M/d/yyyy}..."
+                : $"Waiting for any automatic run to finish, then requesting {ReportDisplayName}...";
+            var results = await PortalSyncService.RunDueAsync(
+                _paths,
+                true,
+                true,
+                onlyStoreConfigurationId: selectedSettings.Id,
+                onlyReportKind: _reportKind,
+                waitForExistingRun: true,
+                historicalStartDate: historicalFrom,
+                historicalEndDate: historicalThrough,
+                cancellationToken: _syncCancellation.Token);
+            if (!CanUpdateWindow())
+                return;
+
+            if (historicalFrom.HasValue)
+            {
+                var succeeded = results.Count(result => result.Success);
+                var failed = results.Count - succeeded;
+                _status.Text =
+                    $"{ReportDisplayName} historical backfill completed for " +
+                    $"{historicalFrom:M/d/yyyy} - {historicalThrough:M/d/yyyy}. " +
+                    $"Successful: {succeeded}; Failed: {failed}.";
+                MessageBox.Show(
+                    this,
+                    failed == 0
+                        ? _status.Text
+                        : _status.Text + "\r\n\r\n" +
+                          string.Join("\r\n", results
+                              .Where(result => !result.Success)
+                              .Select(result => result.Message)
+                              .Take(8)),
+                    $"{ReportDisplayName} Historical Backfill",
+                    MessageBoxButtons.OK,
+                    failed == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            }
+            else
+            {
+                _status.Text = results.Count == 0
+                    ? "No enabled store configuration was found."
+                    : string.Join("  ", results.Select(result => result.Message));
+                if (results.Any(result => !result.Success))
+                {
+                    MessageBox.Show(
+                        this,
+                        _status.Text,
+                        $"{ReportDisplayName} Auto Sync",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Closing this setup window intentionally cancels its visible run.
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception);
+        }
+        finally
+        {
+            _syncRunning = false;
+            if (CanUpdateWindow())
+                ToggleActions(actions, true);
+            else
+                _syncCancellation.Dispose();
+        }
     }
 
     private PortalStoreSyncSettings SaveSettings(bool showConfirmation)

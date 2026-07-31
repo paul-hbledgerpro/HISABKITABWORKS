@@ -70,11 +70,19 @@ internal sealed partial class MainForm
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = WinTheme.Bg };
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, Padding = new Padding(16), WrapContents = false };
-        AddPayrollAction(actions, "ADD SCHEDULE", () => { using var form = new ScheduleBuilderForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
-        AddPayrollAction(actions, "MANAGE SCHEDULE", () => { using var form = new ScheduleManagerForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
-        AddPayrollAction(actions, "SMS SETUP", () => { using var form = new ScheduleSmsSettingsForm(CreateDb); form.ShowDialog(this); }, false);
-        AddPayrollAction(actions, "TEXT DELIVERY LOG", () => { using var form = new ScheduleNotificationLogForm(CreateDb, _currentStoreId); form.ShowDialog(this); }, false);
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Panel,
+            Padding = new Padding(16),
+            WrapContents = false,
+            AutoScroll = true
+        };
+        AddPayrollAction(actions, "WEEKLY PLANNER", () => { using var form = new WeeklySchedulePlannerForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
+        AddPayrollAction(actions, "EMPLOYEE SCHEDULE", () => { using var form = new ScheduleBuilderForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
+        AddPayrollAction(actions, "MANAGE SCHEDULE", () => { using var form = new ScheduleManagerForm(CreateDb, _currentStoreId, _session.DisplayName, _developerSettingsUnlocked); form.ShowDialog(this); ShowModule("Scheduling"); }, false);
+        RegisterDeveloperOnly(AddPayrollAction(actions, "SMS SETUP", () => { using var form = new ScheduleSmsSettingsForm(CreateDb); form.ShowDialog(this); }, false));
+        RegisterDeveloperOnly(AddPayrollAction(actions, "TEXT DELIVERY LOG", () => { using var form = new ScheduleNotificationLogForm(CreateDb, _currentStoreId); form.ShowDialog(this); }, false));
         if (LicenseRuntime.HasService("Payroll"))
             AddPayrollAction(actions, "RUN PAYROLL", () => { using var form = new PayrollRunForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); }, false);
         actions.Controls.Add(new Label { Text = $"Showing {from:MMM d} - {to:MMM d, yyyy}", AutoSize = true, ForeColor = WinTheme.Muted, Padding = new Padding(24, 11, 0, 0), Font = WinTheme.BodyFont(10) });
@@ -97,7 +105,7 @@ internal sealed partial class MainForm
         return ModuleShell("\uE787", "Scheduling", "Build employee schedules now; approved hours flow into Payroll for final admin review.", body);
     }
 
-    private static void AddPayrollAction(FlowLayoutPanel host, string text, Action action, bool primary)
+    private static Button AddPayrollAction(FlowLayoutPanel host, string text, Action action, bool primary)
     {
         var button = WinTheme.Button(text, primary);
         button.Width = 190;
@@ -105,5 +113,6 @@ internal sealed partial class MainForm
         button.Margin = new Padding(0, 0, 10, 0);
         button.Click += (_, _) => action();
         host.Controls.Add(button);
+        return button;
     }
 }

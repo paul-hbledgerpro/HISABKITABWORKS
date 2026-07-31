@@ -10,6 +10,8 @@ public static class SchedulePdf
     private const string Ink = "#111111";
     private const string Grid = "#444444";
     private const string Header = "#F2F2F2";
+    private const string OffBackground = "#FFD6D6";
+    private const string OffText = "#B71C1C";
 
     public static void Generate(
         string storeName,
@@ -133,8 +135,11 @@ public static class SchedulePdf
 
     private static void ShiftCell(TableDescriptor table, string value, bool off = false)
     {
-        var text = table.Cell().Border(1).BorderColor(Grid).MinHeight(42).PaddingHorizontal(2)
-            .AlignCenter().AlignMiddle().Text(value).SemiBold().FontSize(8);
-        if (off) text.FontColor(Colors.Grey.Darken1);
+        var cell = table.Cell().Border(1).BorderColor(Grid).MinHeight(42).PaddingHorizontal(2);
+        if (off)
+            cell = cell.Background(OffBackground);
+        var text = cell.AlignCenter().AlignMiddle().Text(value).SemiBold().FontSize(8);
+        if (off)
+            text.FontColor(OffText).Bold();
     }
 }

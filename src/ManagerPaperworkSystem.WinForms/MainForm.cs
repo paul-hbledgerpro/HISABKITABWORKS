@@ -1883,6 +1883,8 @@ internal sealed partial class MainForm : Form
         var grid = WinTheme.Grid();
         var suppressShiftSelectionLoad = false;
         int? loadedShiftEntryId = null;
+        Button? saveDropButton = null;
+        Button? addEntryButton = null;
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Shift cash drop records for selected store"), 0, 3);
         var grossBox = (TextBox)((TableLayoutPanel)paymentSummary.GetControlFromPosition(0, 0)!).GetControlFromPosition(1, 0)!;
@@ -1905,6 +1907,20 @@ internal sealed partial class MainForm : Form
             receivedBox.Text = receivedValue.ToString("C2");
             varianceBox.Text = varianceValue.ToString("C2");
             varianceBox.ForeColor = varianceValue > 0 ? WinTheme.Green : varianceValue < 0 ? WinTheme.Red : WinTheme.Text;
+        }
+        void updateEntryActionState()
+        {
+            var updatingExistingRow = loadedShiftEntryId.HasValue;
+            if (saveDropButton is not null)
+            {
+                saveDropButton.Enabled = updatingExistingRow;
+                saveDropButton.Text = updatingExistingRow
+                    ? "Save / Update Cash Drop"
+                    : "Select Auto-Synced Row";
+            }
+
+            if (addEntryButton is not null)
+                addEntryButton.Enabled = !updatingExistingRow;
         }
         foreach (var box in new[] { cash, card, tax, net, drop, payout })
             box.TextChanged += (_, _) => recalc();
@@ -1958,6 +1974,7 @@ internal sealed partial class MainForm : Form
             tax.Clear();
             posReport.Text = "Upload using buttons below";
             posReport.ForeColor = WinTheme.Text;
+            updateEntryActionState();
             drop.Focus();
             drop.SelectAll();
         }
@@ -1986,6 +2003,7 @@ internal sealed partial class MainForm : Form
             {
                 suppressShiftSelectionLoad = false;
             }
+            updateEntryActionState();
             if (managerEntryMode)
                 drop.Focus();
             else
@@ -2203,6 +2221,7 @@ internal sealed partial class MainForm : Form
             if (id is null)
             {
                 loadedShiftEntryId = null;
+                updateEntryActionState();
                 return;
             }
             using var db = CreateDb();
@@ -2210,6 +2229,7 @@ internal sealed partial class MainForm : Form
             if (entry is null)
             {
                 loadedShiftEntryId = null;
+                updateEntryActionState();
                 return;
             }
             loadedShiftEntryId = entry.Id;
@@ -2229,6 +2249,7 @@ internal sealed partial class MainForm : Form
             posReport.ForeColor = string.IsNullOrWhiteSpace(entry.PosReportKey)
                 ? WinTheme.Copper
                 : WinTheme.Green;
+            updateEntryActionState();
         }
         grid.SelectionChanged += (_, _) => loadSelectedIntoForm();
         grid.CellDoubleClick += (_, eventArgs) =>
@@ -2247,11 +2268,22 @@ internal sealed partial class MainForm : Form
         var dashboard = MockActionButton("", "Dashboard", width: 160);
         dashboard.Click += (_, _) => ShowModule("Dashboard");
         actions.Controls.Add(dashboard);
-        var saveDrop = MockActionButton("", "Save / Update Cash Drop", true, 245);
+        var saveDrop = MockActionButton("", "Select Auto-Synced Row", true, 245);
+        saveDropButton = saveDrop;
+        saveDrop.Enabled = false;
         saveDrop.Click += async (_, _) => await saveSelectedCashDropAsync();
         actions.Controls.Add(saveDrop);
         var upload = MockActionButton("", "Import Z Report", width: 190);
-        upload.Click += (_, _) => UploadPosReport(date, employee, shift, cash, card, net, tax, drop, posReport);
+        upload.Click += (_, _) =>
+        {
+            UploadPosReport(date, employee, shift, cash, card, net, tax, drop, posReport);
+            loadedShiftEntryId = null;
+            suppressShiftSelectionLoad = true;
+            grid.CurrentCell = null;
+            grid.ClearSelection();
+            suppressShiftSelectionLoad = false;
+            updateEntryActionState();
+        };
         actions.Controls.Add(upload);
         var posAutoSync = MockActionButton("", "Z Report Auto Sync", width: 205);
         posAutoSync.Click += (_, _) =>
@@ -2274,6 +2306,7 @@ internal sealed partial class MainForm : Form
         correction.Click += async (_, _) => await updateSelectedAsync();
         actions.Controls.Add(correction);
         var add = MockActionButton("", "Add New Entry", true, 180);
+        addEntryButton = add;
         add.Click += async (_, _) =>
         {
             if (loadedShiftEntryId.HasValue || SelectedId(grid).HasValue)
@@ -2292,7 +2325,7 @@ internal sealed partial class MainForm : Form
             }
             finally
             {
-                add.Enabled = true;
+                updateEntryActionState();
             }
         };
         actions.Controls.Add(add);
@@ -2322,6 +2355,7 @@ internal sealed partial class MainForm : Form
         recalc();
         refresh();
         clearAllShiftFields();
+        updateEntryActionState();
         return ModuleShell("\uE8C7", "Shift Cash Drop", "Record and track shift cash drops and register payouts.", root);
     }
 
