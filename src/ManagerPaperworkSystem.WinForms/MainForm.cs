@@ -57,6 +57,8 @@ internal sealed partial class MainForm : Form
     private readonly List<Control> _developerOnlyControls = [];
     private Func<Task>? _pendingModuleActivation;
 
+    public bool LogoutRequested { get; private set; }
+
     public MainForm(IServiceProvider services, IDbContextFactory<AppDbContext> dbFactory, ISettingsService settingsService, IReportService reportService, IAppPaths paths, SessionState session, ActiveConnectionInfo connectionInfo, InvoiceImportService invoiceImportService, PosReportImportService posImporter, CheckPrintService checkPrintService)
     {
         _services = services;
@@ -695,7 +697,7 @@ internal sealed partial class MainForm : Form
         var file = new ToolStripMenuItem("File") { ForeColor = Color.White };
         file.DropDownItems.Add(MenuItem("Reports (PDF)...", (_, _) => ShowModule("Reports")));
         file.DropDownItems.Add(new ToolStripSeparator());
-        file.DropDownItems.Add(MenuItem("Logout", (_, _) => Close()));
+        file.DropDownItems.Add(MenuItem("Logout", (_, _) => RequestLogout()));
         file.DropDownItems.Add(MenuItem("Exit", (_, _) => Close()));
 
         var settings = new ToolStripMenuItem("Settings") { ForeColor = Color.White };
@@ -767,9 +769,18 @@ internal sealed partial class MainForm : Form
 
     private Control BuildSidebar()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.BlueDark, Padding = new Padding(10) };
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.BlueDark,
+            Padding = new Padding(10),
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         _nav.BackColor = panel.BackColor;
-        panel.Controls.Add(_nav);
+        panel.Controls.Add(_nav, 0, 0);
 
         AddSection("MAIN");
         AddNav("Dashboard", "Dashboard", false);
@@ -777,6 +788,14 @@ internal sealed partial class MainForm : Form
         AddNav("Shift Cash Drop", "Shift Cash Drop", false);
         AddNav("Cash On Hand", "Cash On Hand", false);
         AddNav("Check Payout", "Check Payout", false);
+        var hasPayroll = LicenseRuntime.HasService("Payroll");
+        var hasScheduling = LicenseRuntime.HasService("Scheduling");
+        if (hasPayroll || hasScheduling)
+            AddSection("WORKFORCE");
+        if (hasPayroll)
+            AddNav("Payroll", "Payroll", true);
+        if (hasScheduling)
+            AddNav("Scheduling", "Scheduling", false);
         AddSection("OPERATIONS");
         AddNav("Operations Hub", "Operations Hub", false);
         AddNav("Vendors & Purposes", "Vendors & Purposes", false);
@@ -784,15 +803,17 @@ internal sealed partial class MainForm : Form
         AddNav("Bank Statement", "Bank Statement", false);
         AddNav("Product Costs", "Product Costs", false);
         AddNav("Price Alerts", "Price Alerts", false);
-        if (LicenseRuntime.HasService("Payroll"))
-            AddNav("Payroll", "Payroll", true);
-        if (LicenseRuntime.HasService("Scheduling"))
-            AddNav("Scheduling", "Scheduling", true);
         AddNav("Profit & Loss", "Profit & Loss", false);
         AddNav("Reports", "Reports", false);
         AddSection("ADMIN");
         AddNav("Stores", "Stores", true);
         AddNav("User Accounts", "User Accounts", true);
+
+        var logout = CreateSidebarButton("Log Out");
+        logout.Dock = DockStyle.Fill;
+        logout.Margin = new Padding(0, 10, 0, 0);
+        logout.Click += (_, _) => RequestLogout();
+        panel.Controls.Add(logout, 0, 1);
 
         return panel;
     }
@@ -812,17 +833,7 @@ internal sealed partial class MainForm : Form
 
     private void AddNav(string text, string module, bool adminOnly)
     {
-        var button = WinTheme.Button(text);
-        button.Width = 210;
-        button.Height = 42;
-        button.Text = $"  {text}";
-        button.TextAlign = ContentAlignment.MiddleLeft;
-        button.Font = WinTheme.BoldFont(9);
-        button.BackColor = WinTheme.BlueDark;
-        button.ForeColor = Color.White;
-        button.FlatAppearance.BorderColor = Color.FromArgb(53, 91, 130);
-        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(31, 78, 125);
-        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(19, 49, 80);
+        var button = CreateSidebarButton(text);
         button.Enabled = !adminOnly || _session.IsAdmin;
         button.Click += (_, _) =>
         {
@@ -837,6 +848,29 @@ internal sealed partial class MainForm : Form
         };
         _navButtons[module] = button;
         _nav.Controls.Add(button);
+    }
+
+    private static Button CreateSidebarButton(string text)
+    {
+        var button = WinTheme.Button(text);
+        button.Width = 210;
+        button.Height = 42;
+        button.Text = $"  {text}";
+        button.TextAlign = ContentAlignment.MiddleLeft;
+        button.Font = WinTheme.BoldFont(9);
+        button.BackColor = WinTheme.BlueDark;
+        button.ForeColor = Color.White;
+        button.FlatAppearance.BorderColor = Color.FromArgb(53, 91, 130);
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(31, 78, 125);
+        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(19, 49, 80);
+        return button;
+    }
+
+    private void RequestLogout()
+    {
+        _session.Clear();
+        LogoutRequested = true;
+        Close();
     }
 
     private static string NavIcon(string module)

@@ -104,11 +104,17 @@ internal static class Program
                 if (!StartupFlow.EnsureSetupReady(services))
                     return;
 
-                using var login = services.GetRequiredService<LoginForm>();
-                if (login.ShowDialog() != DialogResult.OK)
-                    return;
+                while (true)
+                {
+                    using var login = services.GetRequiredService<LoginForm>();
+                    if (login.ShowDialog() != DialogResult.OK)
+                        return;
 
-                Application.Run(services.GetRequiredService<MainForm>());
+                    using var main = services.GetRequiredService<MainForm>();
+                    Application.Run(main);
+                    if (!main.LogoutRequested)
+                        return;
+                }
             }
         }
         catch (Exception ex)
