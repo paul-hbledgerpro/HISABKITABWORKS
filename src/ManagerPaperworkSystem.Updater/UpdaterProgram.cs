@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -35,10 +36,18 @@ internal static class Program
             string? pidStr = GetArg(args, "--pid");
             string? downloadUrl = GetArg(args, "--download-url");
             string? targetVersion = GetArg(args, "--version");
+            string? centriqResultPath = GetArg(args, "--centriq-result");
+            string? centriqOperation = GetArg(args, "--centriq-operation");
 
             if (!string.IsNullOrWhiteSpace(zipPath) && !string.IsNullOrWhiteSpace(appExe))
             {
-                RunSilentUpdate(zipPath, appExe, pidStr);
+                RunSilentUpdate(
+                    zipPath,
+                    appExe,
+                    pidStr,
+                    targetVersion,
+                    centriqResultPath,
+                    centriqOperation);
                 return;
             }
 
@@ -66,7 +75,13 @@ internal static class Program
     // ═══════════════════════════════════════════════════════════════
     // SILENT UPDATE MODE (called from main app)
     // ═══════════════════════════════════════════════════════════════
-    private static void RunSilentUpdate(string zipPath, string appExe, string? pidStr)
+    private static void RunSilentUpdate(
+        string zipPath,
+        string appExe,
+        string? pidStr,
+        string? targetVersion,
+        string? centriqResultPath,
+        string? centriqOperation)
     {
         try
         {
@@ -111,6 +126,14 @@ internal static class Program
 
             // Apply update
             ApplyZipUpdate(zipPath, installDir, Log);
+            if (!string.IsNullOrWhiteSpace(targetVersion))
+                File.WriteAllText(Path.Combine(installDir, ".centriq-version"), targetVersion.Trim());
+            WriteCentriqResult(
+                centriqResultPath,
+                centriqOperation,
+                succeeded: true,
+                targetVersion,
+                "The customer chose Update now and HISAB KITAB installed the assigned release.");
 
             // Relaunch
             Log("Relaunching application...");
@@ -120,8 +143,46 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            WriteCentriqResult(
+                centriqResultPath,
+                centriqOperation,
+                succeeded: false,
+                targetVersion,
+                $"The HISAB KITAB updater failed safely: {ex.Message}");
             MessageBox.Show($"Update failed: {ex.Message}", "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             try { if (File.Exists(appExe)) Process.Start(new ProcessStartInfo { FileName = appExe, UseShellExecute = true }); } catch { }
+        }
+    }
+
+    private static void WriteCentriqResult(
+        string? resultPath,
+        string? operationValue,
+        bool succeeded,
+        string? installedVersion,
+        string detail)
+    {
+        if (string.IsNullOrWhiteSpace(resultPath)
+            || !Guid.TryParse(operationValue, out var operationId))
+            return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+            var payload = JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                operationId,
+                succeeded,
+                installedVersion,
+                detail,
+                completedAtUtc = DateTimeOffset.UtcNow
+            }, new JsonSerializerOptions { WriteIndented = true });
+            var temporary = resultPath + ".new";
+            File.WriteAllText(temporary, payload);
+            File.Move(temporary, resultPath, true);
+        }
+        catch
+        {
+            // The update result is advisory. The application remains usable even if it cannot be written.
         }
     }
 

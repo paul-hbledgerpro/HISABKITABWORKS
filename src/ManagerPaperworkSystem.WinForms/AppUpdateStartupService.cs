@@ -15,8 +15,11 @@ internal enum AppUpdateChoice
 
 internal sealed record AvailableAppUpdate(
     string Version,
-    string DownloadUrl,
-    string ReleaseNotes);
+    string? DownloadUrl,
+    string ReleaseNotes,
+    string? StagedArtifactPath = null,
+    string? CentriqResultPath = null,
+    Guid? CentriqOperationId = null);
 
 internal static class AppUpdateStartupService
 {
@@ -25,6 +28,7 @@ internal static class AppUpdateStartupService
     private const string PreferredAssetPrefix = "HISAB_KITAB_Update_win-x64";
     private const string UpdaterPayloadDirectoryName = "UpdaterPayload";
     private const int MaximumDeferrals = 3;
+    private const string CentriqProductCode = "HISAB-KITAB";
     private static readonly byte[] StateEntropy =
         Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-APP-UPDATE-DEFERRALS-V1");
     private static readonly SemaphoreSlim Gate = new(1, 1);
@@ -145,6 +149,10 @@ internal static class AppUpdateStartupService
 
     private static async Task<AvailableAppUpdate?> FindUpdateAsync()
     {
+        var staged = FindCentriqStagedUpdate();
+        if (staged is not null)
+            return staged;
+
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
         client.DefaultRequestHeaders.UserAgent.Add(
             new ProductInfoHeaderValue("HisabKitabWorks", GetCurrentVersion()));
@@ -186,6 +194,56 @@ internal static class AppUpdateStartupService
         return new AvailableAppUpdate(latestVersion, downloadUrl, notes);
     }
 
+    private static AvailableAppUpdate? FindCentriqStagedUpdate()
+    {
+        var pendingPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Centriq",
+            "Updates",
+            CentriqProductCode,
+            "pending-update.json");
+        if (!File.Exists(pendingPath)) return null;
+        var productUpdateRoot = Path.GetFullPath(Path.GetDirectoryName(pendingPath)!);
+
+        using var document = JsonDocument.Parse(File.ReadAllText(pendingPath));
+        var root = document.RootElement;
+        if (root.GetProperty("schemaVersion").GetInt32() != 1) return null;
+        var productCode = root.GetProperty("productCode").GetString();
+        var version = NormalizeVersion(root.GetProperty("targetVersion").GetString());
+        var installRoot = Path.GetFullPath(root.GetProperty("installRoot").GetString() ?? "");
+        var expectedRoot = Path.GetFullPath(AppContext.BaseDirectory);
+        var artifactPath = Path.GetFullPath(root.GetProperty("artifactPath").GetString() ?? "");
+        var resultPath = Path.GetFullPath(root.GetProperty("resultPath").GetString() ?? "");
+        var operationId = root.GetProperty("operationId").GetGuid();
+        if (!string.Equals(productCode, CentriqProductCode, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(
+                installRoot.TrimEnd(Path.DirectorySeparatorChar),
+                expectedRoot.TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase)
+            || string.Equals(version, NormalizeVersion(GetCurrentVersion()), StringComparison.OrdinalIgnoreCase)
+            || operationId == Guid.Empty
+            || !IsPathBelow(productUpdateRoot, artifactPath)
+            || !IsPathBelow(productUpdateRoot, resultPath)
+            || !File.Exists(artifactPath))
+            return null;
+
+        return new AvailableAppUpdate(
+            version,
+            null,
+            "CENTRIQ TECH assigned this signed update specifically to this computer. " +
+            "Choose Update now to install it, or Update later to be reminded the next time HISAB KITAB opens.",
+            artifactPath,
+            resultPath,
+            operationId);
+    }
+
+    private static bool IsPathBelow(string root, string path)
+    {
+        var prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static Task<bool> DownloadAndLaunchUpdaterAsync(
         Form? owner,
         AvailableAppUpdate update,
@@ -220,8 +278,20 @@ internal static class AppUpdateStartupService
             UseShellExecute = true,
             Verb = "runas"
         };
-        startInfo.ArgumentList.Add("--download-url");
-        startInfo.ArgumentList.Add(update.DownloadUrl);
+        if (!string.IsNullOrWhiteSpace(update.StagedArtifactPath))
+        {
+            startInfo.ArgumentList.Add("--zip");
+            startInfo.ArgumentList.Add(update.StagedArtifactPath);
+            startInfo.ArgumentList.Add("--centriq-result");
+            startInfo.ArgumentList.Add(update.CentriqResultPath!);
+            startInfo.ArgumentList.Add("--centriq-operation");
+            startInfo.ArgumentList.Add(update.CentriqOperationId!.Value.ToString("D"));
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("--download-url");
+            startInfo.ArgumentList.Add(update.DownloadUrl!);
+        }
         startInfo.ArgumentList.Add("--version");
         startInfo.ArgumentList.Add(update.Version);
         startInfo.ArgumentList.Add("--app");
