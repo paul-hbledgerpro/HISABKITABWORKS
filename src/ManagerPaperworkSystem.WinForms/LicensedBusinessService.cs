@@ -80,7 +80,7 @@ internal static class LicensedBusinessService
         try
         {
             var protectedBytes = ProtectedData.Protect(clear, Entropy, DataProtectionScope.LocalMachine);
-            File.WriteAllBytes(ProtectedBusinessesPath, protectedBytes);
+            WriteProtectedBusinesses(protectedBytes);
         }
         finally
         {
@@ -219,11 +219,34 @@ internal static class LicensedBusinessService
         try
         {
             var protectedBytes = ProtectedData.Protect(clear, Entropy, DataProtectionScope.LocalMachine);
-            File.WriteAllBytes(ProtectedBusinessesPath, protectedBytes);
+            WriteProtectedBusinesses(protectedBytes);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(clear);
+        }
+    }
+
+    private static void WriteProtectedBusinesses(byte[] protectedBytes)
+    {
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var temporaryPath =
+            $"{ProtectedBusinessesPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(temporaryPath, protectedBytes);
+            File.Move(temporaryPath, ProtectedBusinessesPath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // A later license refresh can safely replace a leftover file.
+            }
         }
     }
 }

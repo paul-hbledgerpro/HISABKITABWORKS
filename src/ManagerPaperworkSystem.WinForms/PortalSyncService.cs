@@ -199,6 +199,7 @@ internal static class PortalSyncService
         Guid? onlyStoreConfigurationId = null,
         PortalSyncReportKind? onlyReportKind = null,
         bool waitForExistingRun = false,
+        TimeSpan? existingRunWaitTimeout = null,
         DateOnly? historicalStartDate = null,
         DateOnly? historicalEndDate = null,
         CancellationToken cancellationToken = default)
@@ -216,8 +217,9 @@ internal static class PortalSyncService
                 throw new InvalidOperationException("Historical backfill must target one licensed store and one report type.");
         }
 
+        var waitTimeout = existingRunWaitTimeout ?? TimeSpan.FromMinutes(3);
         var gateAcquired = waitForExistingRun
-            ? await RunGate.WaitAsync(TimeSpan.FromMinutes(3), cancellationToken)
+            ? await RunGate.WaitAsync(waitTimeout, cancellationToken)
             : await RunGate.WaitAsync(0, cancellationToken);
         if (!gateAcquired)
             return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
@@ -228,7 +230,7 @@ internal static class PortalSyncService
             var lockPath = Path.Combine(AppBootstrap.AppDataPath, "pos-portal-sync.lock");
             Directory.CreateDirectory(AppBootstrap.AppDataPath);
             var lockDeadline = waitForExistingRun
-                ? DateTime.UtcNow.AddMinutes(3)
+                ? DateTime.UtcNow.Add(waitTimeout)
                 : DateTime.UtcNow;
             while (processLock is null)
             {
@@ -577,7 +579,8 @@ internal static class PortalSyncService
         CancellationToken cancellationToken)
     {
         Exception? lastError = null;
-        for (var attempt = 1; attempt <= 3; attempt++)
+        var maximumAttempts = 3;
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
         {
             try
             {
@@ -591,13 +594,25 @@ internal static class PortalSyncService
                     historicalEndDate,
                     cancellationToken);
             }
-            catch (Exception exception) when (attempt < 3)
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
             {
                 lastError = exception;
-                await Task.Delay(TimeSpan.FromSeconds(attempt * 10), cancellationToken);
+                if (IsTemporaryPortalConnectionFailure(exception))
+                    maximumAttempts = 5;
+                if (attempt >= maximumAttempts)
+                    break;
+                await Task.Delay(
+                    IsTemporaryPortalConnectionFailure(exception)
+                        ? TimeSpan.FromSeconds(attempt * 30)
+                        : TimeSpan.FromSeconds(attempt * 10),
+                    cancellationToken);
             }
         }
-        throw lastError ?? new InvalidOperationException("POS portal sync failed after three attempts.");
+        throw lastError ?? new InvalidOperationException("POS portal sync failed after repeated attempts.");
     }
 
     private static async Task<PortalSyncRunResult> RunStoreAsync(
@@ -1159,11 +1174,7 @@ internal static class PortalSyncService
                 "document.querySelector('#isRememberMe').checked=true; ValidateUser();");
         }
 
-        await WaitUntilAsync(page, async () =>
-                await IsVisibleAsync(page, "#StoreSelectionModal") ||
-                await IsPortalHomeReadyAsync(page),
-            TimeSpan.FromSeconds(45),
-            "The AdventPOS login did not complete. Complete any verification request in POS Auto Sync Setup.");
+        await WaitForOwnerLoginAsync(page, TimeSpan.FromSeconds(45));
 
         if (await IsVisibleAsync(page, "#StoreSelectionModal"))
         {
@@ -1206,6 +1217,81 @@ internal static class PortalSyncService
             TimeSpan.FromSeconds(60),
             "AdventPOS did not reach the store home page. A verification code, CAPTCHA, or password update may require attention.");
     }
+
+    private static async Task WaitForOwnerLoginAsync(IPage page, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await IsVisibleAsync(page, "#StoreSelectionModal") ||
+                await IsPortalHomeReadyAsync(page))
+            {
+                return;
+            }
+
+            var portalMessage = await GetVisiblePortalDialogTextAsync(page);
+            if (IsTemporaryPortalConnectionFailure(portalMessage))
+            {
+                await DismissVisiblePortalDialogAsync(page);
+                throw new InvalidOperationException(
+                    "AdventPOS temporarily reported that its server connection is not open. " +
+                    "HISAB KITAB will retry the login automatically.");
+            }
+
+            await Task.Delay(500);
+        }
+
+        throw new InvalidOperationException(
+            "The AdventPOS login did not complete. Complete any verification request in POS Auto Sync Setup.");
+    }
+
+    private static Task<string> GetVisiblePortalDialogTextAsync(IPage page) =>
+        page.EvaluateExpressionAsync<string>(
+            @"(() => {
+                const visible = element => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const bounds = element.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                           style.visibility !== 'hidden' &&
+                           style.opacity !== '0' &&
+                           bounds.width > 0 &&
+                           bounds.height > 0;
+                };
+                const dialogs = Array.from(document.querySelectorAll(
+                    '.modal.show, .swal2-container, .bootbox, [role=""dialog""]'));
+                const dialog = dialogs.find(visible);
+                return dialog ? (dialog.innerText || '').replace(/\s+/g, ' ').trim() : '';
+            })()");
+
+    private static Task DismissVisiblePortalDialogAsync(IPage page) =>
+        page.EvaluateExpressionAsync(
+            @"(() => {
+                const visible = element => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const bounds = element.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                           style.visibility !== 'hidden' &&
+                           bounds.width > 0 &&
+                           bounds.height > 0;
+                };
+                const buttons = Array.from(document.querySelectorAll(
+                    '.modal.show button, .swal2-container button, .bootbox button, [role=""dialog""] button'));
+                const button = buttons.find(element => visible(element) &&
+                    /^(ok|close|dismiss)$/i.test((element.textContent || '').trim()));
+                if (button) button.click();
+            })()");
+
+    private static bool IsTemporaryPortalConnectionFailure(Exception exception) =>
+        IsTemporaryPortalConnectionFailure(exception.Message) ||
+        (exception.InnerException is not null &&
+         IsTemporaryPortalConnectionFailure(exception.InnerException));
+
+    private static bool IsTemporaryPortalConnectionFailure(string? message) =>
+        !string.IsNullOrWhiteSpace(message) &&
+        (message.Contains("connection is not open", StringComparison.OrdinalIgnoreCase) ||
+         message.Contains("connection was not open", StringComparison.OrdinalIgnoreCase));
 
     private static async Task SelectPortalStoreAsync(IPage page, string configuredStoreName)
     {

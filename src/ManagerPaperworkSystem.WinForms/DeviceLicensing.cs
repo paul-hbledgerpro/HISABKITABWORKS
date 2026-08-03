@@ -103,6 +103,7 @@ internal static class DeviceLicenseService
     private const string InstalledLicenseFileName = "device-license.hblicense";
     private const string ClockStateFileName = "device-license-state.dat";
     private const string ProtectedConnectionFileName = "connection_settings.protected";
+    private const string LicenseStateMutexName = @"Local\HISAB_KITAB_DeviceLicenseState_V2";
     private static readonly byte[] ProtectionEntropy = Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-DEVICE-LICENSE-V2");
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 
@@ -218,8 +219,27 @@ internal static class DeviceLicenseService
         if (!File.Exists(InstalledLicensePath))
             return new(DeviceLicenseStatus.Missing, "This PC does not have a version-2 device license.");
 
+        using var stateMutex = new Mutex(false, LicenseStateMutexName);
+        var mutexHeld = false;
         try
         {
+            try
+            {
+                mutexHeld = stateMutex.WaitOne(TimeSpan.FromSeconds(30));
+            }
+            catch (AbandonedMutexException)
+            {
+                // The abandoned owner is gone, so this process now owns the mutex.
+                mutexHeld = true;
+            }
+
+            if (!mutexHeld)
+            {
+                return new(
+                    DeviceLicenseStatus.Invalid,
+                    "Another HISAB KITAB process is validating this PC license. Please try again.");
+            }
+
             var validation = ValidateLicenseFile(InstalledLicensePath, allowExpired: true, updateClockState);
             LicenseRuntime.CurrentLicense = validation.Payload;
             LicenseRuntime.IsReadOnly = validation.Status == DeviceLicenseStatus.Expired;
@@ -232,6 +252,11 @@ internal static class DeviceLicenseService
             LicenseRuntime.CurrentLicense = null;
             LicenseRuntime.IsReadOnly = false;
             return new(DeviceLicenseStatus.Invalid, ex.Message);
+        }
+        finally
+        {
+            if (mutexHeld)
+                stateMutex.ReleaseMutex();
         }
     }
 
@@ -696,7 +721,25 @@ internal static class DeviceLicenseService
         };
         var clear = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
         var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        File.WriteAllBytes(Path.Combine(AppBootstrap.AppDataPath, ClockStateFileName), protectedBytes);
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var statePath = Path.Combine(AppBootstrap.AppDataPath, ClockStateFileName);
+        var temporaryPath = $"{statePath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(temporaryPath, protectedBytes);
+            File.Move(temporaryPath, statePath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // A later validation can safely replace a leftover temporary file.
+            }
+        }
     }
 }
 

@@ -144,13 +144,14 @@ internal static class Program
         try
         {
             // Scheduled execution must never open an activation or error dialog.
-            var licenseStatus = DeviceLicenseService.ValidateInstalledLicense().Status;
-            if (licenseStatus != DeviceLicenseStatus.Valid)
+            var licenseValidation = DeviceLicenseService.ValidateInstalledLicense();
+            if (licenseValidation.Status != DeviceLicenseStatus.Valid)
             {
                 PortalSyncService.WriteDiagnostic(
                     "",
                     false,
-                    $"Scheduled POS sync stopped because the device license status is {licenseStatus}.");
+                    $"Scheduled POS sync stopped because the device license status is " +
+                    $"{licenseValidation.Status}: {licenseValidation.Message}");
                 Environment.ExitCode = 1;
                 return;
             }
@@ -163,7 +164,9 @@ internal static class Program
                     force: false,
                     visibleChrome: false,
                     onlyStoreConfigurationId: storeConfigurationId,
-                    onlyReportKind: reportKind)
+                    onlyReportKind: reportKind,
+                    waitForExistingRun: true,
+                    existingRunWaitTimeout: TimeSpan.FromHours(2))
                 .GetAwaiter()
                 .GetResult();
             if (results.Any(result => !result.Success))
