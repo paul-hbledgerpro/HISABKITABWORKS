@@ -191,19 +191,13 @@ internal static class AppUpdateStartupService
         AvailableAppUpdate update,
         bool required)
     {
-        var updaterSourceDirectory = Path.Combine(
-            AppContext.BaseDirectory,
-            UpdaterPayloadDirectoryName);
-        if (!File.Exists(Path.Combine(updaterSourceDirectory, "Upgrade.exe")))
-            updaterSourceDirectory = AppContext.BaseDirectory;
-
-        var installedUpdaterPath = Path.Combine(updaterSourceDirectory, "Upgrade.exe");
-        if (!File.Exists(installedUpdaterPath))
+        var updaterSourceDirectory = FindUpdaterSourceDirectory();
+        if (updaterSourceDirectory is null)
         {
             MessageBox.Show(
                 owner,
                 "Upgrade.exe is missing from the HISAB KITAB installation. " +
-                "Please reinstall the latest client setup package.",
+                "Please run the latest HISAB KITAB WORKS Client Setup once to repair automatic updates.",
                 "Software Update",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -250,6 +244,39 @@ internal static class AppUpdateStartupService
         }
 
         return Task.FromResult(true);
+    }
+
+    private static string? FindUpdaterSourceDirectory()
+    {
+        var executableDirectory = Path.GetDirectoryName(Application.ExecutablePath);
+        var candidates = new List<string?>
+        {
+            Path.Combine(AppContext.BaseDirectory, UpdaterPayloadDirectoryName),
+            AppContext.BaseDirectory,
+            string.IsNullOrWhiteSpace(executableDirectory)
+                ? null
+                : Path.Combine(executableDirectory, UpdaterPayloadDirectoryName),
+            executableDirectory
+        };
+
+        foreach (var programFiles in new[]
+                 {
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+                 })
+        {
+            if (string.IsNullOrWhiteSpace(programFiles))
+                continue;
+            var installedDirectory = Path.Combine(programFiles, "HISAB KITAB WORKS");
+            candidates.Add(Path.Combine(installedDirectory, UpdaterPayloadDirectoryName));
+            candidates.Add(installedDirectory);
+        }
+
+        return candidates
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.GetFullPath(path!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(path => File.Exists(Path.Combine(path, "Upgrade.exe")));
     }
 
     private static string PrepareUpdaterWorkingCopy(string sourceDirectory)

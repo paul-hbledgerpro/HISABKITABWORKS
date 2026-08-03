@@ -1,6 +1,6 @@
 #define MyAppName "HISAB KITAB WORKS"
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.151"
+#define MyAppVersion "1.0.152"
 #endif
 #define MyAppPublisher "Hisab Kitab Works"
 #define MyAppExeName "HISAB KITAB.exe"
@@ -47,7 +47,7 @@ Source: "{#MySourceDir}\*"; DestDir: "{app}"; Excludes: "\cs\*,\de\*,\es\*,\fr\*
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Check for Updates"; Filename: "{app}\UpdaterPayload\Upgrade.exe"
+Name: "{group}\Check for Updates"; Filename: "{app}\Upgrade.exe"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
