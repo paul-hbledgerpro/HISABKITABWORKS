@@ -309,17 +309,21 @@ internal static class PortalSyncService
                                 settings,
                                 yesterday,
                                 cancellationToken)
-                            : [yesterday];
+                            : !force && settings.LastZReportDate >= yesterday
+                                ? []
+                                : [yesterday];
                     }
                     if (!force &&
-                        reportKind == PortalSyncReportKind.CashSalesSummary &&
                         pendingDates.Count == 0)
                     {
+                        var reportName = reportKind == PortalSyncReportKind.CashSalesSummary
+                            ? "Cash & Sales Summary"
+                            : "Z Report";
                         var skipped = new PortalSyncRunResult(
                             settings.BusinessName,
                             true,
                             false,
-                            $"Cash & Sales Summary is current through {yesterday:M/d/yyyy}.");
+                            $"{reportName} sync is current through {yesterday:M/d/yyyy}.");
                         UpdateRunStatus(settings, reportKind, skipped, yesterday);
                         results.Add(skipped);
                         PortalSyncSettingsStore.Save(document);
@@ -379,9 +383,12 @@ internal static class PortalSyncService
                         PortalSyncSettingsStore.Save(document);
                         WriteLog(result);
 
-                        // Z-report catch-up always follows its numeric batch
-                        // cursor in one portal session, so it runs once.
-                        if (reportKind == PortalSyncReportKind.ZReports)
+                        // Do not retry later Cash & Sales dates while the first
+                        // pending date is still blocked. Its date cursor remains
+                        // unchanged, so the next scheduled recovery attempt starts
+                        // with that same date. Z-report catch-up always follows its
+                        // numeric batch cursor in one portal session, so it runs once.
+                        if (!result.Success || reportKind == PortalSyncReportKind.ZReports)
                             break;
                     }
                 }
@@ -468,6 +475,10 @@ internal static class PortalSyncService
                         $"Downloads and imports HISAB KITAB {ReportDisplayName(reportKind)} reports.")),
                 new XElement(ns + "Triggers",
                     new XElement(ns + "CalendarTrigger",
+                        new XElement(ns + "Repetition",
+                            new XElement(ns + "Interval", "PT1H"),
+                            new XElement(ns + "Duration", "PT12H"),
+                            new XElement(ns + "StopAtDurationEnd", "false")),
                         new XElement(ns + "StartBoundary", start),
                         new XElement(ns + "Enabled", "true"),
                         new XElement(ns + "ScheduleByDay",
