@@ -307,29 +307,10 @@ internal static class InvoiceEmailBackgroundSyncService
         }
 
         await using var db = storeConnections.CreateDbContext();
-        var stores = await db.Stores
-            .AsNoTracking()
-            .Where(store => store.IsActive)
-            .OrderBy(store => store.Id)
-            .ToListAsync(cancellationToken);
-        var match = stores.FirstOrDefault(store =>
-                        NamesMatch(store.Name, businessName))
-                    ?? stores.FirstOrDefault();
-        return match?.Id
-               ?? throw new InvalidOperationException(
-                   "The invoice email database does not contain an active store.");
-    }
-
-    private static bool NamesMatch(string? left, string? right)
-    {
-        static string Normalize(string? value) =>
-            new((value ?? "")
-                .Where(char.IsLetterOrDigit)
-                .Select(char.ToUpperInvariant)
-                .ToArray());
-        var first = Normalize(left);
-        var second = Normalize(right);
-        return first.Length > 0 && first == second;
+        return await StoreDataIdentityResolver.ResolveAsync(
+            db,
+            businessName,
+            cancellationToken);
     }
 
     private static string CreateScheduledTaskXml(string executable)

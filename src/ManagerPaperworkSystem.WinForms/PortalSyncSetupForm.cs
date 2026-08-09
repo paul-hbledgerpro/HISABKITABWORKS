@@ -287,7 +287,7 @@ internal sealed class PortalSyncSetupForm : Form
             }
         };
         test.Click += async (_, _) => await RunSelectedSyncAsync(actions);
-        backfill.Click += async (_, _) =>
+        backfill.Click += (_, _) =>
         {
             var from = DateOnly.FromDateTime(_historicalFrom.Value);
             var through = DateOnly.FromDateTime(_historicalThrough.Value);
@@ -326,14 +326,38 @@ internal sealed class PortalSyncSetupForm : Form
                     this,
                     $"Backfill {ReportDisplayName} for the selected store from " +
                     $"{from:M/d/yyyy} through {through:M/d/yyyy}?\r\n\r\n" +
-                    "The process may take several minutes and will preserve the normal daily sync cursor.",
+                    "The process will continue in the background and preserve the normal daily sync cursor. " +
+                    "You can continue using HISAB KITAB after it starts.",
                     $"{ReportDisplayName} Historical Backfill",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question) != DialogResult.Yes)
             {
                 return;
             }
-            await RunSelectedSyncAsync(actions, from, through);
+            try
+            {
+                var selectedSettings = SaveSettings(showConfirmation: false);
+                var processId = PortalSyncService.StartHistoricalBackfill(
+                    selectedSettings.Id,
+                    _reportKind,
+                    from,
+                    through);
+                _status.Text =
+                    $"Background {ReportDisplayName} backfill started for " +
+                    $"{from:M/d/yyyy} - {through:M/d/yyyy}. Process {processId}. " +
+                    "Progress is saved automatically; reopen this setup to see the latest result.";
+                MessageBox.Show(
+                    this,
+                    _status.Text + "\r\n\r\nThis setup window will now close, but the import will continue.",
+                    $"{ReportDisplayName} Historical Backfill",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                Close();
+            }
+            catch (Exception exception)
+            {
+                ShowError(exception);
+            }
         };
         close.Click += (_, _) => Close();
 

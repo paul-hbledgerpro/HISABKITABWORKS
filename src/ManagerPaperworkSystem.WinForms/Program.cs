@@ -52,7 +52,11 @@ internal static class Program
             if (portalStoreArgument + 1 < args.Length &&
                 Guid.TryParse(args[portalStoreArgument + 1], out var parsedId))
                 storeConfigurationId = parsedId;
-            RunPortalSync(storeConfigurationId, ParsePortalSyncReportKind(args));
+            RunPortalSync(
+                storeConfigurationId,
+                ParsePortalSyncReportKind(args),
+                ParseDateOnlyArgument(args, "--portal-sync-backfill-from"),
+                ParseDateOnlyArgument(args, "--portal-sync-backfill-through"));
             return;
         }
 
@@ -137,12 +141,34 @@ internal static class Program
         };
     }
 
+    private static DateOnly? ParseDateOnlyArgument(string[] args, string argumentName)
+    {
+        var argument = Array.FindIndex(
+            args,
+            value => value.Equals(argumentName, StringComparison.OrdinalIgnoreCase));
+        if (argument < 0 || argument + 1 >= args.Length)
+            return null;
+
+        return DateOnly.TryParseExact(
+            args[argument + 1],
+            "yyyy-MM-dd",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None,
+            out var date)
+            ? date
+            : null;
+    }
+
     private static void RunPortalSync(
         Guid? storeConfigurationId,
-        PortalSyncReportKind? reportKind)
+        PortalSyncReportKind? reportKind,
+        DateOnly? historicalStartDate = null,
+        DateOnly? historicalEndDate = null)
     {
         try
         {
+            var historicalBackfill =
+                historicalStartDate.HasValue || historicalEndDate.HasValue;
             // Scheduled execution must never open an activation or error dialog.
             var licenseValidation = DeviceLicenseService.ValidateInstalledLicense();
             if (licenseValidation.Status != DeviceLicenseStatus.Valid)
@@ -161,12 +187,14 @@ internal static class Program
             var paths = services.GetRequiredService<ManagerPaperworkSystem.Core.Services.IAppPaths>();
             var results = PortalSyncService.RunDueAsync(
                     paths,
-                    force: false,
+                    force: historicalBackfill,
                     visibleChrome: false,
                     onlyStoreConfigurationId: storeConfigurationId,
                     onlyReportKind: reportKind,
                     waitForExistingRun: true,
-                    existingRunWaitTimeout: TimeSpan.FromHours(2))
+                    existingRunWaitTimeout: TimeSpan.FromHours(2),
+                    historicalStartDate: historicalStartDate,
+                    historicalEndDate: historicalEndDate)
                 .GetAwaiter()
                 .GetResult();
             if (results.Any(result => !result.Success))

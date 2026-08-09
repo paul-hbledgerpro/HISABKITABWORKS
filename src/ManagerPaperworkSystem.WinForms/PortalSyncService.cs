@@ -82,6 +82,45 @@ internal static class PortalSyncService
         });
     }
 
+    public static int StartHistoricalBackfill(
+        Guid storeConfigurationId,
+        PortalSyncReportKind reportKind,
+        DateOnly historicalStartDate,
+        DateOnly historicalEndDate)
+    {
+        if (historicalEndDate < historicalStartDate)
+            throw new InvalidOperationException(
+                "Historical end date must be on or after the start date.");
+        if (historicalEndDate.DayNumber - historicalStartDate.DayNumber > 365)
+            throw new InvalidOperationException(
+                "Historical backfill is limited to 366 days per run.");
+
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+            throw new InvalidOperationException(
+                "The installed HISAB KITAB executable could not be located.");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = Path.GetDirectoryName(executable) ?? "",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList =
+            {
+                "--portal-sync-store", storeConfigurationId.ToString("D"),
+                "--portal-sync-report", ReportArgument(reportKind),
+                "--portal-sync-backfill-from",
+                historicalStartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                "--portal-sync-backfill-through",
+                historicalEndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            }
+        }) ?? throw new InvalidOperationException(
+            "The background historical sync process could not be started.");
+
+        return process.Id;
+    }
+
     public static PortalSyncScheduleResult EnsureDailyTask(
         Guid storeConfigurationId,
         PortalSyncReportKind reportKind,
@@ -2662,17 +2701,10 @@ internal static class PortalSyncService
         string businessName,
         CancellationToken cancellationToken)
     {
-        static string Normalize(string value) =>
-            new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
-        var wanted = Normalize(businessName);
-        var stores = await db.Stores.AsNoTracking()
-            .Where(item => item.IsActive)
-            .OrderBy(item => item.Id)
-            .ToListAsync(cancellationToken);
-        return stores.FirstOrDefault(item => Normalize(item.Name) == wanted)?.Id
-               ?? stores.FirstOrDefault()?.Id
-               ?? throw new InvalidOperationException(
-                   $"The database for '{businessName}' does not contain an active store.");
+        return await StoreDataIdentityResolver.ResolveAsync(
+            db,
+            businessName,
+            cancellationToken);
     }
 
     private static string? FindCompletedPdf(string downloadDirectory) =>

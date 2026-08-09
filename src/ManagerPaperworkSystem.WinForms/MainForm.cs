@@ -1112,11 +1112,7 @@ internal sealed partial class MainForm : Form
     private async Task<int> ResolveDataStoreIdAsync(string businessName)
     {
         using var db = CreateDb();
-        var stores = await db.Stores.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Id).ToListAsync();
-        var match = stores.FirstOrDefault(x => StoreNamesMatch(x.Name, businessName)) ?? stores.FirstOrDefault();
-        if (match is null)
-            throw new InvalidOperationException($"The database for '{businessName}' does not contain an active store record.");
-        return match.Id;
+        return await StoreDataIdentityResolver.ResolveAsync(db, businessName);
     }
 
     private Control BuildModuleError(string module, Exception ex)
