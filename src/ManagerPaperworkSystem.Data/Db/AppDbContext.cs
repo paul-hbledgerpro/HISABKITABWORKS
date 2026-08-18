@@ -312,8 +312,12 @@ public sealed class AppDbContext : DbContext
 
     private static string ActivityAction(EntityEntry entry)
     {
-        if (entry.State == EntityState.Added && entry.Entity is ShiftLogEntry { IsCorrection: true } or CashOnHandEntry { IsCorrection: true } or CheckPayout { IsCorrection: true })
-            return "Correction";
+        if (entry.State == EntityState.Added && entry.Entity is ShiftLogEntry { IsCorrection: true } shift)
+            return shift.CorrectionReason.StartsWith("Owner/Admin undo", StringComparison.OrdinalIgnoreCase) ? "Undo" : "Correction";
+        if (entry.State == EntityState.Added && entry.Entity is CashOnHandEntry { IsCorrection: true } cash)
+            return cash.CorrectionReason.StartsWith("Owner/Admin undo", StringComparison.OrdinalIgnoreCase) ? "Undo" : "Correction";
+        if (entry.State == EntityState.Added && entry.Entity is CheckPayout { IsCorrection: true } check)
+            return check.CorrectionReason.StartsWith("Owner/Admin undo", StringComparison.OrdinalIgnoreCase) ? "Undo" : "Correction";
         return entry.State switch
         {
             EntityState.Added => "Created",
