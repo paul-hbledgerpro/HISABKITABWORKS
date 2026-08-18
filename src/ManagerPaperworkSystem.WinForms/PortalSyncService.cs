@@ -8,6 +8,7 @@ using System.Xml.Linq;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
+using ManagerPaperworkSystem.Data.Services;
 using ManagerPaperworkSystem.UI.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -675,6 +676,7 @@ internal static class PortalSyncService
         DateOnly? historicalEndDate,
         CancellationToken cancellationToken)
     {
+        using var auditScope = ActivityAuditContext.BeginSystem("Automatic POS Portal Sync");
         var chrome = FindGoogleChrome()
                      ?? throw new InvalidOperationException("Google Chrome is not installed.");
         var profile = PortalSyncSettingsStore.ProfileDirectory(settings.Id);
@@ -839,20 +841,27 @@ internal static class PortalSyncService
                         lastProcessedZBatch = latestImportedZBatch;
                     }
 
-                    // Once a trustworthy cursor exists, process every later
-                    // portal batch in ascending order. A brand-new store
-                    // bootstraps from the requested date instead of importing
-                    // the entire portal history.
+                    // Track exact imported batches instead of treating the greatest
+                    // batch as a cursor. Multi-register stores can close registers
+                    // out of date order, so importing batch N+1 must not permanently
+                    // hide a still-missing batch N.
+                    var importedZBatches = await GetImportedZBatchNumbersAsync(
+                        db,
+                        dataStoreId,
+                        numericPortalBatches.Select(item => item.Number).ToHashSet(),
+                        cancellationToken);
+                    var hadImportedZBatches = importedZBatches.Count > 0;
                     var historicalZBackfill =
                         historicalStartDate.HasValue &&
                         historicalEndDate.HasValue;
                     var candidateBatches = historicalZBackfill
                         ? numericPortalBatches
+                            .Where(item => !importedZBatches.Contains(item.Number))
                             .OrderByDescending(item => item.Number)
                             .ToList()
-                        : latestImportedZBatch.HasValue
+                        : hadImportedZBatches
                             ? numericPortalBatches
-                                .Where(item => item.Number > latestImportedZBatch.Value)
+                                .Where(item => !importedZBatches.Contains(item.Number))
                                 .OrderBy(item => item.Number)
                                 .ToList()
                             : numericPortalBatches
@@ -922,16 +931,14 @@ internal static class PortalSyncService
                             if (actualDate > historicalEndDate!.Value)
                                 continue;
                             if (actualDate < historicalStartDate!.Value)
-                                break;
+                                continue;
                         }
                         else
                         {
-                            if (latestImportedZBatch.HasValue && actualDate > yesterday)
-                                break;
-                            if (!latestImportedZBatch.HasValue && actualDate > targetDate)
+                            if (actualDate > yesterday)
                                 continue;
-                            if (!latestImportedZBatch.HasValue && actualDate < targetDate)
-                                break;
+                            if (!hadImportedZBatches && actualDate != targetDate)
+                                continue;
                         }
 
                         ZReportImportOutcome result;
@@ -2285,6 +2292,44 @@ internal static class PortalSyncService
         return LatestNumericBatch(shiftNumbers);
     }
 
+    private static async Task<HashSet<long>> GetImportedZBatchNumbersAsync(
+        AppDbContext db,
+        int storeId,
+        IReadOnlySet<long> portalBatches,
+        CancellationToken cancellationToken)
+    {
+        var rows = await db.ShiftLogs
+            .AsNoTracking()
+            .Where(item => item.StoreId == storeId && item.ShiftNo != null)
+            .Select(item => new { item.ShiftNo, item.PosReportKey })
+            .ToListAsync(cancellationToken);
+
+        var imported = new HashSet<long>();
+        foreach (var row in rows)
+        {
+            if (!long.TryParse(
+                    row.ShiftNo!.Trim(),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var batch) ||
+                !portalBatches.Contains(batch))
+            {
+                continue;
+            }
+
+            // A signed AdventPOS key is definitive. For upgraded databases,
+            // accept an exact legacy shift number only when the same batch is
+            // still advertised by this portal.
+            if (!string.IsNullOrWhiteSpace(row.PosReportKey) &&
+                !row.PosReportKey.StartsWith("ADVENTPOS-Z|", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            imported.Add(batch);
+        }
+        return imported;
+    }
+
     private static async Task<long?> GetLatestMatchingLegacyZBatchAsync(
         AppDbContext db,
         int storeId,
@@ -2383,7 +2428,8 @@ internal static class PortalSyncService
         ValidateZReports(sourcePath, targetDate);
         var reports = new PosReportImportService().ImportZReports(sourcePath)
             .Where(report => report.ReportDate == targetDate)
-            .OrderBy(report => report.ShiftOrBatch)
+            .OrderBy(report => NumericBatchOrder(report.ShiftOrBatch))
+            .ThenBy(report => report.ShiftOrBatch, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var sourceBytes = await File.ReadAllBytesAsync(sourcePath, cancellationToken);
@@ -2547,6 +2593,11 @@ internal static class PortalSyncService
             .ToArray());
         return $"ADVENTPOS-Z|{date:yyyy-MM-dd}|{safeBatch}";
     }
+
+    private static long NumericBatchOrder(string? batch)
+        => long.TryParse(batch?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            ? number
+            : long.MaxValue;
 
     private static async Task ConfigureDownloadsAsync(IPage page, string downloadDirectory)
     {

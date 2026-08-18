@@ -112,6 +112,29 @@ public static class DatabaseSchemaService
                 )");
 
             await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[ActivityLogs]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[ActivityLogs] (
+                        [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                        [StoreId] INT NULL,
+                        [UserId] INT NOT NULL DEFAULT 0,
+                        [UserName] NVARCHAR(120) NOT NULL DEFAULT '',
+                        [UserRole] NVARCHAR(40) NOT NULL DEFAULT '',
+                        [Section] NVARCHAR(80) NOT NULL DEFAULT '',
+                        [Action] NVARCHAR(40) NOT NULL DEFAULT '',
+                        [EntityType] NVARCHAR(100) NOT NULL DEFAULT '',
+                        [EntityId] INT NOT NULL DEFAULT 0,
+                        [Description] NVARCHAR(800) NOT NULL DEFAULT '',
+                        [IsSystem] BIT NOT NULL DEFAULT 0,
+                        [OccurredUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+                    );
+                    CREATE INDEX [IX_ActivityLogs_Store_OccurredUtc]
+                        ON [dbo].[ActivityLogs] ([StoreId], [OccurredUtc]);
+                    CREATE INDEX [IX_ActivityLogs_User_OccurredUtc]
+                        ON [dbo].[ActivityLogs] ([UserId], [OccurredUtc]);
+                END");
+
+            await ExecuteSafe(conn, @"
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ShiftLogs')
                 CREATE TABLE [ShiftLogs] (
                     [Id] INT IDENTITY(1,1) PRIMARY KEY,
@@ -174,6 +197,12 @@ public static class DatabaseSchemaService
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportKey", "NVARCHAR(200) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportPath", "NVARCHAR(500) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "ShiftLogs", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CashOnHand", "CreatedByUserId", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "CashOnHand", "CreatedByName", "NVARCHAR(120) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CashOnHand", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CheckPayouts", "CreatedByUserId", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "CheckPayouts", "CreatedByName", "NVARCHAR(120) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CheckPayouts", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
             await ExecuteSafe(conn, @"
                 UPDATE [dbo].[ShiftLogs]
                 SET [Employee] = COALESCE([Employee], ''),

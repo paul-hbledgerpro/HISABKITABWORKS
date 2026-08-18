@@ -28,7 +28,7 @@ public partial class AddStoreWizard : Window
     public string? ResultConnectionString { get; private set; }
 
     // API base
-    private const string API_BASE = "https://hbstoreledger-api-dwfdg2hygggqhma3.canadacentral-01.azurewebsites.net";
+    private const string API_BASE = "http://127.0.0.1:5000";
 
     public AddStoreWizard()
     {
@@ -309,7 +309,7 @@ public partial class AddStoreWizard : Window
         if ((int)response.StatusCode == 403 &&
             responseText.Contains("web app is stopped", StringComparison.OrdinalIgnoreCase))
         {
-            return "The activation server is currently stopped in Azure. Start the HB Store Ledger activation web app, then try again.";
+            return "The local activation service is not running. Start the local service, then try again.";
         }
 
         return $"Server error HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).";

@@ -16,13 +16,12 @@ internal static class CashDropRollupService
     {
         var rows = await db.ShiftLogs
             .AsNoTracking()
-            .Where(item =>
-                item.StoreId == storeId &&
-                item.Date == date &&
-                item.PosSalesSummaryId == null)
+            .Where(item => item.StoreId == storeId)
             .OrderBy(item => item.CreatedUtc)
             .ToListAsync(cancellationToken);
-        var effective = EffectiveRows(rows);
+        var effective = EffectiveRows(rows)
+            .Where(item => item.Date == date && item.PosSalesSummaryId == null)
+            .ToList();
 
         // Once Z reports exist for a date, they are the register-level source
         // of truth. Manual legacy rows are used only for dates that predate the

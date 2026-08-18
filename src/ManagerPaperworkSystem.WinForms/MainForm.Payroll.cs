@@ -20,7 +20,16 @@ internal sealed partial class MainForm
         MetricCard(metrics, 0, 0, "ACTIVE EMPLOYEES", employees.Count(x => x.IsActive).ToString(), WinTheme.Green, "Current store");
         MetricCard(metrics, 1, 0, "DRAFT PAYROLLS", runs.Count(x => x.Status == PayrollRunStatus.Draft).ToString(), WinTheme.Copper, "Awaiting approval");
         MetricCard(metrics, 2, 0, "LAST PAY DATE", runs.FirstOrDefault(x => x.Status == PayrollRunStatus.Finalized)?.PayDate.ToString("MM/dd/yyyy") ?? "—", WinTheme.Blue, "Finalized payroll");
-        MetricCard(metrics, 3, 0, "YEAR-TO-DATE GROSS", db.PayrollEntries.AsNoTracking().Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.TaxYear == DateTime.Today.Year && x.PayrollRun.Status == PayrollRunStatus.Finalized).Sum(x => (decimal?)x.GrossPay).GetValueOrDefault().ToString("C2"), WinTheme.Green, "Finalized entries");
+        // Aggregate after materializing so the isolated SQLite demo database and
+        // the production SQL Server database render the same payroll dashboard.
+        var yearToDateGross = db.PayrollEntries.AsNoTracking()
+            .Where(x => x.PayrollRun!.StoreId == _currentStoreId &&
+                        x.PayrollRun.TaxYear == DateTime.Today.Year &&
+                        x.PayrollRun.Status == PayrollRunStatus.Finalized)
+            .Select(x => x.GrossPay)
+            .ToList()
+            .Sum();
+        MetricCard(metrics, 3, 0, "YEAR-TO-DATE GROSS", yearToDateGross.ToString("C2"), WinTheme.Green, "Finalized entries");
         body.Controls.Add(metrics, 0, 0);
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, BackColor = WinTheme.Panel, Padding = new Padding(16, 16, 8, 8), WrapContents = false };
@@ -65,7 +74,14 @@ internal sealed partial class MainForm
         var from = DateOnly.FromDateTime(DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek));
         var to = from.AddDays(13);
         var employees = db.Employees.AsNoTracking().Where(x => x.StoreId == _currentStoreId && x.IsActive).ToDictionary(x => x.Id, x => x.FullName);
-        var shifts = db.ScheduleShifts.AsNoTracking().Where(x => x.StoreId == _currentStoreId && x.ShiftDate >= from && x.ShiftDate <= to).OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToList();
+        // SQLite stores TimeSpan values as text and cannot order them in SQL.
+        // Materialize the small two-week window before applying the sort.
+        var shifts = db.ScheduleShifts.AsNoTracking()
+            .Where(x => x.StoreId == _currentStoreId && x.ShiftDate >= from && x.ShiftDate <= to)
+            .ToList()
+            .OrderBy(x => x.ShiftDate)
+            .ThenBy(x => x.StartTime)
+            .ToList();
 
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = WinTheme.Bg };
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));

@@ -271,8 +271,8 @@ internal sealed class WeeklySchedulePlannerForm : Form
             .ToListAsync();
         var shifts = await db.ScheduleShifts.AsNoTracking()
             .Where(x => x.StoreId == _storeId && x.ShiftDate >= from && x.ShiftDate <= to)
-            .OrderBy(x => x.StartTime)
             .ToListAsync();
+        shifts = shifts.OrderBy(x => x.StartTime).ToList();
 
         _loadingGrid = true;
         try
@@ -337,8 +337,8 @@ internal sealed class WeeklySchedulePlannerForm : Form
                         x.ShiftDate >= previousFrom &&
                         x.ShiftDate <= previousTo &&
                         x.Status != ScheduleShiftStatus.Cancelled)
-            .OrderBy(x => x.StartTime)
             .ToListAsync();
+        previousShifts = previousShifts.OrderBy(x => x.StartTime).ToList();
         if (previousShifts.Count == 0)
         {
             MessageBox.Show(
@@ -599,9 +599,11 @@ internal sealed class WeeklySchedulePlannerForm : Form
                         x.ShiftDate >= from &&
                         x.ShiftDate <= to &&
                         x.Status != ScheduleShiftStatus.Cancelled)
+            .ToListAsync();
+        shifts = shifts
             .OrderBy(x => x.ShiftDate)
             .ThenBy(x => x.StartTime)
-            .ToListAsync();
+            .ToList();
         var employees = await db.Employees.AsNoTracking()
             .Where(x => x.StoreId == _storeId && x.IsActive)
             .ToDictionaryAsync(x => x.Id);

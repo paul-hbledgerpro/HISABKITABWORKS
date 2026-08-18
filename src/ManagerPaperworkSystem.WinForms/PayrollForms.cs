@@ -622,8 +622,8 @@ internal sealed class ScheduleBuilderForm : Form
         await using var db = _createDb();
         var existing = await db.ScheduleShifts.AsNoTracking()
             .Where(x => x.StoreId == _storeId && x.EmployeeId == employeeId && x.ShiftDate >= from && x.ShiftDate <= to)
-            .OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime)
             .ToListAsync();
+        existing = existing.OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToList();
 
         _days.SuspendLayout();
         _days.Controls.Clear();
@@ -666,8 +666,8 @@ internal sealed class ScheduleBuilderForm : Form
         var to = _editors.Max(x => x.Date);
         var existing = await db.ScheduleShifts
             .Where(x => x.StoreId == _storeId && x.EmployeeId == employeeId && x.ShiftDate >= from && x.ShiftDate <= to)
-            .OrderBy(x => x.StartTime)
             .ToListAsync();
+        existing = existing.OrderBy(x => x.StartTime).ToList();
         var saved = 0;
         var removed = 0;
         var locked = 0;
@@ -819,7 +819,8 @@ internal sealed class ScheduleManagerForm : Form
         await using var db = _createDb();
         var employees = await db.Employees.AsNoTracking().Where(x => x.StoreId == _storeId).ToDictionaryAsync(x => x.Id, x => x.FullName);
         var from = DateOnly.FromDateTime(DateTime.Today.AddDays(-30)); var to = DateOnly.FromDateTime(DateTime.Today.AddDays(90));
-        var rows = await db.ScheduleShifts.AsNoTracking().Where(x => x.StoreId == _storeId && x.ShiftDate >= from && x.ShiftDate <= to).OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToListAsync();
+        var rows = await db.ScheduleShifts.AsNoTracking().Where(x => x.StoreId == _storeId && x.ShiftDate >= from && x.ShiftDate <= to).ToListAsync();
+        rows = rows.OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToList();
         _grid.DataSource = rows.Select(x => new { x.Id, Date = x.ShiftDate.ToString("ddd MM/dd/yyyy"), Employee = employees.GetValueOrDefault(x.EmployeeId), Start = DateTime.Today.Add(x.StartTime).ToString("h:mm tt"), End = DateTime.Today.Add(x.EndTime).ToString("h:mm tt"), Hours = x.ScheduledHours, Break = x.UnpaidBreakMinutes, Status = x.Status.ToString(), x.Notes }).ToList();
     }
 
@@ -852,8 +853,8 @@ internal sealed class ScheduleManagerForm : Form
         var shifts = await db.ScheduleShifts
             .Where(x => x.StoreId == _storeId && x.ShiftDate >= from && x.ShiftDate <= to &&
                         (x.Status == ScheduleShiftStatus.Draft || x.Status == ScheduleShiftStatus.Published))
-            .OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime)
             .ToListAsync();
+        shifts = shifts.OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToList();
         if (shifts.Count == 0)
         {
             MessageBox.Show(this, "No draft or published shifts exist in the selected period.", "Publish Schedule", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -923,7 +924,8 @@ internal sealed class ScheduleManagerForm : Form
         var existing = await db.ScheduleNotifications.CountAsync(x => x.StoreId == _storeId && x.ScheduleFrom == from && x.ScheduleTo == to && x.Status == "Sent");
         if (existing > 0 && MessageBox.Show(this, $"{existing} schedule text(s) were already sent for this period. Send updated schedules again?", "Resend Schedule", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
 
-        var shifts = await db.ScheduleShifts.AsNoTracking().Where(x => x.StoreId == _storeId && x.ShiftDate >= from && x.ShiftDate <= to && x.Status == ScheduleShiftStatus.Published).OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToListAsync();
+        var shifts = await db.ScheduleShifts.AsNoTracking().Where(x => x.StoreId == _storeId && x.ShiftDate >= from && x.ShiftDate <= to && x.Status == ScheduleShiftStatus.Published).ToListAsync();
+        shifts = shifts.OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToList();
         if (shifts.Count == 0) { MessageBox.Show(this, "No published shifts exist in the selected period.", "Schedule Texting", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
         var employeeIds = shifts.Select(x => x.EmployeeId).Distinct().ToList();
         var employees = await db.Employees.AsNoTracking().Where(x => x.StoreId == _storeId && employeeIds.Contains(x.Id) && x.IsActive).ToDictionaryAsync(x => x.Id);
@@ -1104,7 +1106,9 @@ internal sealed class EmployeeHoursForm : Form
     {
         _grid.EndEdit(); var start = DateOnly.FromDateTime(_from.Value); var end = DateOnly.FromDateTime(_to.Value);
         if (end < start) { MessageBox.Show(this, "Period end must be on or after period start."); return; }
-        var frequency = (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Weekly);
+        var frequency = DemoRuntime.IsEnabled
+            ? PayFrequency.Biweekly
+            : (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Weekly);
         await using var db = _createDb();
         var employees = await db.Employees.AsNoTracking().Where(x => x.StoreId == _storeId && x.IsActive && x.PayFrequency == frequency).OrderBy(x => x.LastName).ThenBy(x => x.FirstName).ToListAsync();
         var ids = employees.Select(x => x.Id).ToList();
@@ -1183,7 +1187,9 @@ internal sealed class PayrollRunForm : Form
         _createDb = createDb; _storeId = storeId; _user = user;
         PayrollUi.Prepare(this, "Run Payroll - HISAB KITAB", new Size(1600, 900));
         var today = DateTime.Today; var weekStart = today.AddDays(-(int)today.DayOfWeek);
-        _from.Value = weekStart.AddDays(-7); _to.Value = weekStart.AddDays(-1); _payDate.Value = today; _frequency.SelectedItem = PayFrequency.Weekly; _firstCheck.Value = 1001;
+        _from.Value = weekStart.AddDays(-7); _to.Value = weekStart.AddDays(-1); _payDate.Value = today;
+        _frequency.SelectedItem = DemoRuntime.IsEnabled ? PayFrequency.Biweekly : PayFrequency.Weekly;
+        _firstCheck.Value = 1001;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, BackColor = WinTheme.Bg, Padding = new Padding(14) };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
@@ -1252,7 +1258,9 @@ internal sealed class PayrollRunForm : Form
     private async Task OpenHoursAsync()
     {
         if (_runId.HasValue) { MessageBox.Show(this, "This payroll draft is already saved. Period hours cannot be replaced from the separate entry screen."); return; }
-        var frequency = (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Weekly);
+        var frequency = DemoRuntime.IsEnabled
+            ? PayFrequency.Biweekly
+            : (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Weekly);
         using var form = new EmployeeHoursForm(_createDb, _storeId, _user, DateOnly.FromDateTime(_from.Value), DateOnly.FromDateTime(_to.Value), frequency);
         form.ShowDialog(this); await LoadRowsAsync();
     }
@@ -1262,7 +1270,9 @@ internal sealed class PayrollRunForm : Form
         if (_runId.HasValue) { MessageBox.Show(this, "This payroll draft is already saved. Close and reopen Run Payroll to start another period."); return; }
         var start = DateOnly.FromDateTime(_from.Value); var end = DateOnly.FromDateTime(_to.Value);
         if (end < start) { MessageBox.Show(this, "Period end must be on or after period start."); return; }
-        var frequency = (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Weekly);
+        var frequency = DemoRuntime.IsEnabled
+            ? PayFrequency.Biweekly
+            : (PayFrequency)(_frequency.SelectedItem ?? PayFrequency.Weekly);
         await using var db = _createDb();
         var employees = await db.Employees.AsNoTracking().Where(x => x.StoreId == _storeId && x.IsActive && x.PayFrequency == frequency).OrderBy(x => x.LastName).ToListAsync();
         var employeeIds = employees.Select(x => x.Id).ToList();

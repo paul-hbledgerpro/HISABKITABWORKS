@@ -7,10 +7,86 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Any(value => value.Equals("--demo-presentation", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                DemoHiddenDesktop.Run(() => RunApplication(args));
+            }
+            catch (Exception exception)
+            {
+                var presentationIndex = Array.FindIndex(
+                    args,
+                    value => value.Equals("--demo-presentation", StringComparison.OrdinalIgnoreCase));
+                if (presentationIndex >= 0 && presentationIndex + 1 < args.Length)
+                {
+                    var directory = Path.GetFullPath(args[presentationIndex + 1]);
+                    Directory.CreateDirectory(directory);
+                    File.WriteAllText(Path.Combine(directory, "presentation-error.txt"), exception.ToString());
+                }
+                Environment.ExitCode = 1;
+            }
+            return;
+        }
+
+        RunApplication(args);
+    }
+
+    private static void RunApplication(string[] args)
+    {
         ApplicationConfiguration.Initialize();
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        if (args.Any(value => value.Equals("--demo-prepare", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunDemo(launchApplication: false, resetData: false);
+            return;
+        }
+
+        if (args.Any(value => value.Equals("--demo-reset", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunDemo(launchApplication: false, resetData: true);
+            return;
+        }
+
+        var demoCaptureIndex = Array.FindIndex(
+            args,
+            value => value.Equals("--demo-capture", StringComparison.OrdinalIgnoreCase));
+        if (demoCaptureIndex >= 0)
+        {
+            if (demoCaptureIndex + 1 >= args.Length)
+            {
+                Environment.ExitCode = 2;
+                return;
+            }
+            DemoRuntime.ConfigureCapture(args[demoCaptureIndex + 1]);
+            RunDemo(launchApplication: true, resetData: true);
+            return;
+        }
+
+        var demoPresentationIndex = Array.FindIndex(
+            args,
+            value => value.Equals("--demo-presentation", StringComparison.OrdinalIgnoreCase));
+        if (demoPresentationIndex >= 0)
+        {
+            if (demoPresentationIndex + 1 >= args.Length)
+            {
+                Environment.ExitCode = 2;
+                return;
+            }
+            DemoRuntime.ConfigurePresentation(args[demoPresentationIndex + 1]);
+            ConfigureDemoPresentationExceptionLogging();
+            RunDemo(launchApplication: true, resetData: true);
+            return;
+        }
+
+        if (args.Any(value => value.Equals("--demo", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunDemo(launchApplication: true, resetData: false);
+            return;
+        }
 
         if (args.Length >= 5 && args[0].Equals("--export-device-request", StringComparison.OrdinalIgnoreCase))
         {
@@ -123,6 +199,71 @@ internal static class Program
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
+    }
+
+    private static void RunDemo(bool launchApplication, bool resetData)
+    {
+        try
+        {
+            DemoRuntime.Enable();
+            using var services = AppBootstrap.BuildServices();
+            ProgramServices.Set(services);
+            AppBootstrap.InitializeDatabaseAsync(services).GetAwaiter().GetResult();
+            if (resetData)
+                DemoDataService.ResetAsync(services).GetAwaiter().GetResult();
+            else
+                DemoDataService.EnsureSeededAsync(services).GetAwaiter().GetResult();
+            DemoRuntime.ConfigureLicense();
+            DemoDataService.ConfigureDemoSession(services);
+            var staleErrorPath = Path.Combine(DemoRuntime.AppDataDirectory, "demo-prepare-error.txt");
+            if (File.Exists(staleErrorPath))
+                File.Delete(staleErrorPath);
+            if (launchApplication)
+                Application.Run(services.GetRequiredService<MainForm>());
+        }
+        catch (Exception exception)
+        {
+            if (!launchApplication)
+            {
+                Directory.CreateDirectory(DemoRuntime.AppDataDirectory);
+                File.WriteAllText(
+                    Path.Combine(DemoRuntime.AppDataDirectory, "demo-prepare-error.txt"),
+                    exception.ToString());
+                Environment.ExitCode = 1;
+                return;
+            }
+            MessageBox.Show(
+                $"HISAB KITAB Demo could not start.\n\n{AppBootstrap.RedactSensitiveText(exception.Message)}",
+                "HISAB KITAB Demo",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private static void ConfigureDemoPresentationExceptionLogging()
+    {
+        Directory.CreateDirectory(DemoRuntime.PresentationDirectory);
+        var errorPath = Path.Combine(
+            DemoRuntime.PresentationDirectory,
+            "presentation-thread-errors.txt");
+        if (File.Exists(errorPath))
+            File.Delete(errorPath);
+
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, eventArgs) =>
+        {
+            try
+            {
+                File.AppendAllText(
+                    errorPath,
+                    $"[{DateTimeOffset.Now:O}]{Environment.NewLine}" +
+                    $"{eventArgs.Exception}{Environment.NewLine}{Environment.NewLine}");
+            }
+            catch
+            {
+                // A presentation must never stop behind a hidden exception dialog.
+            }
+        };
     }
 
     private static PortalSyncReportKind? ParsePortalSyncReportKind(string[] args)

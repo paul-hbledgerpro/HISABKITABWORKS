@@ -20,8 +20,10 @@ public static class DbInitializer
         try
         {
             using var checkCmd = conn.CreateCommand();
-            checkCmd.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'AppSettings'";
-            tablesExist = (int)(await checkCmd.ExecuteScalarAsync(ct) ?? 0) > 0;
+            checkCmd.CommandText = db.Database.IsSqlite()
+                ? "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'AppSettings'"
+                : "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'AppSettings'";
+            tablesExist = Convert.ToInt32(await checkCmd.ExecuteScalarAsync(ct) ?? 0) > 0;
         }
         finally
         {
@@ -156,6 +158,49 @@ public static class DbInitializer
                         ALTER TABLE [dbo].[AppSettings] ADD [AutoEmailBankStatementOnFifth] BIT NOT NULL DEFAULT 0;
                 END";
             await settingsCmd.ExecuteNonQueryAsync(ct);
+
+            using var correctionAndActivityCmd = conn.CreateCommand();
+            correctionAndActivityCmd.CommandText = @"
+                IF OBJECT_ID(N'[dbo].[CashOnHand]', N'U') IS NOT NULL
+                BEGIN
+                    IF COL_LENGTH(N'[dbo].[CashOnHand]', N'CreatedByUserId') IS NULL
+                        ALTER TABLE [dbo].[CashOnHand] ADD [CreatedByUserId] INT NOT NULL DEFAULT 0;
+                    IF COL_LENGTH(N'[dbo].[CashOnHand]', N'CreatedByName') IS NULL
+                        ALTER TABLE [dbo].[CashOnHand] ADD [CreatedByName] NVARCHAR(120) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[CashOnHand]', N'CorrectionReason') IS NULL
+                        ALTER TABLE [dbo].[CashOnHand] ADD [CorrectionReason] NVARCHAR(300) NOT NULL DEFAULT '';
+                END;
+                IF OBJECT_ID(N'[dbo].[CheckPayouts]', N'U') IS NOT NULL
+                BEGIN
+                    IF COL_LENGTH(N'[dbo].[CheckPayouts]', N'CreatedByUserId') IS NULL
+                        ALTER TABLE [dbo].[CheckPayouts] ADD [CreatedByUserId] INT NOT NULL DEFAULT 0;
+                    IF COL_LENGTH(N'[dbo].[CheckPayouts]', N'CreatedByName') IS NULL
+                        ALTER TABLE [dbo].[CheckPayouts] ADD [CreatedByName] NVARCHAR(120) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[CheckPayouts]', N'CorrectionReason') IS NULL
+                        ALTER TABLE [dbo].[CheckPayouts] ADD [CorrectionReason] NVARCHAR(300) NOT NULL DEFAULT '';
+                END;
+                IF OBJECT_ID(N'[dbo].[ActivityLogs]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[ActivityLogs] (
+                        [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                        [StoreId] INT NULL,
+                        [UserId] INT NOT NULL DEFAULT 0,
+                        [UserName] NVARCHAR(120) NOT NULL DEFAULT '',
+                        [UserRole] NVARCHAR(40) NOT NULL DEFAULT '',
+                        [Section] NVARCHAR(80) NOT NULL DEFAULT '',
+                        [Action] NVARCHAR(40) NOT NULL DEFAULT '',
+                        [EntityType] NVARCHAR(100) NOT NULL DEFAULT '',
+                        [EntityId] INT NOT NULL DEFAULT 0,
+                        [Description] NVARCHAR(800) NOT NULL DEFAULT '',
+                        [IsSystem] BIT NOT NULL DEFAULT 0,
+                        [OccurredUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+                    );
+                    CREATE INDEX [IX_ActivityLogs_Store_OccurredUtc]
+                        ON [dbo].[ActivityLogs] ([StoreId], [OccurredUtc]);
+                    CREATE INDEX [IX_ActivityLogs_User_OccurredUtc]
+                        ON [dbo].[ActivityLogs] ([UserId], [OccurredUtc]);
+                END";
+            await correctionAndActivityCmd.ExecuteNonQueryAsync(ct);
         }
         finally
         {
@@ -363,6 +408,34 @@ public static class DbInitializer
             await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "ReconciledByUserId", "INTEGER NULL", ct);
             await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "ReconciledByName", "TEXT NOT NULL DEFAULT ''", ct);
             await EnsureSqliteColumnAsync(conn, "PosSalesSummaries", "ReconciledUtc", "TEXT NULL", ct);
+            await EnsureSqliteColumnAsync(conn, "CashOnHand", "CreatedByUserId", "INTEGER NOT NULL DEFAULT 0", ct);
+            await EnsureSqliteColumnAsync(conn, "CashOnHand", "CreatedByName", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "CashOnHand", "CorrectionReason", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "CheckPayouts", "CreatedByUserId", "INTEGER NOT NULL DEFAULT 0", ct);
+            await EnsureSqliteColumnAsync(conn, "CheckPayouts", "CreatedByName", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "CheckPayouts", "CorrectionReason", "TEXT NOT NULL DEFAULT ''", ct);
+
+            using var activityCmd = conn.CreateCommand();
+            activityCmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS ActivityLogs (
+                    Id INTEGER NOT NULL CONSTRAINT PK_ActivityLogs PRIMARY KEY AUTOINCREMENT,
+                    StoreId INTEGER NULL,
+                    UserId INTEGER NOT NULL DEFAULT 0,
+                    UserName TEXT NOT NULL DEFAULT '',
+                    UserRole TEXT NOT NULL DEFAULT '',
+                    Section TEXT NOT NULL DEFAULT '',
+                    Action TEXT NOT NULL DEFAULT '',
+                    EntityType TEXT NOT NULL DEFAULT '',
+                    EntityId INTEGER NOT NULL DEFAULT 0,
+                    Description TEXT NOT NULL DEFAULT '',
+                    IsSystem INTEGER NOT NULL DEFAULT 0,
+                    OccurredUtc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS IX_ActivityLogs_Store_OccurredUtc
+                    ON ActivityLogs (StoreId, OccurredUtc);
+                CREATE INDEX IF NOT EXISTS IX_ActivityLogs_User_OccurredUtc
+                    ON ActivityLogs (UserId, OccurredUtc);";
+            await activityCmd.ExecuteNonQueryAsync(ct);
         }
         finally
         {

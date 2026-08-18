@@ -5,7 +5,7 @@
 -- all required tables. Safe to re-run (uses IF NOT EXISTS).
 --
 -- INSTRUCTIONS:
--- 1. Create the database in Azure: HBStoreLedger_YourStoreName
+-- 1. Create the database on local SQL Server Express: HBStoreLedger_YourStoreName
 -- 2. Connect to it in SSMS
 -- 3. Replace 'YOUR STORE NAME' below with the actual store name
 -- 4. Run this entire script

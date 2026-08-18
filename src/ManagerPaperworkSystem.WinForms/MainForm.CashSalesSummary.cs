@@ -122,6 +122,8 @@ internal sealed partial class MainForm
         var variance = SectionTextBox("$0.00", readOnly: true, rightAlign: true);
         var saveReconciliation = WinTheme.Button("SAVE / UPDATE", true);
         var resetReconciliation = WinTheme.Button("RESET");
+        registerPayout.Name = "DemoCashSalesRegisterPayout";
+        payoutReason.Name = "DemoCashSalesPayoutReason";
         AddReconciliationField(reconcile, "EXPECTED CASH", expectedCash, 0);
         AddReconciliationField(reconcile, "SHIFT CASH DROP (AUTO)", cashDrop, 1);
         AddReconciliationField(reconcile, "REGISTER PAYOUT", registerPayout, 2);
@@ -255,9 +257,8 @@ internal sealed partial class MainForm
             saveReconciliation.Enabled = true;
             resetReconciliation.Enabled = true;
 
-            tenderGrid.DataSource = await db.PosSalesTenderLines.AsNoTracking()
+            var tenderLines = await db.PosSalesTenderLines.AsNoTracking()
                 .Where(line => line.PosSalesSummaryId == summaryId.Value)
-                .OrderByDescending(line => line.Amount)
                 .Select(line => new
                 {
                     Tender = line.TenderType,
@@ -265,6 +266,7 @@ internal sealed partial class MainForm
                     line.Amount
                 })
                 .ToListAsync();
+            tenderGrid.DataSource = tenderLines.OrderByDescending(line => line.Amount).ToList();
             FormatCurrencyColumns(tenderGrid, "Amount");
 
             hourlyGrid.DataSource = await db.PosSalesHourlyLines.AsNoTracking()
@@ -279,9 +281,8 @@ internal sealed partial class MainForm
                 .ToListAsync();
             FormatCurrencyColumns(hourlyGrid, "Amount");
 
-            departmentGrid.DataSource = await db.PosSalesDepartmentLines.AsNoTracking()
+            var departmentLines = await db.PosSalesDepartmentLines.AsNoTracking()
                 .Where(line => line.PosSalesSummaryId == summaryId.Value)
-                .OrderByDescending(line => line.Sales)
                 .Select(line => new
                 {
                     line.Department,
@@ -293,6 +294,7 @@ internal sealed partial class MainForm
                     SalesPercent = line.SalesPercent
                 })
                 .ToListAsync();
+            departmentGrid.DataSource = departmentLines.OrderByDescending(line => line.SalesAmount).ToList();
             FormatCurrencyColumns(departmentGrid, "SalesAmount", "Cost", "Profit");
             FormatPercentColumns(departmentGrid, "ProfitPercent", "SalesPercent");
 
@@ -641,6 +643,11 @@ internal sealed partial class MainForm
 
         autoSync.Click += async (_, _) =>
         {
+            if (DemoRuntime.IsEnabled)
+            {
+                ShowDemoIntegrationMessage("cash and sales summary portal synchronization");
+                return;
+            }
             var currentBusiness = CurrentLicensedBusiness();
             using var form = ActivatorUtilities.CreateInstance<PortalSyncSetupForm>(
                 _services,

@@ -1542,7 +1542,7 @@ CREATE TABLE [dbo].[BankStatementCheckImages] (
     private string GetApiBaseUrl()
     {
         if (!string.IsNullOrEmpty(_plaidApiBaseUrl)) return _plaidApiBaseUrl;
-        _plaidApiBaseUrl = "https://hbstoreledger-api-dwfdg2hygggqhma3.canadacentral-01.azurewebsites.net";
+        _plaidApiBaseUrl = "http://127.0.0.1:5000";
         return _plaidApiBaseUrl;
     }
 

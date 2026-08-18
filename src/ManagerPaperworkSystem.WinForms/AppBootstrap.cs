@@ -14,13 +14,17 @@ namespace ManagerPaperworkSystem.WinForms;
 
 internal static class AppBootstrap
 {
-    private static readonly string AppDataDirectory = Path.Combine(
+    private static readonly string ProductionAppDataDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Hisab Kitab");
     private static readonly byte[] StoreConnectionEntropy = Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-STORE-CONNECTIONS-V1");
 
-    public static readonly string ConnectionSettingsPath = Path.Combine(AppDataDirectory, "connection_settings.json");
-    public static readonly string LicenseFilePath = Path.Combine(AppDataDirectory, "license.json");
+    private static string AppDataDirectory => DemoRuntime.IsEnabled
+        ? DemoRuntime.AppDataDirectory
+        : ProductionAppDataDirectory;
+
+    public static string ConnectionSettingsPath => Path.Combine(AppDataDirectory, "connection_settings.json");
+    public static string LicenseFilePath => Path.Combine(AppDataDirectory, "license.json");
     public static string AppDataPath => AppDataDirectory;
 
     public static ServiceProvider BuildServices()
@@ -29,9 +33,14 @@ internal static class AppBootstrap
         SQLitePCL.Batteries_V2.Init();
 
         var services = new ServiceCollection();
-        var (connectionString, useSqlServer) = GetConnectionSettings();
+        var (connectionString, useSqlServer) = DemoRuntime.IsEnabled
+            ? ($"Data Source={DemoRuntime.DatabasePath}", false)
+            : GetConnectionSettings();
 
-        services.AddSingleton<IAppPaths, AppPaths>();
+        if (DemoRuntime.IsEnabled)
+            services.AddSingleton<IAppPaths>(new DemoAppPaths());
+        else
+            services.AddSingleton<IAppPaths, AppPaths>();
 
         if (useSqlServer && !string.IsNullOrWhiteSpace(connectionString))
         {
@@ -40,8 +49,10 @@ internal static class AppBootstrap
         }
         else
         {
-            var paths = new AppPaths();
-            var sqliteConnection = $"Data Source={paths.DatabasePath}";
+            var databasePath = DemoRuntime.IsEnabled
+                ? DemoRuntime.DatabasePath
+                : new AppPaths().DatabasePath;
+            var sqliteConnection = $"Data Source={databasePath}";
             services.AddPooledDbContextFactory<AppDbContext>(opts => opts.UseSqlite(sqliteConnection));
             services.AddDbContext<AppDbContext>(opts => opts.UseSqlite(sqliteConnection), ServiceLifetime.Transient);
             connectionString = sqliteConnection;
@@ -81,6 +92,8 @@ internal static class AppBootstrap
         }
 
         using var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        if (DemoRuntime.IsEnabled)
+            await db.Database.EnsureCreatedAsync();
         await DbInitializer.InitializeAsync(db);
     }
 
