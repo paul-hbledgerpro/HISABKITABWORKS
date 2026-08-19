@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Data.Common;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.Net.Mail;
 using System.Text;
@@ -32,6 +33,7 @@ internal sealed partial class MainForm : Form
     private readonly StoreConnectionService _storeConnections;
     private readonly PurchaseService _purchaseService;
     private readonly InvoiceEmailSyncService _invoiceEmailSyncService;
+    private readonly CloudInvoiceInboxService _cloudInvoiceInboxService;
     private readonly InvoiceImportService _invoiceImportService;
     private readonly PosReportImportService _posImporter;
     private readonly CheckPrintService _checkPrintService;
@@ -42,6 +44,8 @@ internal sealed partial class MainForm : Form
     private readonly Dictionary<string, Button> _navButtons = new();
     private readonly SemaphoreSlim _bankDeliveryGate = new(1, 1);
     private readonly SemaphoreSlim _invoiceEmailSyncGate = new(1, 1);
+    private readonly Dictionary<string, DateTime> _cloudInvoiceLastSyncUtc =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Windows.Forms.Timer _monthlyDeliveryTimer = new() { Interval = 60 * 60 * 1000 };
     private readonly System.Windows.Forms.Timer _invoiceEmailSyncTimer = new() { Interval = 4 * 60 * 60 * 1000 };
     private readonly int _loginStoreConnectionId;
@@ -50,6 +54,8 @@ internal sealed partial class MainForm : Form
     private bool _loadingStores;
     private string _currentModule = "Dashboard";
     private bool _syncingShiftDrops;
+    private bool _developerSettingsUnlocked;
+    private readonly List<Control> _developerOnlyControls = [];
     private Func<Task>? _pendingModuleActivation;
 
     public MainForm(IServiceProvider services, IDbContextFactory<AppDbContext> dbFactory, ISettingsService settingsService, IReportService reportService, IAppPaths paths, SessionState session, ActiveConnectionInfo connectionInfo, InvoiceImportService invoiceImportService, PosReportImportService posImporter, CheckPrintService checkPrintService)
@@ -60,6 +66,10 @@ internal sealed partial class MainForm : Form
         _reportService = reportService;
         _paths = paths;
         _session = session;
+        ActivityAuditContext.SetUser(
+            session.UserId,
+            session.DisplayName,
+            session.Role.ToString());
         _invoiceImportService = invoiceImportService;
         _posImporter = posImporter;
         _checkPrintService = checkPrintService;
@@ -72,16 +82,22 @@ internal sealed partial class MainForm : Form
         };
         _purchaseService = new PurchaseService(new StoreDbContextFactory(_storeConnections), _paths);
         _invoiceEmailSyncService = new InvoiceEmailSyncService(_paths, _invoiceImportService, _purchaseService);
+        _cloudInvoiceInboxService = new CloudInvoiceInboxService(_paths, _invoiceEmailSyncService);
         ReloadLicensedStoreConnections();
         if (_reportService is ReportService concreteReportService)
             concreteReportService.SetStoreConnectionService(_storeConnections);
 
         WinTheme.Apply(this);
-        Text = "HISAB KITAB";
+        Text = $"HISAB KITAB - v{AppUpdateStartupService.CurrentVersion}";
+        if (DemoRuntime.IsEnabled)
+            Text += " - CLIENT DEMO (DUMMY DATA)";
         if (LicenseRuntime.IsReadOnly)
             Text += " - READ-ONLY (SUBSCRIPTION EXPIRED)";
+        AutoScaleMode = AutoScaleMode.Dpi;
         WindowState = FormWindowState.Maximized;
-        MinimumSize = new Size(1280, 760);
+        MinimumSize = new Size(1024, 640);
+        KeyPreview = true;
+        KeyDown += MainFormDeveloperShortcutKeyDown;
 
         Controls.Add(BuildRoot());
         _monthlyDeliveryTimer.Tick += async (_, _) => await BeginMonthlyBankStatementDeliveryAsync();
@@ -89,9 +105,38 @@ internal sealed partial class MainForm : Form
         {
             await LoadStoresAsync();
             ShowModule("Dashboard");
+            if (DemoRuntime.IsEnabled)
+            {
+                if (!string.IsNullOrWhiteSpace(DemoRuntime.PresentationDirectory))
+                    BeginInvoke(new Action(async () => await PlayDetailedDemoPresentationAsync(DemoRuntime.PresentationDirectory)));
+                else if (!string.IsNullOrWhiteSpace(DemoRuntime.CaptureDirectory))
+                    BeginInvoke(new Action(async () => await CaptureDemoTourAsync(DemoRuntime.CaptureDirectory)));
+                return;
+            }
             _ = BeginMonthlyReportDeliveryAsync();
             _ = BeginMonthlyBankStatementDeliveryAsync();
             _ = BeginDuePosPortalSyncAsync();
+            try
+            {
+                DatabaseCloudBackupService.EnsureDailyTask();
+            }
+            catch (Exception exception)
+            {
+                DatabaseCloudBackupService.WriteLog("", false, exception.Message);
+            }
+            _ = BeginDueDatabaseCloudBackupAsync();
+            try
+            {
+                InvoiceEmailBackgroundSyncService.EnsureTask(_invoiceEmailSyncService);
+            }
+            catch (Exception exception)
+            {
+                InvoiceEmailBackgroundSyncService.WriteLog(
+                    "Scheduler",
+                    CurrentInvoiceEmailStoreKey(),
+                    false,
+                    exception.Message);
+            }
             _ = BeginDueInvoiceEmailSyncAsync();
             _monthlyDeliveryTimer.Start();
             _invoiceEmailSyncTimer.Start();
@@ -103,36 +148,137 @@ internal sealed partial class MainForm : Form
             _monthlyDeliveryTimer.Dispose();
             _invoiceEmailSyncTimer.Stop();
             _invoiceEmailSyncTimer.Dispose();
+            ActivityAuditContext.Clear();
         };
     }
 
     private string CurrentInvoiceEmailStoreKey()
         => $"{LicenseRuntime.ActiveStoreGuid}|{_currentConnectionStoreId}";
 
+    private LicensedBusinessConnection? CurrentLicensedBusiness()
+    {
+        var businesses = LicensedBusinessService.Load();
+        if (businesses.Count == 0)
+            return null;
+
+        var databaseName = "";
+        try
+        {
+            databaseName = new SqlConnectionStringBuilder(CurrentStoreConnectionString()).InitialCatalog;
+        }
+        catch
+        {
+            // Fall back to the signed active Store GUID below.
+        }
+
+        return businesses.FirstOrDefault(business =>
+                   !string.IsNullOrWhiteSpace(databaseName)
+                   && string.Equals(business.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase))
+               ?? businesses.FirstOrDefault(business =>
+                   string.Equals(
+                       business.StoreGuid,
+                       LicenseRuntime.ActiveStoreGuid,
+                       StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasCloudInvoiceInbox(LicensedBusinessConnection? business)
+        => business is not null
+           && !string.IsNullOrWhiteSpace(business.InvoiceInboxApiUrl)
+           && !string.IsNullOrWhiteSpace(business.InvoiceInboxAddress)
+           && !string.IsNullOrWhiteSpace(business.InvoiceInboxApiToken);
+
     private async Task BeginDueInvoiceEmailSyncAsync()
     {
         var storeKey = CurrentInvoiceEmailStoreKey();
-        if (!_invoiceEmailSyncService.IsDue(storeKey, TimeSpan.FromHours(4))
+        var business = CurrentLicensedBusiness();
+        var cloudConfigured = HasCloudInvoiceInbox(business);
+        var cloudDue = !_cloudInvoiceLastSyncUtc.TryGetValue(storeKey, out var lastCloudSync)
+                       || DateTime.UtcNow - lastCloudSync >= TimeSpan.FromHours(4);
+        var directEmailDue = _invoiceEmailSyncService.IsDue(
+            storeKey,
+            TimeSpan.FromHours(4));
+        if ((!cloudConfigured || !cloudDue) && !directEmailDue
             || !await _invoiceEmailSyncGate.WaitAsync(0))
             return;
 
         try
         {
-            var result = await _invoiceEmailSyncService.SyncAsync(
-                storeKey,
-                _currentStoreId,
-                _session.UserId,
-                _session.DisplayName);
-            if (!IsDisposed && (result.InvoicesImported > 0 || result.NeedsReview > 0))
+            var statusMessages = new List<string>();
+            if (cloudConfigured && cloudDue && business is not null)
             {
-                BeginInvoke(() =>
-                    _status.Text = $"Invoice email sync: {result.InvoicesImported} imported; {result.NeedsReview} need review.");
+                try
+                {
+                    var result = await _cloudInvoiceInboxService.SyncAsync(
+                        business,
+                        storeKey,
+                        _currentStoreId,
+                        _session.UserId,
+                        _session.DisplayName);
+                    _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
+                    var message =
+                        $"Protected invoice inbox: {result.InvoicesImported} imported; " +
+                        $"{result.NeedsReview} need review.";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Protected cloud inbox",
+                        storeKey,
+                        true,
+                        message);
+                    if (result.InvoicesImported > 0 || result.NeedsReview > 0)
+                        statusMessages.Add(message);
+                }
+                catch (Exception exception)
+                {
+                    var message =
+                        $"Protected invoice inbox failed: " +
+                        $"{AppBootstrap.RedactSensitiveText(exception.Message)}";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Protected cloud inbox",
+                        storeKey,
+                        false,
+                        message);
+                    statusMessages.Add(message);
+                }
             }
-        }
-        catch
-        {
-            // Automatic invoice sync is non-blocking and retries at the next interval.
-            // Manual Sync from Purchases displays the actionable error to the client.
+
+            if (directEmailDue)
+            {
+                try
+                {
+                    var result = await _invoiceEmailSyncService.SyncAsync(
+                        storeKey,
+                        _currentStoreId,
+                        _session.UserId,
+                        _session.DisplayName);
+                    var message =
+                        $"Invoice email sync: {result.InvoicesImported} imported; " +
+                        $"{result.NeedsReview} need review.";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Gmail/IMAP",
+                        storeKey,
+                        true,
+                        message);
+                    if (result.InvoicesImported > 0 || result.NeedsReview > 0)
+                        statusMessages.Add(message);
+                }
+                catch (Exception exception)
+                {
+                    var message =
+                        $"Invoice email sync failed: " +
+                        $"{AppBootstrap.RedactSensitiveText(exception.Message)}";
+                    InvoiceEmailBackgroundSyncService.WriteLog(
+                        "Gmail/IMAP",
+                        storeKey,
+                        false,
+                        message);
+                    statusMessages.Add(message);
+                }
+            }
+
+            if (statusMessages.Count > 0 && !IsDisposed)
+            {
+                var statusMessage = string.Join("  ", statusMessages);
+                BeginInvoke(() => _status.Text = statusMessage);
+            }
         }
         finally
         {
@@ -157,6 +303,21 @@ internal sealed partial class MainForm : Form
         {
             var results = await PortalSyncService.RunDueAsync(_paths, force: false, visibleChrome: false);
             var message = results.LastOrDefault()?.Message;
+            if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
+                BeginInvoke(() => _status.Text = message);
+        }
+        catch
+        {
+            // The scheduled task and the next app startup retry automatically.
+        }
+    }
+
+    private async Task BeginDueDatabaseCloudBackupAsync()
+    {
+        try
+        {
+            var results = await DatabaseCloudBackupService.RunDueAsync(force: false);
+            var message = results.LastOrDefault(result => result.Uploaded)?.Message;
             if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
                 BeginInvoke(() => _status.Text = message);
         }
@@ -435,6 +596,70 @@ internal sealed partial class MainForm : Form
 
     private AppDbContext CreateDb() => _storeConnections.CreateDbContext();
 
+    private void MainFormDeveloperShortcutKeyDown(
+        object? sender,
+        KeyEventArgs eventArgs)
+    {
+        if (!eventArgs.Control || eventArgs.KeyCode != Keys.D)
+            return;
+
+        eventArgs.Handled = true;
+        eventArgs.SuppressKeyPress = true;
+        UnlockDeveloperSettings();
+    }
+
+    private void UnlockDeveloperSettings()
+    {
+        if (_developerSettingsUnlocked)
+        {
+            _status.Text =
+                "Developer automation settings are already unlocked for this application session.";
+            return;
+        }
+
+        var passwordState = DeveloperAccessService.GetPasswordState();
+        if (passwordState == DeveloperPasswordState.Unreadable)
+        {
+            MessageBox.Show(
+                this,
+                "The protected developer password cannot be read by this Windows account. " +
+                "The automation settings remain locked. Ask the developer to repair the protected developer access file.",
+                "Developer Settings Locked",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var access = new DeveloperAccessForm(passwordState);
+        if (access.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        _developerSettingsUnlocked = true;
+        ApplyDeveloperControlVisibility();
+        _status.Text =
+            "Developer automation settings unlocked until HISAB KITAB is closed.";
+    }
+
+    private T RegisterDeveloperOnly<T>(T control)
+        where T : Control
+    {
+        control.Visible = _developerSettingsUnlocked;
+        control.Enabled = _developerSettingsUnlocked;
+        _developerOnlyControls.Add(control);
+        return control;
+    }
+
+    private void ApplyDeveloperControlVisibility()
+    {
+        foreach (var control in _developerOnlyControls
+                     .Where(control => !control.IsDisposed))
+        {
+            control.Visible = _developerSettingsUnlocked;
+            control.Enabled = _developerSettingsUnlocked;
+            control.Parent?.PerformLayout();
+        }
+    }
+
     private Control BuildRoot()
     {
         var root = new TableLayoutPanel
@@ -485,27 +710,31 @@ internal sealed partial class MainForm : Form
         };
         var file = new ToolStripMenuItem("File") { ForeColor = Color.White };
         file.DropDownItems.Add(MenuItem("Reports (PDF)...", (_, _) => ShowModule("Reports")));
-        file.DropDownItems.Add(MenuItem("Open Database Folder", (_, _) => Process.Start("explorer.exe", _paths.AppDataDirectory)));
-        file.DropDownItems.Add(MenuItem("Copy Database Path", (_, _) => Clipboard.SetText(_paths.DatabasePath)));
+        if (DemoRuntime.IsEnabled)
+            file.DropDownItems.Add(MenuItem("Reset Demo Data...", async (_, _) => await ResetDemoDataAsync()));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MenuItem("Logout", (_, _) => Close()));
         file.DropDownItems.Add(MenuItem("Exit", (_, _) => Close()));
 
         var settings = new ToolStripMenuItem("Settings") { ForeColor = Color.White };
-        settings.DropDownItems.Add(MenuItem("License / Renewal...", (_, _) => OpenDeviceActivation()));
+        var licenseItem = MenuItem("License / Renewal...", (_, _) => OpenDeviceActivation());
+        licenseItem.Enabled = !DemoRuntime.IsEnabled;
+        settings.DropDownItems.Add(licenseItem);
         settings.DropDownItems.Add(new ToolStripSeparator());
         settings.DropDownItems.Add(MenuItem("Change Password...", (_, _) => OpenForm<ChangePasswordForm>()));
         settings.DropDownItems.Add(MenuItem("User Accounts...", (_, _) => OpenAdminForm<UserAccountsForm>()));
-        settings.DropDownItems.Add(MenuItem("Database Connection...", (_, _) => OpenAdminForm<DatabaseSettingsForm>()));
 
         var help = new ToolStripMenuItem("Help") { ForeColor = Color.White };
-        help.DropDownItems.Add(MenuItem("Check for Updates...", async (_, _) => await AppUpdateStartupService.CheckManuallyAsync(this)));
+        var updateItem = MenuItem("Check for Updates...", async (_, _) => await AppUpdateStartupService.CheckManuallyAsync(this));
+        updateItem.Enabled = !DemoRuntime.IsEnabled;
+        help.DropDownItems.Add(updateItem);
         help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add(MenuItem(
             $"About HISAB KITAB {AppUpdateStartupService.CurrentVersion}",
             (_, _) => MessageBox.Show(
                 this,
-                $"HISAB KITAB WORKS\nVersion {AppUpdateStartupService.CurrentVersion}",
+                $"HISAB KITAB WORKS\nVersion {AppUpdateStartupService.CurrentVersion}" +
+                (DemoRuntime.IsEnabled ? "\n\nCLIENT DEMONSTRATION\nAll names, transactions, employees and amounts are fictional." : ""),
                 "About HISAB KITAB",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information)));
@@ -523,6 +752,17 @@ internal sealed partial class MainForm : Form
         return item;
     }
 
+    private void ShowDemoIntegrationMessage(string feature)
+    {
+        MessageBox.Show(
+            this,
+            $"The {feature} screen is included in the licensed client application.\n\n" +
+            "It is intentionally disconnected in this demonstration so fictional demo activity cannot contact a real mailbox, POS portal, bank, or cloud service.",
+            "Demo Safety",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
     private Control BuildSidebarHeader()
     {
         var panel = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.BlueDark, Padding = new Padding(12) };
@@ -537,6 +777,20 @@ internal sealed partial class MainForm : Form
     {
         var panel = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, Padding = new Padding(18, 10, 18, 10) };
         panel.Paint += (_, e) => WinTheme.PaintGradient(e, panel.ClientRectangle);
+
+        if (DemoRuntime.IsEnabled)
+        {
+            panel.Controls.Add(new Label
+            {
+                Text = "CLIENT DEMO  •  FICTIONAL DATA  •  EXTERNAL CONNECTIONS DISABLED",
+                Dock = DockStyle.Left,
+                Width = 670,
+                ForeColor = Color.White,
+                BackColor = Color.Transparent,
+                Font = WinTheme.BoldFont(12),
+                TextAlign = ContentAlignment.MiddleLeft
+            });
+        }
 
         var storePanel = new FlowLayoutPanel
         {
@@ -585,9 +839,9 @@ internal sealed partial class MainForm : Form
         AddNav("Profit & Loss", "Profit & Loss", false);
         AddNav("Reports", "Reports", false);
         AddSection("ADMIN");
+        AddNav("Activity", "Activity", true);
         AddNav("Stores", "Stores", true);
         AddNav("User Accounts", "User Accounts", true);
-        AddNav("Database Settings", "Database Settings", true);
 
         return panel;
     }
@@ -628,7 +882,6 @@ internal sealed partial class MainForm : Form
             }
             if (module == "Stores") OpenAdminForm<StoreManagerForm>();
             else if (module == "User Accounts") OpenAdminForm<UserAccountsForm>();
-            else if (module == "Database Settings") OpenAdminForm<DatabaseSettingsForm>();
             else ShowModule(module);
         };
         _navButtons[module] = button;
@@ -653,9 +906,9 @@ internal sealed partial class MainForm : Form
             "Scheduling" => "\uE787",
             "Profit & Loss" => "\uE9D9",
             "Reports" => "\uE749",
+            "Activity" => "\uE81C",
             "Stores" => "\uE719",
             "User Accounts" => "\uE77B",
-            "Database Settings" => "\uE950",
             _ => "\uE10F"
         };
 
@@ -672,6 +925,7 @@ internal sealed partial class MainForm : Form
         }
 
         _content.SuspendLayout();
+        _developerOnlyControls.Clear();
         _content.Controls.Clear();
         try
         {
@@ -692,8 +946,10 @@ internal sealed partial class MainForm : Form
                 "Scheduling" => BuildScheduling(),
                 "Profit & Loss" => BuildProfitLoss(),
                 "Reports" => BuildReports(),
+                "Activity" => BuildActivityLog(),
                 _ => BuildDashboard()
             };
+            ConfigureResponsiveModuleActionBars(control);
             ApplyLightModuleTheme(control);
             if (LicenseRuntime.IsReadOnly)
                 ApplyReadOnlyMode(control);
@@ -799,12 +1055,23 @@ internal sealed partial class MainForm : Form
         try
         {
             using var db = _dbFactory.CreateDbContext();
-            var stores = await db.Stores.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync();
+            var businesses = LicensedBusinessService.Load();
+            var stores = (await db.Stores.AsNoTracking()
+                    .Where(s => s.IsActive)
+                    .ToListAsync())
+                .OrderBy(store =>
+                    StoreDirectoryPreferencesStore.OrderOf(store.Name, businesses))
+                .ThenBy(store => store.Name)
+                .ToList();
             _storeCombo.DataSource = stores;
             _storeCombo.DisplayMember = nameof(Store.Name);
             _storeCombo.ValueMember = nameof(Store.Id);
+            var preferredBusiness =
+                StoreDirectoryPreferencesStore.GetDefaultBusiness(businesses);
             var selected = stores.FirstOrDefault(s => s.Id == _currentConnectionStoreId)
                 ?? stores.FirstOrDefault(s => StoreNamesMatch(s.Name, _session.StoreName))
+                ?? stores.FirstOrDefault(s =>
+                    StoreNamesMatch(s.Name, preferredBusiness?.BusinessName))
                 ?? stores.FirstOrDefault();
             if (selected is not null)
             {
@@ -832,7 +1099,6 @@ internal sealed partial class MainForm : Form
         {
             var settings = await _settingsService.GetSettingsAsync();
             settings.LastStoreId = storeId;
-            settings.DefaultStoreId = storeId;
             settings.StoreName = storeName;
             if (!string.IsNullOrWhiteSpace(storeAddress))
                 settings.StoreAddress = storeAddress;
@@ -853,7 +1119,8 @@ internal sealed partial class MainForm : Form
     }
 
     private string SessionStatusText(string? storeName = null)
-        => $"Store: {storeName ?? _session.StoreName}    |    " +
+        => (DemoRuntime.IsEnabled ? "DEMO DATA    |    " : "") +
+           $"Store: {storeName ?? _session.StoreName}    |    " +
            $"User: {_session.DisplayName} ({_session.Role})    |    " +
            $"Version: {AppUpdateStartupService.CurrentVersion}";
 
@@ -877,8 +1144,132 @@ internal sealed partial class MainForm : Form
         await SaveSelectedStorePreferenceAsync(store.Id, store.Name, store.Address);
 
         ShowModule(_currentModule);
-        _ = BeginMonthlyBankStatementDeliveryAsync();
-        _ = BeginDueInvoiceEmailSyncAsync();
+        if (!DemoRuntime.IsEnabled)
+        {
+            _ = BeginMonthlyBankStatementDeliveryAsync();
+            _ = BeginDueInvoiceEmailSyncAsync();
+        }
+    }
+
+    private async Task ResetDemoDataAsync()
+    {
+        if (!DemoRuntime.IsEnabled)
+            return;
+        if (MessageBox.Show(
+                this,
+                "Reset every fictional transaction, employee, schedule and report to the original demonstration data?",
+                "Reset HISAB KITAB Demo",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+
+        UseWaitCursor = true;
+        Enabled = false;
+        try
+        {
+            await DemoDataService.ResetAsync(_dbFactory);
+            DemoDataService.ConfigureDemoSession(_services);
+            _currentConnectionStoreId = _session.LastStoreId;
+            _storeConnections.CurrentStoreId = _session.LastStoreId;
+            await LoadStoresAsync();
+            ShowModule("Dashboard");
+            MessageBox.Show(
+                this,
+                "The client demo has been restored with fresh fictional data.",
+                "Demo Ready",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(
+                this,
+                AppBootstrap.RedactSensitiveText(exception.Message),
+                "Demo Reset Failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            Enabled = true;
+            UseWaitCursor = false;
+        }
+    }
+
+    private async Task CaptureDemoTourAsync(string outputDirectory)
+    {
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            WindowState = FormWindowState.Normal;
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(20, 20, 1600, 900);
+            BringToFront();
+            Activate();
+            await Task.Delay(700);
+
+            var scenes = new (string FileName, string Module)[]
+            {
+                ("01-dashboard.png", "Dashboard"),
+                ("03-cash-sales-summary.png", "Cash & Sales Summary"),
+                ("04-shift-cash-drop.png", "Shift Cash Drop"),
+                ("05-cash-on-hand.png", "Cash On Hand"),
+                ("06-check-payout.png", "Check Payout"),
+                ("07-operations-hub.png", "Operations Hub"),
+                ("08-vendors-purposes.png", "Vendors & Purposes"),
+                ("09-purchases.png", "Purchases"),
+                ("10-bank-statement.png", "Bank Statement"),
+                ("11-product-costs.png", "Product Costs"),
+                ("12-price-alerts.png", "Price Alerts"),
+                ("13-scheduling.png", "Scheduling"),
+                ("14-payroll.png", "Payroll"),
+                ("15-profit-loss.png", "Profit & Loss"),
+                ("16-reports.png", "Reports")
+            };
+
+            await CaptureCurrentViewAsync(Path.Combine(outputDirectory, "01-dashboard.png"));
+            if (_storeCombo.Items.Count > 1)
+            {
+                _storeCombo.SelectedIndex = 1;
+                await Task.Delay(1700);
+                ShowModule("Dashboard");
+                await CaptureCurrentViewAsync(Path.Combine(outputDirectory, "02-multiple-stores.png"));
+                _storeCombo.SelectedIndex = 0;
+                await Task.Delay(1500);
+            }
+
+            foreach (var scene in scenes.Skip(1))
+            {
+                ShowModule(scene.Module);
+                await CaptureCurrentViewAsync(Path.Combine(outputDirectory, scene.FileName));
+            }
+
+            File.WriteAllText(
+                Path.Combine(outputDirectory, "capture-complete.txt"),
+                DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            Environment.ExitCode = 0;
+        }
+        catch (Exception exception)
+        {
+            File.WriteAllText(Path.Combine(outputDirectory, "capture-error.txt"), exception.ToString());
+            Environment.ExitCode = 1;
+        }
+        finally
+        {
+            Close();
+        }
+    }
+
+    private async Task CaptureCurrentViewAsync(string path)
+    {
+        await Task.Delay(1900);
+        PerformLayout();
+        _content.PerformLayout();
+        Application.DoEvents();
+        await Task.Delay(250);
+        using var bitmap = new Bitmap(ClientSize.Width, ClientSize.Height, PixelFormat.Format24bppRgb);
+        DrawToBitmap(bitmap, new Rectangle(Point.Empty, ClientSize));
+        bitmap.Save(path, ImageFormat.Png);
     }
 
     private async Task EnsureCurrentStoreDatabaseReadyAsync(string businessName)
@@ -897,11 +1288,7 @@ internal sealed partial class MainForm : Form
     private async Task<int> ResolveDataStoreIdAsync(string businessName)
     {
         using var db = CreateDb();
-        var stores = await db.Stores.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Id).ToListAsync();
-        var match = stores.FirstOrDefault(x => StoreNamesMatch(x.Name, businessName)) ?? stores.FirstOrDefault();
-        if (match is null)
-            throw new InvalidOperationException($"The database for '{businessName}' does not contain an active store record.");
-        return match.Id;
+        return await StoreDataIdentityResolver.ResolveAsync(db, businessName);
     }
 
     private Control BuildModuleError(string module, Exception ex)
@@ -1271,6 +1658,102 @@ internal sealed partial class MainForm : Form
         return root;
     }
 
+    private static void ConfigureResponsiveModuleActionBars(Control root)
+    {
+        foreach (Control child in root.Controls)
+        {
+            if (child is FlowLayoutPanel panel
+                && panel.FlowDirection is FlowDirection.LeftToRight or FlowDirection.RightToLeft
+                && panel.Controls.OfType<Button>().Any())
+            {
+                ConfigureResponsiveActionBar(panel);
+            }
+
+            ConfigureResponsiveModuleActionBars(child);
+        }
+    }
+
+    private static void ConfigureResponsiveActionBar(FlowLayoutPanel panel)
+    {
+        panel.WrapContents = true;
+        panel.AutoScroll = true;
+
+        if (panel.Parent is not TableLayoutPanel table)
+            return;
+
+        var position = table.GetPositionFromControl(panel);
+        if (position.Row < 0 || position.Row >= table.RowStyles.Count)
+            return;
+
+        var rowStyle = table.RowStyles[position.Row];
+        if (rowStyle.SizeType != SizeType.Absolute)
+            return;
+
+        var minimumHeight = Math.Clamp((int)Math.Ceiling(rowStyle.Height), 64, 82);
+        var adjusting = false;
+
+        void AdjustActionRow()
+        {
+            if (adjusting || panel.IsDisposed || table.IsDisposed)
+                return;
+
+            var availableWidth = panel.ClientSize.Width - panel.Padding.Horizontal;
+            if (availableWidth <= 0)
+                return;
+
+            adjusting = true;
+            try
+            {
+                var desiredHeight = panel.Padding.Vertical;
+                var currentRowWidth = 0;
+                var currentRowHeight = 0;
+
+                foreach (Control control in panel.Controls)
+                {
+                    if (!control.Visible)
+                        continue;
+
+                    var controlWidth = Math.Min(
+                        availableWidth,
+                        Math.Max(control.Width, control.MinimumSize.Width) + control.Margin.Horizontal);
+                    var controlHeight =
+                        Math.Max(control.Height, control.MinimumSize.Height) + control.Margin.Vertical;
+
+                    if (currentRowWidth > 0 && currentRowWidth + controlWidth > availableWidth)
+                    {
+                        desiredHeight += currentRowHeight;
+                        currentRowWidth = 0;
+                        currentRowHeight = 0;
+                    }
+
+                    currentRowWidth += controlWidth;
+                    currentRowHeight = Math.Max(currentRowHeight, controlHeight);
+                }
+
+                desiredHeight += currentRowHeight;
+                desiredHeight = Math.Max(minimumHeight, desiredHeight);
+
+                var maximumHeight = Math.Max(
+                    minimumHeight,
+                    Math.Min(220, Math.Max(minimumHeight, table.ClientSize.Height / 3)));
+                var targetHeight = Math.Min(desiredHeight, maximumHeight);
+
+                if (Math.Abs(rowStyle.Height - targetHeight) >= 1f)
+                    rowStyle.Height = targetHeight;
+            }
+            finally
+            {
+                adjusting = false;
+            }
+        }
+
+        panel.SizeChanged += (_, _) => AdjustActionRow();
+        panel.ControlAdded += (_, _) => AdjustActionRow();
+        panel.ControlRemoved += (_, _) => AdjustActionRow();
+        panel.VisibleChanged += (_, _) => AdjustActionRow();
+        AdjustActionRow();
+    }
+
     private static TableLayoutPanel SectionCard(string title, int rows)
     {
         var card = WinTheme.BorderedPanel(14);
@@ -1497,7 +1980,7 @@ internal sealed partial class MainForm : Form
 
     private Control BuildShiftCashDrop()
     {
-        var root = MockSectionPage(315, 72);
+        var root = MockSectionPage(315, 118);
         var formShell = WinTheme.BorderedPanel(10);
         formShell.Dock = DockStyle.Fill;
         formShell.Margin = new Padding(4, 6, 4, 6);
@@ -1529,6 +2012,9 @@ internal sealed partial class MainForm : Form
         var payout = SectionTextBox("0", rightAlign: true);
         var reason = SectionTextBox();
         var posReport = SectionTextBox("Upload using buttons below", readOnly: true);
+        drop.Name = "DemoShiftCashDrop";
+        payout.Name = "DemoShiftRegisterPayout";
+        reason.Name = "DemoShiftPayoutReason";
         var managerEntryMode = _session.Role == UserRole.Manager;
         date.Enabled = !managerEntryMode;
         employee.ReadOnly = managerEntryMode;
@@ -1567,10 +2053,13 @@ internal sealed partial class MainForm : Form
         AddMockField(cashHandling, "Register Payout", payout, 0, 1, 118);
         AddMockField(cashHandling, "Payout Reason", reason, 0, 2, 118);
 
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 6) };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = true, AutoScroll = true, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 6) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
         var suppressShiftSelectionLoad = false;
+        int? loadedShiftEntryId = null;
+        Button? saveDropButton = null;
+        Button? addEntryButton = null;
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Shift cash drop records for selected store"), 0, 3);
         var grossBox = (TextBox)((TableLayoutPanel)paymentSummary.GetControlFromPosition(0, 0)!).GetControlFromPosition(1, 0)!;
@@ -1594,20 +2083,54 @@ internal sealed partial class MainForm : Form
             varianceBox.Text = varianceValue.ToString("C2");
             varianceBox.ForeColor = varianceValue > 0 ? WinTheme.Green : varianceValue < 0 ? WinTheme.Red : WinTheme.Text;
         }
+        void updateEntryActionState()
+        {
+            var updatingExistingRow = loadedShiftEntryId.HasValue;
+            if (saveDropButton is not null)
+            {
+                saveDropButton.Enabled = updatingExistingRow;
+                saveDropButton.Text = updatingExistingRow
+                    ? "Save / Update Cash Drop"
+                    : "Select Auto-Synced Row";
+            }
+
+            if (addEntryButton is not null)
+                addEntryButton.Enabled = !updatingExistingRow;
+        }
         foreach (var box in new[] { cash, card, tax, net, drop, payout })
             box.TextChanged += (_, _) => recalc();
         void refresh()
         {
             using var db = CreateDb();
-            grid.DataSource = db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
+            var rows = db.ShiftLogs.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId)
+                .ToList();
+            var latestCorrections = rows
+                .Where(item => item.IsCorrection && item.CorrectsId.HasValue)
+                .GroupBy(item => item.CorrectsId!.Value)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderByDescending(item => item.CreatedUtc).First().Id);
+            grid.DataSource = rows
+                .OrderByDescending(x => x.Date)
+                .ThenBy(x => NumericBatchOrder(x.ShiftNo))
+                .ThenBy(x => x.CreatedUtc)
                 .Select(x => new
                 {
                     x.Id,
                     x.Date,
-                    Shift = x.ShiftNo,
+                    Batch = x.ShiftNo,
                     x.Employee,
                     Source = x.PosReportKey != "" ? "Automatic Z Report" :
+                        x.IsCorrection ? "Correction" :
                         x.PosSalesSummaryId != null ? "Daily POS Summary" : "Manual",
+                    Status = x.IsCorrection
+                        ? latestCorrections.TryGetValue(x.CorrectsId ?? 0, out var correctionId) && correctionId == x.Id
+                            ? "Effective Correction"
+                            : "Superseded Correction"
+                        : latestCorrections.ContainsKey(x.Id)
+                            ? "Original - Superseded"
+                            : "Effective",
                     Cash = x.CashTotal,
                     Card = x.CardTotal,
                     Gross = x.GrossSales,
@@ -1616,7 +2139,11 @@ internal sealed partial class MainForm : Form
                     Drop = x.CashDropReceived,
                     Payout = x.RegisterPayout,
                     x.PayoutReason,
-                    x.Variance
+                    x.Variance,
+                    Corrects = x.CorrectsId,
+                    x.CorrectionReason,
+                    EnteredBy = x.CreatedByName,
+                    EnteredUtc = x.CreatedUtc
                 })
                 .ToList();
             HideId(grid);
@@ -1632,6 +2159,11 @@ internal sealed partial class MainForm : Form
         };
         void clearImported()
         {
+            loadedShiftEntryId = null;
+            suppressShiftSelectionLoad = true;
+            grid.CurrentCell = null;
+            grid.ClearSelection();
+            suppressShiftSelectionLoad = false;
             date.Value = DateTime.Today;
             employee.Clear();
             shift.Clear();
@@ -1641,12 +2173,13 @@ internal sealed partial class MainForm : Form
             tax.Clear();
             posReport.Text = "Upload using buttons below";
             posReport.ForeColor = WinTheme.Text;
-            grid.ClearSelection();
+            updateEntryActionState();
             drop.Focus();
             drop.SelectAll();
         }
         void clearAllShiftFields()
         {
+            loadedShiftEntryId = null;
             suppressShiftSelectionLoad = true;
             try
             {
@@ -1669,6 +2202,7 @@ internal sealed partial class MainForm : Form
             {
                 suppressShiftSelectionLoad = false;
             }
+            updateEntryActionState();
             if (managerEntryMode)
                 drop.Focus();
             else
@@ -1707,13 +2241,8 @@ internal sealed partial class MainForm : Form
             refresh();
             clearAllShiftFields();
         }
-        async Task updateSelectedAsync()
+        async Task addCorrectionAsync()
         {
-            if (!_session.IsAdmin)
-            {
-                MessageBox.Show(this, "Only Owner/Admin accounts can update shift cash drop entries.", "Access Restricted", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
             var id = SelectedId(grid);
             if (id is null)
             {
@@ -1722,14 +2251,25 @@ internal sealed partial class MainForm : Form
             }
 
             using var db = CreateDb();
-            var entry = await db.ShiftLogs.FindAsync(id.Value);
-            if (entry is null) return;
+            var selected = await db.ShiftLogs.AsNoTracking()
+                .FirstOrDefaultAsync(item => item.Id == id.Value && item.StoreId == _currentStoreId);
+            if (selected is null) return;
+            var originalId = selected.IsCorrection && selected.CorrectsId.HasValue
+                ? selected.CorrectsId.Value
+                : selected.Id;
+            var original = await db.ShiftLogs.AsNoTracking()
+                .FirstOrDefaultAsync(item => item.Id == originalId && item.StoreId == _currentStoreId);
+            if (original is null) return;
+            var entry = await db.ShiftLogs.AsNoTracking()
+                .Where(item => item.StoreId == _currentStoreId && item.IsCorrection && item.CorrectsId == originalId)
+                .OrderByDescending(item => item.CreatedUtc)
+                .FirstOrDefaultAsync() ?? original;
 
             using var dialog = new Form
             {
                 Text = "Shift Cash Drop Correction",
                 Width = 740,
-                Height = 710,
+                Height = 760,
                 MinimizeBox = false,
                 MaximizeBox = false,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -1755,10 +2295,11 @@ internal sealed partial class MainForm : Form
 
             var form = WinTheme.BorderedPanel(14);
             form.Dock = DockStyle.Fill;
-            var fields = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 10, ColumnCount = 2, BackColor = WinTheme.Panel };
+            var fields = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 11, ColumnCount = 2, BackColor = WinTheme.Panel };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 10; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 10f));
+            for (var i = 0; i < 10; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 8.5f));
+            fields.RowStyles.Add(new RowStyle(SizeType.Percent, 15f));
             form.Controls.Add(fields);
             shell.Controls.Add(form, 0, 1);
 
@@ -1768,7 +2309,7 @@ internal sealed partial class MainForm : Form
                 {
                     Text = labelText,
                     Dock = DockStyle.Fill,
-                    ForeColor = Color.White,
+                    ForeColor = WinTheme.Text,
                     Font = WinTheme.BoldFont(10),
                     TextAlign = ContentAlignment.MiddleLeft
                 }, 0, row);
@@ -1787,7 +2328,10 @@ internal sealed partial class MainForm : Form
             var correctionTax = SectionTextBox(entry.Tax.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
             var correctionDrop = SectionTextBox(entry.CashDropReceived.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
             var correctionPayout = SectionTextBox(entry.RegisterPayout.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
-            var correctionReason = SectionTextBox(entry.PayoutReason);
+            var correctionPayoutReason = SectionTextBox(entry.PayoutReason);
+            var correctionAuditReason = SectionTextBox();
+            correctionAuditReason.Multiline = true;
+            correctionAuditReason.ScrollBars = ScrollBars.Vertical;
 
             AddCorrectionField(0, "Date", correctionDate);
             AddCorrectionField(1, "Shift", correctionShift);
@@ -1798,12 +2342,29 @@ internal sealed partial class MainForm : Form
             AddCorrectionField(6, "Tax Total", correctionTax);
             AddCorrectionField(7, "Cash Drop", correctionDrop);
             AddCorrectionField(8, "Register Payout", correctionPayout);
-            AddCorrectionField(9, "Payout Reason", correctionReason);
+            AddCorrectionField(9, "Payout Reason", correctionPayoutReason);
+            AddCorrectionField(10, "Reason for Change *", correctionAuditReason);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 10, 0, 0) };
             var save = WinTheme.Button("Save Correction", true);
             save.Width = 180;
-            save.DialogResult = DialogResult.OK;
+            save.Click += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(correctionAuditReason.Text))
+                {
+                    MessageBox.Show(
+                        dialog,
+                        "Enter why this correction is being made before saving.",
+                        "Reason for Change Required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    correctionAuditReason.Focus();
+                    return;
+                }
+
+                dialog.DialogResult = DialogResult.OK;
+                dialog.Close();
+            };
             var cancel = WinTheme.Button("Cancel");
             cancel.Width = 120;
             cancel.DialogResult = DialogResult.Cancel;
@@ -1817,30 +2378,41 @@ internal sealed partial class MainForm : Form
                 return;
 
             var oldDate = entry.Date;
-            entry.Date = DateOnly.FromDateTime(correctionDate.Value);
-            entry.Employee = correctionEmployee.Text.Trim();
-            entry.ShiftNo = correctionShift.Text.Trim();
-            entry.CashTotal = Money(correctionCash.Text);
-            entry.CardTotal = Money(correctionCard.Text);
-            entry.NetSales = Money(correctionNet.Text);
-            entry.Tax = Money(correctionTax.Text);
-            entry.CashDropReceived = Money(correctionDrop.Text);
-            entry.RegisterPayout = Money(correctionPayout.Text);
-            entry.PayoutReason = correctionReason.Text.Trim();
+            var correctionEntry = new ShiftLogEntry
+            {
+                StoreId = _currentStoreId,
+                Date = DateOnly.FromDateTime(correctionDate.Value),
+                Employee = correctionEmployee.Text.Trim(),
+                ShiftNo = correctionShift.Text.Trim(),
+                CashTotal = Money(correctionCash.Text),
+                CardTotal = Money(correctionCard.Text),
+                NetSales = Money(correctionNet.Text),
+                Tax = Money(correctionTax.Text),
+                CashDropReceived = Money(correctionDrop.Text),
+                RegisterPayout = Money(correctionPayout.Text),
+                PayoutReason = correctionPayoutReason.Text.Trim(),
+                IsCorrection = true,
+                CorrectsId = originalId,
+                CorrectionReason = correctionAuditReason.Text.Trim(),
+                CreatedByUserId = _session.UserId,
+                CreatedByName = _session.DisplayName,
+                CreatedUtc = DateTime.UtcNow
+            };
+            db.ShiftLogs.Add(correctionEntry);
             await db.SaveChangesAsync();
             await SyncShiftLogAccountingAsync(oldDate);
-            if (entry.Date != oldDate)
-                await SyncShiftLogAccountingAsync(entry.Date);
+            if (correctionEntry.Date != oldDate)
+                await SyncShiftLogAccountingAsync(correctionEntry.Date);
             refresh();
-            MessageBox.Show(this, "Selected shift cash drop entry updated successfully.", "Shift Cash Drop", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Correction saved. The original remains in history and is excluded from calculations.", "Shift Cash Drop", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-        async Task saveImportedDropAsync()
+        async Task saveSelectedCashDropAsync()
         {
-            var id = SelectedId(grid);
+            var id = loadedShiftEntryId ?? SelectedId(grid);
             if (id is null)
             {
                 MessageBox.Show(this,
-                    "Double-click an automatically imported Z Report row first.",
+                    "Double-click the shift row you want to update first.",
                     "Shift Cash Drop",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
@@ -1852,11 +2424,13 @@ internal sealed partial class MainForm : Form
                 .FirstOrDefaultAsync(x => x.Id == id.Value && x.StoreId == _currentStoreId);
             if (entry is null)
                 return;
-            if (string.IsNullOrWhiteSpace(entry.PosReportKey))
+
+            if (!_session.IsAdmin &&
+                (entry.IsCorrection || entry.CashDropReceived != 0m || entry.RegisterPayout != 0m || !string.IsNullOrWhiteSpace(entry.PayoutReason)))
             {
                 MessageBox.Show(this,
-                    "This is not an automatically imported Z Report. Use Update Selected for a manual correction.",
-                    "Shift Cash Drop",
+                    "This row already has manager-entered cash information. Use Add Correction so the owner can see the original entry and the reason for the change.",
+                    "Correction Required",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
                 return;
@@ -1881,21 +2455,35 @@ internal sealed partial class MainForm : Form
             await SyncShiftLogAccountingAsync(entry.Date);
             refresh();
             clearAllShiftFields();
-            MessageBox.Show(this,
-                $"Cash drop saved for batch {entry.ShiftNo} on {entry.Date:M/d/yyyy}.",
-                "Shift Cash Drop",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            if (string.IsNullOrWhiteSpace(DemoRuntime.PresentationDirectory))
+            {
+                MessageBox.Show(this,
+                    $"Cash drop updated in the selected row for shift {entry.ShiftNo} on {entry.Date:M/d/yyyy}.",
+                    "Shift Cash Drop",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
         }
         void loadSelectedIntoForm()
         {
             if (suppressShiftSelectionLoad)
                 return;
             var id = SelectedId(grid);
-            if (id is null) return;
+            if (id is null)
+            {
+                loadedShiftEntryId = null;
+                updateEntryActionState();
+                return;
+            }
             using var db = CreateDb();
             var entry = db.ShiftLogs.AsNoTracking().FirstOrDefault(x => x.Id == id.Value);
-            if (entry is null) return;
+            if (entry is null)
+            {
+                loadedShiftEntryId = null;
+                updateEntryActionState();
+                return;
+            }
+            loadedShiftEntryId = entry.Id;
             date.Value = entry.Date.ToDateTime(TimeOnly.MinValue);
             shift.Text = entry.ShiftNo;
             employee.Text = entry.Employee;
@@ -1912,6 +2500,7 @@ internal sealed partial class MainForm : Form
             posReport.ForeColor = string.IsNullOrWhiteSpace(entry.PosReportKey)
                 ? WinTheme.Copper
                 : WinTheme.Green;
+            updateEntryActionState();
         }
         grid.SelectionChanged += (_, _) => loadSelectedIntoForm();
         grid.CellDoubleClick += (_, eventArgs) =>
@@ -1930,29 +2519,61 @@ internal sealed partial class MainForm : Form
         var dashboard = MockActionButton("", "Dashboard", width: 160);
         dashboard.Click += (_, _) => ShowModule("Dashboard");
         actions.Controls.Add(dashboard);
+        var saveDrop = MockActionButton("", "Select Auto-Synced Row", true, 245);
+        saveDropButton = saveDrop;
+        saveDrop.Enabled = false;
+        saveDrop.Click += async (_, _) => await saveSelectedCashDropAsync();
+        actions.Controls.Add(saveDrop);
         var upload = MockActionButton("", "Import Z Report", width: 190);
-        upload.Click += (_, _) => UploadPosReport(date, employee, shift, cash, card, net, tax, drop, posReport);
+        upload.Click += (_, _) =>
+        {
+            UploadPosReport(date, employee, shift, cash, card, net, tax, drop, posReport);
+            loadedShiftEntryId = null;
+            suppressShiftSelectionLoad = true;
+            grid.CurrentCell = null;
+            grid.ClearSelection();
+            suppressShiftSelectionLoad = false;
+            updateEntryActionState();
+        };
         actions.Controls.Add(upload);
-        var posAutoSync = MockActionButton("", "POS Auto Sync", width: 175);
+        var posAutoSync = MockActionButton("", "Z Report Auto Sync", width: 205);
         posAutoSync.Click += (_, _) =>
         {
-            using var autoSyncForm = _services.GetRequiredService<PortalSyncSetupForm>();
+            if (DemoRuntime.IsEnabled)
+            {
+                ShowDemoIntegrationMessage("Z-report portal synchronization");
+                return;
+            }
+            var currentBusiness = CurrentLicensedBusiness();
+            using var autoSyncForm = ActivatorUtilities.CreateInstance<PortalSyncSetupForm>(
+                _services,
+                PortalSyncReportKind.ZReports,
+                currentBusiness?.BusinessId ?? 0,
+                currentBusiness?.DatabaseName ?? "");
             autoSyncForm.ShowDialog(this);
             refresh();
         };
         actions.Controls.Add(posAutoSync);
+        RegisterDeveloperOnly(posAutoSync);
         var clear = MockActionButton("", "Clear Imported", width: 190);
         clear.Click += (_, _) => clearImported();
         actions.Controls.Add(clear);
         var correction = MockActionButton("", "Add Correction", width: 200);
-        correction.Click += async (_, _) => await updateSelectedAsync();
+        correction.Click += async (_, _) => await addCorrectionAsync();
         actions.Controls.Add(correction);
-        var saveDrop = MockActionButton("", "Save Imported Drop", true, 210);
-        saveDrop.Click += async (_, _) => await saveImportedDropAsync();
-        actions.Controls.Add(saveDrop);
-        var add = MockActionButton("", "Add", true, 135);
+        var add = MockActionButton("", "Add New Entry", true, 180);
+        addEntryButton = add;
         add.Click += async (_, _) =>
         {
+            if (loadedShiftEntryId.HasValue || SelectedId(grid).HasValue)
+            {
+                MessageBox.Show(this,
+                    "A shift row is loaded. Use Save / Update Cash Drop to update that same row, or Clear Imported before adding a new entry.",
+                    "Shift Cash Drop",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
             add.Enabled = false;
             try
             {
@@ -1960,14 +2581,10 @@ internal sealed partial class MainForm : Form
             }
             finally
             {
-                add.Enabled = true;
+                updateEntryActionState();
             }
         };
         actions.Controls.Add(add);
-        var update = MockActionButton("", "Update Selected", width: 200);
-        update.Enabled = _session.IsAdmin;
-        update.Click += async (_, _) => await updateSelectedAsync();
-        actions.Controls.Add(update);
         var delete = MockActionButton("", "Delete", width: 135);
         delete.Enabled = _session.IsAdmin;
         delete.Click += async (_, _) =>
@@ -1990,6 +2607,7 @@ internal sealed partial class MainForm : Form
         recalc();
         refresh();
         clearAllShiftFields();
+        updateEntryActionState();
         return ModuleShell("\uE8C7", "Shift Cash Drop", "Record and track shift cash drops and register payouts.", root);
     }
 
@@ -2023,6 +2641,12 @@ internal sealed partial class MainForm : Form
         var carryForward = SectionTextBox("$0.00", rightAlign: true);
         var isPayout = SectionCombo("No", "Yes");
         var purpose = WinTheme.ComboBox();
+        cash.Name = "DemoCashOnHandCashAdded";
+        payout.Name = "DemoCashOnHandPayoutAmount";
+        desc.Name = "DemoCashOnHandDescription";
+        carryForward.Name = "DemoCashOnHandCarryForward";
+        vendor.Name = "DemoCashOnHandVendor";
+        purpose.Name = "DemoCashOnHandPurpose";
         AddMockField(form, "Date", date, 0, 0, 110);
         AddMockField(form, "Cash Added", cash, 0, 1, 110);
         AddMockField(form, "Purpose", purpose, 0, 2, 110);
@@ -2079,11 +2703,38 @@ internal sealed partial class MainForm : Form
                 .Where(x => x.StoreId == _currentStoreId)
                 .ToList();
             var effectiveRows = EffectiveRows(rows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+            var latestCorrectionIds = rows
+                .Where(x => x.IsCorrection && x.CorrectsId.HasValue)
+                .GroupBy(x => x.CorrectsId!.Value)
+                .Select(group => group.OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id).First().Id)
+                .ToHashSet();
+            var correctedOriginalIds = rows
+                .Where(x => x.IsCorrection && x.CorrectsId.HasValue)
+                .Select(x => x.CorrectsId!.Value)
+                .ToHashSet();
             var today = DateOnly.FromDateTime(DateTime.Today);
             var monthStart = new DateOnly(today.Year, today.Month, 1);
             var nextMonth = monthStart.AddMonths(1);
             grid.DataSource = rows.OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
-                .Select(x => new { x.Id, x.Date, x.CashAdded, x.IsPayout, Payout = x.PayoutAmount, Vendor = x.Vendor != null ? x.Vendor.Name : "", Purpose = x.Purpose != null ? x.Purpose.Name : "", x.Description, Check = x.Reference })
+                .Select(x => new
+                {
+                    x.Id,
+                    x.Date,
+                    x.CashAdded,
+                    x.IsPayout,
+                    Payout = x.PayoutAmount,
+                    Vendor = x.Vendor != null ? x.Vendor.Name : "",
+                    Purpose = x.Purpose != null ? x.Purpose.Name : "",
+                    x.Description,
+                    Status = x.IsCorrection
+                        ? (latestCorrectionIds.Contains(x.Id) ? "Effective Correction" : "Superseded Correction")
+                        : (correctedOriginalIds.Contains(x.Id) ? "Original - Superseded" : "Effective"),
+                    Corrects = x.CorrectsId,
+                    x.CorrectionReason,
+                    EnteredBy = x.CreatedByName,
+                    EnteredUtc = x.CreatedUtc,
+                    Reference = x.Reference
+                })
                 .ToList();
             currentBalance.Text = effectiveRows.Sum(x => x.CashAdded - x.PayoutAmount).ToString("C2");
             todayAdded.Text = effectiveRows.Where(x => !x.IsPayout && x.Date == today).Sum(x => x.CashAdded).ToString("C2");
@@ -2216,14 +2867,18 @@ internal sealed partial class MainForm : Form
             }
 
             using var db = CreateDb();
-            var original = await db.CashOnHand.AsNoTracking()
+            var selected = await db.CashOnHand.AsNoTracking()
                 .FirstOrDefaultAsync(x => x.Id == id.Value && x.StoreId == _currentStoreId);
+            if (selected is null) return;
+            var originalId = selected.IsCorrection && selected.CorrectsId.HasValue ? selected.CorrectsId.Value : selected.Id;
+            var original = await db.CashOnHand.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == originalId && x.StoreId == _currentStoreId);
             if (original is null) return;
-            if (original.IsCorrection)
-            {
-                MessageBox.Show(this, "You selected a correction row. Please select the original row to correct.", "Cash On Hand", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            var current = await db.CashOnHand.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == originalId)
+                .OrderByDescending(x => x.CreatedUtc)
+                .ThenByDescending(x => x.Id)
+                .FirstOrDefaultAsync() ?? original;
 
             using var dialog = new Form
             {
@@ -2248,24 +2903,25 @@ internal sealed partial class MainForm : Form
             var fields = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 8, ColumnCount = 2, BackColor = WinTheme.Panel };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 165));
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 8; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 12.5f));
+            for (var i = 0; i < 7; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 11.5f));
+            fields.RowStyles.Add(new RowStyle(SizeType.Percent, 19.5f));
             panel.Controls.Add(fields);
             shell.Controls.Add(panel, 0, 1);
 
             void AddField(int row, string labelText, Control input)
             {
-                fields.Controls.Add(new Label { Text = labelText, Dock = DockStyle.Fill, ForeColor = Color.White, Font = WinTheme.BoldFont(10), TextAlign = ContentAlignment.MiddleLeft }, 0, row);
+                fields.Controls.Add(new Label { Text = labelText, Dock = DockStyle.Fill, ForeColor = WinTheme.Text, Font = WinTheme.BoldFont(10), TextAlign = ContentAlignment.MiddleLeft }, 0, row);
                 input.Dock = DockStyle.Fill;
                 input.Margin = new Padding(0, 6, 0, 6);
                 fields.Controls.Add(input, 1, row);
             }
 
             var correctionDate = WinTheme.DatePicker();
-            correctionDate.Value = original.Date.ToDateTime(TimeOnly.MinValue);
-            var correctionCash = SectionTextBox(original.CashAdded.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
+            correctionDate.Value = current.Date.ToDateTime(TimeOnly.MinValue);
+            var correctionCash = SectionTextBox(current.CashAdded.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
             var correctionIsPayout = SectionCombo("No", "Yes");
-            correctionIsPayout.SelectedIndex = original.IsPayout ? 1 : 0;
-            var correctionPayout = SectionTextBox(original.PayoutAmount.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
+            correctionIsPayout.SelectedIndex = current.IsPayout ? 1 : 0;
+            var correctionPayout = SectionTextBox(current.PayoutAmount.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
             var correctionVendor = WinTheme.ComboBox();
             var correctionPurpose = WinTheme.ComboBox();
             var vendors = await db.Vendors.AsNoTracking().Where(x => x.StoreId == _currentStoreId).OrderBy(x => x.Name).ToListAsync();
@@ -2273,13 +2929,15 @@ internal sealed partial class MainForm : Form
             correctionVendor.DataSource = vendors;
             correctionVendor.DisplayMember = nameof(Vendor.Name);
             correctionVendor.ValueMember = nameof(Vendor.Id);
-            correctionVendor.SelectedValue = original.VendorId ?? 0;
+            correctionVendor.SelectedValue = current.VendorId ?? 0;
             correctionPurpose.DataSource = purposes;
             correctionPurpose.DisplayMember = nameof(Purpose.Name);
             correctionPurpose.ValueMember = nameof(Purpose.Id);
-            correctionPurpose.SelectedValue = original.PurposeId ?? 0;
-            var correctionDesc = SectionTextBox(original.Description);
+            correctionPurpose.SelectedValue = current.PurposeId ?? 0;
+            var correctionDesc = SectionTextBox(current.Description);
             var auditReason = SectionTextBox();
+            auditReason.Multiline = true;
+            auditReason.ScrollBars = ScrollBars.Vertical;
             AddField(0, "Date", correctionDate);
             AddField(1, "Cash Added", correctionCash);
             AddField(2, "Is Payout", correctionIsPayout);
@@ -2287,12 +2945,28 @@ internal sealed partial class MainForm : Form
             AddField(4, "Vendor", correctionVendor);
             AddField(5, "Purpose", correctionPurpose);
             AddField(6, "Description", correctionDesc);
-            AddField(7, "Correction Reason", auditReason);
+            AddField(7, "Reason for Change *", auditReason);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 10, 0, 0) };
             var save = WinTheme.Button("Save Correction", true);
             save.Width = 180;
-            save.DialogResult = DialogResult.OK;
+            save.Click += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(auditReason.Text))
+                {
+                    MessageBox.Show(
+                        dialog,
+                        "Enter why this correction is being made before saving.",
+                        "Reason for Change Required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    auditReason.Focus();
+                    return;
+                }
+
+                dialog.DialogResult = DialogResult.OK;
+                dialog.Close();
+            };
             var cancel = WinTheme.Button("Cancel");
             cancel.Width = 120;
             cancel.DialogResult = DialogResult.Cancel;
@@ -2304,43 +2978,31 @@ internal sealed partial class MainForm : Form
 
             if (dialog.ShowDialog(this) != DialogResult.OK)
                 return;
+            var reason = auditReason.Text.Trim();
             using var saveDb = CreateDb();
-            var entity = await saveDb.CashOnHand.FirstOrDefaultAsync(x => x.Id == original.Id && x.StoreId == _currentStoreId);
-            if (entity is null) return;
-            entity.Date = DateOnly.FromDateTime(correctionDate.Value);
-            entity.CashAdded = Money(correctionCash.Text);
-            entity.IsPayout = correctionIsPayout.SelectedIndex == 1;
-            entity.PayoutAmount = Money(correctionPayout.Text);
-            entity.VendorId = ComboId(correctionVendor);
-            entity.PurposeId = ComboId(correctionPurpose);
-            entity.Description = correctionDesc.Text.Trim();
-            entity.CorrectionReason = auditReason.Text.Trim();
-            entity.CreatedByUserId = _session.UserId;
-            entity.CreatedByName = _session.DisplayName;
+            saveDb.CashOnHand.Add(new CashOnHandEntry
+            {
+                StoreId = _currentStoreId,
+                Date = DateOnly.FromDateTime(correctionDate.Value),
+                CashAdded = Money(correctionCash.Text),
+                IsPayout = correctionIsPayout.SelectedIndex == 1,
+                PayoutAmount = Money(correctionPayout.Text),
+                VendorId = ComboId(correctionVendor),
+                PurposeId = ComboId(correctionPurpose),
+                Description = correctionDesc.Text.Trim(),
+                Reference = current.Reference,
+                IsCorrection = true,
+                CorrectsId = originalId,
+                CorrectionReason = reason,
+                CreatedByUserId = _session.UserId,
+                CreatedByName = _session.DisplayName,
+                CreatedUtc = DateTime.UtcNow
+            });
             await saveDb.SaveChangesAsync();
             await refreshAsync();
+            MessageBox.Show(this, "Correction saved. The original is retained for owner review and excluded from calculations.", "Cash On Hand", MessageBoxButtons.OK, MessageBoxIcon.Information);
         };
         actions.Controls.Add(correction);
-        var update = MockActionButton("", "Update Selected", width: 190);
-        update.Enabled = _session.IsAdmin;
-        update.Click += async (_, _) =>
-        {
-            var id = SelectedId(grid);
-            if (id is null) return;
-            using var db = CreateDb();
-            var entity = await db.CashOnHand.FirstOrDefaultAsync(x => x.Id == id.Value && x.StoreId == _currentStoreId);
-            if (entity is null) return;
-            entity.Date = DateOnly.FromDateTime(date.Value);
-            entity.CashAdded = Money(cash.Text);
-            entity.IsPayout = isPayout.SelectedIndex == 1;
-            entity.PayoutAmount = Money(payout.Text);
-            entity.VendorId = ComboId(vendor);
-            entity.PurposeId = ComboId(purpose);
-            entity.Description = desc.Text.Trim();
-            await db.SaveChangesAsync();
-            await refreshAsync();
-        };
-        actions.Controls.Add(update);
         var delete = MockActionButton("", "Delete Selected", width: 200);
         delete.Enabled = _session.IsAdmin;
         delete.Click += async (_, _) => await DeleteSelectedAsync<CashOnHandEntry>(grid, refresh);
@@ -2424,6 +3086,10 @@ internal sealed partial class MainForm : Form
         var amount = SectionTextBox(rightAlign: true);
         var check = SectionTextBox();
         var cleared = SectionCombo("Uncleared", "Cleared");
+        vendor.Name = "DemoCheckVendor";
+        amount.Name = "DemoCheckAmount";
+        desc.Name = "DemoCheckPurpose";
+        check.Name = "DemoCheckNumber";
         AddMockField(form, "Date", date, 0, 0, 118);
         AddMockField(form, "Vendor", vendor, 0, 1, 118);
         AddMockField(form, "Amount", amount, 0, 2, 118);
@@ -2848,8 +3514,9 @@ internal sealed partial class MainForm : Form
                                 && x.PayrollRun.Status == PayrollRunStatus.Finalized
                                 && x.PayrollRun.PayDate.Month == now.Month
                                 && x.PayrollRun.PayDate.Year == now.Year)
-                    .Sum(x => (decimal?)x.GrossPay)
-                    .GetValueOrDefault();
+                    .Select(x => x.GrossPay)
+                    .ToList()
+                    .Sum();
             }
             catch
             {
@@ -3817,18 +4484,22 @@ internal sealed partial class MainForm : Form
     {
         var month = DateTime.Today.Month;
         var year = DateTime.Today.Year;
-        var shifts = db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
-            .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
+        var summaries = db.PosSalesSummaries.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
+            .Where(x => x.ReportTo.Month == month && x.ReportTo.Year == year).ToList();
         var purchases = db.PurchaseInvoices.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
             .Where(x => x.InvoiceDate.Month == month && x.InvoiceDate.Year == year).ToList();
-        var cash = db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
+        var cash = EffectiveRows(db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
-        var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
+        var checks = EffectiveRows(db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
         var payroll = db.PayrollEntries.AsNoTracking()
             .Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate.Month == month && x.PayrollRun.PayDate.Year == year)
-            .Sum(x => (decimal?)x.GrossPay).GetValueOrDefault();
-        var netSales = shifts.Sum(x => x.NetSales);
+            .Select(x => x.GrossPay)
+            .ToList()
+            .Sum();
+        var netSales = summaries.Sum(x => x.NetSales);
         var costOfGoods = purchases.Sum(x => x.Total);
         var expenses = cash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount) + payroll;
         var netProfit = netSales - costOfGoods - expenses;
@@ -3873,6 +4544,13 @@ internal sealed partial class MainForm : Form
         var category = SectionCombo("General", "Office Supplies", "Maintenance", "Food & Beverages", "Utilities", "Rent & Lease", "Travel", "Marketing", "Bank Charges");
         var active = SectionCombo("Active", "Inactive");
         var notes = SectionTextBox();
+        type.Name = "DemoVendorType";
+        name.Name = "DemoVendorName";
+        contact.Name = "DemoVendorContact";
+        phone.Name = "DemoVendorPhone";
+        email.Name = "DemoVendorEmail";
+        category.Name = "DemoVendorCategory";
+        notes.Name = "DemoVendorNotes";
         AddMockField(form, "Type", type, 0, 0, 70);
         AddMockField(form, "Name *", name, 1, 0, 82);
         AddMockField(form, "Contact Person", contact, 2, 0, 122);
@@ -4018,12 +4696,13 @@ internal sealed partial class MainForm : Form
 
     private Control BuildPurchases()
     {
-        var root = SectionRoot(260, 72);
-        var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = WinTheme.Bg };
+        var root = SectionRoot(318, 72);
+        var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, BackColor = WinTheme.Bg };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 82));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
-        top.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
-        top.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
+        top.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+        top.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
+        top.RowStyles.Add(new RowStyle(SizeType.Percent, 18));
         root.Controls.Add(top, 0, 0);
 
         var headerShell = WinTheme.BorderedPanel(10);
@@ -4044,6 +4723,10 @@ internal sealed partial class MainForm : Form
         var tax = SectionTextBox("$0.00", rightAlign: true);
         var file = SectionTextBox("No file selected", readOnly: true);
         var total = SectionTextBox("$0.00", rightAlign: true);
+        vendor.Name = "DemoPurchaseVendor";
+        number.Name = "DemoPurchaseInvoiceNumber";
+        tax.Name = "DemoPurchaseTax";
+        total.Name = "DemoPurchaseTotal";
         AddMockField(fields, "Date *", date, 0, 0, 78);
         AddMockField(fields, "Vendor *", vendor, 1, 0, 86);
         AddMockField(fields, "Invoice # *", number, 2, 0, 94);
@@ -4069,21 +4752,36 @@ internal sealed partial class MainForm : Form
         lineShell.Controls.Add(line);
         line.Controls.Add(new Label { Text = "Line Items", Dock = DockStyle.Fill, ForeColor = WinTheme.Copper, Font = WinTheme.BoldFont(10), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         line.SetColumnSpan(line.GetControlFromPosition(0, 0)!, 5);
-        AddMockField(line, "Product / SKU *", SectionTextBox(), 0, 1, 118);
-        AddMockField(line, "Quantity *", SectionTextBox(rightAlign: true), 1, 1, 92);
-        AddMockField(line, "Unit Cost *", SectionTextBox(rightAlign: true), 2, 1, 92);
+        var lineProduct = SectionTextBox();
+        var lineQuantity = SectionTextBox(rightAlign: true);
+        var lineUnitCost = SectionTextBox(rightAlign: true);
+        lineProduct.Name = "DemoPurchaseLineProduct";
+        lineQuantity.Name = "DemoPurchaseLineQuantity";
+        lineUnitCost.Name = "DemoPurchaseLineUnitCost";
+        AddMockField(line, "Product / SKU *", lineProduct, 0, 1, 118);
+        AddMockField(line, "Quantity *", lineQuantity, 1, 1, 92);
+        AddMockField(line, "Unit Cost *", lineUnitCost, 2, 1, 92);
         AddMockField(line, "Line Total", SectionTextBox(readOnly: true, rightAlign: true), 3, 1, 88);
         var addLine = WinTheme.Button("Add Line", true);
         addLine.Dock = DockStyle.Fill;
         addLine.Margin = new Padding(8, 8, 8, 8);
         line.Controls.Add(addLine, 4, 1);
 
+        var periodShell = WinTheme.BorderedPanel(6);
+        periodShell.Dock = DockStyle.Fill;
+        periodShell.Margin = new Padding(4, 0, 8, 6);
+        top.Controls.Add(periodShell, 0, 2);
+        var purchasePeriod = CreateStandardPeriodCombo();
+        var periodLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1, BackColor = WinTheme.Panel };
+        periodShell.Controls.Add(periodLayout);
+        AddMockField(periodLayout, "Period *", purchasePeriod, 0, 0, 105);
+
         var stats = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 0) };
         top.Controls.Add(stats, 1, 0);
-        top.SetRowSpan(stats, 2);
-        var monthPurchases = MetricCard(stats, "Month Purchases", "$0.00", WinTheme.Text, "This Month", 255, 74);
+        top.SetRowSpan(stats, 3);
+        var monthPurchases = MetricCard(stats, "Period Purchases", "$0.00", WinTheme.Text, "Selected Period", 255, 74);
         var openInvoices = MetricCard(stats, "Open Invoices", "$0.00", WinTheme.Text, "0 Invoices", 255, 74);
-        var importedPdfs = MetricCard(stats, "Imported PDFs", "0", WinTheme.Text, "This Month", 255, 74);
+        var importedPdfs = MetricCard(stats, "Imported PDFs", "0", WinTheme.Text, "Selected Period", 255, 74);
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 8, 0, 8) };
         root.Controls.Add(actions, 0, 1);
@@ -4115,11 +4813,23 @@ internal sealed partial class MainForm : Form
             FillWeight = 80,
             DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
         });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Attachment", DataPropertyName = nameof(PurchaseInvoiceGridRow.Attachment), HeaderText = "PDF Attachment", ReadOnly = true, FillWeight = 145 });
+        grid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Attachment",
+            DataPropertyName = nameof(PurchaseInvoiceGridRow.Attachment),
+            HeaderText = "Invoice PDF",
+            ReadOnly = true,
+            FlatStyle = FlatStyle.Flat,
+            FillWeight = 110
+        });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PurchaseInvoiceGridRow.Status), HeaderText = "Status", ReadOnly = true, FillWeight = 75 });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing purchases for selected store"), 0, 3);
         string? selectedPurchaseFilePath = null;
+        var purchaseFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var purchaseTo = DateTime.Today;
+        var previousPurchasePeriod = "Current Month";
+        var changingPurchasePeriod = false;
 
         void clearPurchaseForm()
         {
@@ -4181,8 +4891,10 @@ internal sealed partial class MainForm : Form
         async Task refreshAsync()
         {
             var invoices = await _purchaseService.GetInvoicesAsync(_currentStoreId);
-            var monthRows = invoices.Where(x => x.InvoiceDate.Month == DateTime.Today.Month && x.InvoiceDate.Year == DateTime.Today.Year).ToList();
-            grid.DataSource = invoices
+            var periodRows = invoices
+                .Where(x => x.InvoiceDate >= DateOnly.FromDateTime(purchaseFrom) && x.InvoiceDate <= DateOnly.FromDateTime(purchaseTo))
+                .ToList();
+            grid.DataSource = periodRows
                 .Select(x => new PurchaseInvoiceGridRow
                 {
                     Id = x.Id,
@@ -4191,22 +4903,48 @@ internal sealed partial class MainForm : Form
                     Vendor = x.VendorName,
                     Invoice = x.InvoiceNumber,
                     Total = x.Total,
-                    Attachment = Path.GetFileName(x.FilePath),
+                    Attachment = !string.IsNullOrWhiteSpace(x.FilePath) && File.Exists(x.FilePath) ? "View PDF" : "No PDF",
+                    FilePath = x.FilePath,
                     Status = string.IsNullOrWhiteSpace(x.FilePath) ? "Entered" : "Imported"
                 })
                 .ToList();
             HideId(grid);
-            monthPurchases.Text = MoneyText(monthRows.Sum(x => x.Total));
-            openInvoices.Text = MoneyText(invoices.Sum(x => x.Total));
+            monthPurchases.Text = MoneyText(periodRows.Sum(x => x.Total));
+            openInvoices.Text = MoneyText(periodRows.Sum(x => x.Total));
             if (openInvoices.Parent?.Controls.OfType<Label>().LastOrDefault() is { } openInvoiceSubtitle)
-                openInvoiceSubtitle.Text = $"{invoices.Count} Invoices";
-            importedPdfs.Text = invoices.Count(x => !string.IsNullOrWhiteSpace(x.FilePath)).ToString(CultureInfo.InvariantCulture);
+                openInvoiceSubtitle.Text = $"{periodRows.Count} Invoices";
+            importedPdfs.Text = periodRows.Count(x => !string.IsNullOrWhiteSpace(x.FilePath)).ToString(CultureInfo.InvariantCulture);
         }
         void refresh()
         {
             _ = refreshAsync();
         }
+        purchasePeriod.SelectedIndexChanged += (_, _) =>
+        {
+            if (changingPurchasePeriod)
+                return;
+
+            if (!TryResolveStandardPeriod(purchasePeriod.Text, purchaseFrom, purchaseTo, out var selectedFrom, out var selectedTo))
+            {
+                changingPurchasePeriod = true;
+                purchasePeriod.SelectedItem = previousPurchasePeriod;
+                changingPurchasePeriod = false;
+                return;
+            }
+
+            purchaseFrom = selectedFrom;
+            purchaseTo = selectedTo;
+            previousPurchasePeriod = purchasePeriod.Text;
+            refresh();
+        };
         grid.SelectionChanged += async (_, _) => await loadSelectedInvoiceAsync();
+        grid.CellContentClick += (_, e) =>
+        {
+            if (e.RowIndex < 0 || !string.Equals(grid.Columns[e.ColumnIndex].Name, "Attachment", StringComparison.Ordinal))
+                return;
+            if (grid.Rows[e.RowIndex].DataBoundItem is PurchaseInvoiceGridRow invoiceRow)
+                OpenStoredDocument(invoiceRow.FilePath, "Purchase Invoice");
+        };
         AddSectionButton(actions, "Home", (_, _) => ShowModule("Dashboard"), width: 150);
         AddSectionButton(actions, "New Purchase", (_, _) => clearPurchaseForm(), width: 185);
         AddSectionButton(actions, "Import Purchases", async () =>
@@ -4231,9 +4969,61 @@ internal sealed partial class MainForm : Form
             clearPurchaseForm();
             await refreshAsync();
         }, true, 160);
-        AddSectionButton(actions, "Email Invoices", async () =>
+        var emailInvoices = AddSectionButton(actions, "Email Invoices", async () =>
         {
+            if (DemoRuntime.IsEnabled)
+            {
+                ShowDemoIntegrationMessage("email invoice synchronization");
+                return;
+            }
             var storeKey = CurrentInvoiceEmailStoreKey();
+            var business = CurrentLicensedBusiness();
+            if (HasCloudInvoiceInbox(business) && business is not null)
+            {
+                using var cloudInbox = new CloudInvoiceInboxForm(
+                    _cloudInvoiceInboxService,
+                    business);
+                if (cloudInbox.ShowDialog(this) != DialogResult.OK || !cloudInbox.SyncRequested)
+                    return;
+
+                try
+                {
+                    var result = await _cloudInvoiceInboxService.SyncAsync(
+                        business,
+                        storeKey,
+                        _currentStoreId,
+                        _session.UserId,
+                        _session.DisplayName);
+                    _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
+                    await refreshAsync();
+                    MessageBox.Show(this,
+                        $"Protected invoice inbox sync complete.\n\n" +
+                        $"Messages checked: {result.MessagesChecked}\n" +
+                        $"PDF attachments downloaded: {result.PdfsDownloaded}\n" +
+                        $"Invoices imported: {result.InvoicesImported}\n" +
+                        $"Duplicates skipped: {result.DuplicatesSkipped}\n" +
+                        $"Needs review: {result.NeedsReview}" +
+                        (result.NeedsReview > 0
+                            ? $"\n\nReview folder:\n{result.ReviewFolder}"
+                            : ""),
+                        "Protected Invoice Inbox",
+                        MessageBoxButtons.OK,
+                        result.NeedsReview > 0
+                            ? MessageBoxIcon.Warning
+                            : MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this,
+                        AppBootstrap.RedactSensitiveText(ex.Message),
+                        "Protected Invoice Inbox",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+
+                return;
+            }
+
             using var setup = new InvoiceEmailSetupForm(_paths, _invoiceEmailSyncService, storeKey);
             if (setup.ShowDialog(this) != DialogResult.OK)
                 return;
@@ -4271,7 +5061,8 @@ internal sealed partial class MainForm : Form
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
             }
-        }, width: 205, enabled: _session.IsAdmin);
+        }, width: 205);
+        RegisterDeveloperOnly(emailInvoices);
         AddSectionButton(actions, "Update Selected", updateSelectedInvoiceAsync, width: 210, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Delete Selected", async () =>
         {
@@ -4288,7 +5079,7 @@ internal sealed partial class MainForm : Form
             clearPurchaseForm();
             await refreshAsync();
         }, width: 210, enabled: _session.IsAdmin);
-        AddSectionButton(actions, "Open File", (_, _) => OpenSelectedPurchaseFile(grid), width: 145);
+        AddSectionButton(actions, "Open Invoice PDF", (_, _) => OpenSelectedPurchaseFile(grid), width: 190);
         AddSectionButton(actions, "Refresh", async () => await refreshAsync(), width: 145);
         refresh();
         return ModuleShell("\uE719", "Purchases", "Record vendor invoices, imports, and purchase totals.", root);
@@ -4424,6 +5215,19 @@ internal sealed partial class MainForm : Form
         var refreshingBankRows = false;
         void configureBankColumns()
         {
+            if (!grid.Columns.Contains("CheckCopy"))
+            {
+                grid.Columns.Add(new DataGridViewButtonColumn
+                {
+                    Name = "CheckCopy",
+                    DataPropertyName = nameof(BankStatementGridRow.CheckCopyAction),
+                    HeaderText = "Check Copy",
+                    ReadOnly = true,
+                    UseColumnTextForButtonValue = false,
+                    FlatStyle = FlatStyle.Flat,
+                    FillWeight = 82
+                });
+            }
             foreach (DataGridViewColumn column in grid.Columns)
                 column.ReadOnly = column.Name is not ("Select" or "IncludeInProfitLoss");
             if (grid.Columns.Contains("IncludeInProfitLoss"))
@@ -4435,11 +5239,23 @@ internal sealed partial class MainForm : Form
             if (grid.IsCurrentCellDirty)
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
         };
-        grid.CellContentClick += (_, e) =>
+        grid.CellContentClick += async (_, e) =>
         {
-            if (e.RowIndex >= 0 &&
-                grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)
+            if (e.RowIndex < 0 || e.ColumnIndex < 0)
+                return;
+
+            if (grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)
+            {
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                return;
+            }
+
+            if (string.Equals(grid.Columns[e.ColumnIndex].Name, "CheckCopy", StringComparison.Ordinal) &&
+                grid.Rows[e.RowIndex].DataBoundItem is BankStatementGridRow bankRow)
+            {
+                await AttachOrOpenBankCheckCopyAsync(bankRow);
+                await refreshAsync();
+            }
         };
         grid.CellValueChanged += async (_, e) =>
         {
@@ -4472,11 +5288,25 @@ internal sealed partial class MainForm : Form
                     Category = x.Category,
                     Matched = x.IsMatched,
                     MatchReference = x.MatchReference,
-                    Check = x.CheckNumber
+                    Check = x.CheckNumber,
+                    CheckCopyPath = x.CheckCopyPath,
+                    CheckCopyAction = IsBankCheckTransaction(x.CheckNumber, x.Description)
+                        ? File.Exists(x.CheckCopyPath) ? "View Copy" : "Attach Copy"
+                        : "—"
                 })
                 .ToList();
             HideId(grid);
             configureBankColumns();
+            foreach (DataGridViewRow gridRow in grid.Rows)
+            {
+                if (gridRow.DataBoundItem is not BankStatementGridRow bankRow || !grid.Columns.Contains("CheckCopy"))
+                    continue;
+                gridRow.Cells["CheckCopy"].ToolTipText = File.Exists(bankRow.CheckCopyPath)
+                    ? "View the attached check copy inside HISAB KITAB."
+                    : IsBankCheckTransaction(bankRow.Check, bankRow.Description)
+                        ? "Plaid provides the check number and transaction details, but not the bank's check image. Attach the bank-provided PDF or image here."
+                        : "This is not identified as a check transaction.";
+            }
             var debitTotal = rows.Sum(x => x.Debit);
             var creditTotal = rows.Sum(x => x.Credit);
             var matchedRows = rows.Where(x => x.IsMatched).ToList();
@@ -4706,7 +5536,15 @@ internal sealed partial class MainForm : Form
         {
             await importAndSelectPeriodAsync();
         };
-        bankEmailSettings.Click += async (_, _) => await ShowBankStatementEmailSettingsAsync();
+        bankEmailSettings.Click += async (_, _) =>
+        {
+            if (DemoRuntime.IsEnabled)
+            {
+                ShowDemoIntegrationMessage("bank-statement email delivery");
+                return;
+            }
+            await ShowBankStatementEmailSettingsAsync();
+        };
         connectBank.Click += async (_, _) =>
         {
             using var client = new LiveBankSyncClient();
@@ -4919,7 +5757,7 @@ internal sealed partial class MainForm : Form
 
     private Control BuildPriceAlerts()
     {
-        var root = SectionRoot(200, 72);
+        var root = SectionRoot(246, 72);
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = WinTheme.Bg };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
@@ -4939,6 +5777,7 @@ internal sealed partial class MainForm : Form
         var minChange = SectionCombo("All", "5%+", "10%+", "20%+");
         var product = SectionTextBox("Search by product name or SKU...");
         var threshold = SectionTextBox("10.00", rightAlign: true);
+        var alertPeriod = CreateStandardPeriodCombo();
         AddMockField(filters, "Category", category, 0, 0, 105);
         AddMockField(filters, "Supplier", supplier, 1, 0, 105);
         AddMockField(filters, "Status", status, 2, 0, 90);
@@ -4946,7 +5785,8 @@ internal sealed partial class MainForm : Form
         AddMockField(filters, "Search Product", product, 1, 1, 135);
         AddMockField(filters, "Alert Threshold (%)", threshold, 2, 1, 155);
         AddMockField(filters, "Auto Alert", SectionCombo("On", "Off"), 0, 2, 105);
-        filters.SetColumnSpan(filters.GetControlFromPosition(0, 2)!, 3);
+        AddMockField(filters, "Period *", alertPeriod, 1, 2, 105);
+        filters.SetColumnSpan(filters.GetControlFromPosition(1, 2)!, 2);
 
         var statGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = WinTheme.Bg };
         statGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
@@ -4955,31 +5795,147 @@ internal sealed partial class MainForm : Form
         top.Controls.Add(statGrid, 1, 0);
         var newAlerts = MetricCard(statGrid, 0, 0, "New Alerts", "0", WinTheme.Red, "Unread alerts");
         var highPriority = MetricCard(statGrid, 1, 0, "High Priority", "0", WinTheme.Red, "Require attention");
-        var resolved = MetricCard(statGrid, 2, 0, "Resolved This Month", "0", WinTheme.Green, "Alerts resolved");
+        var resolved = MetricCard(statGrid, 2, 0, "Resolved", "0", WinTheme.Green, "Selected period");
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 8, 0, 8) };
         root.Controls.Add(actions, 0, 1);
         var grid = WinTheme.Grid();
+        grid.AutoGenerateColumns = false;
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        grid.ScrollBars = ScrollBars.Both;
+        grid.ReadOnly = false;
+        grid.EditMode = DataGridViewEditMode.EditOnEnter;
+        grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.EnableResizing;
+        grid.ColumnHeadersHeight = 52;
+        grid.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.True;
+        grid.RowTemplate.Height = 30;
+        grid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Select",
+            DataPropertyName = nameof(PriceAlertGridRow.Select),
+            HeaderText = "Select",
+            ReadOnly = false,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+            Width = 62,
+            MinimumWidth = 62
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", DataPropertyName = nameof(PriceAlertGridRow.Id), Visible = false, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Priority", DataPropertyName = nameof(PriceAlertGridRow.Priority), HeaderText = "Priority", ReadOnly = true, MinimumWidth = 82, FillWeight = 60 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Product", DataPropertyName = nameof(PriceAlertGridRow.Product), HeaderText = "Product", ReadOnly = true, MinimumWidth = 175, FillWeight = 145 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "SKU", DataPropertyName = nameof(PriceAlertGridRow.SKU), HeaderText = "SKU", ReadOnly = true, MinimumWidth = 95, FillWeight = 78 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OldCost", DataPropertyName = nameof(PriceAlertGridRow.OldCost), HeaderText = "Old Price", ReadOnly = true, MinimumWidth = 88, FillWeight = 70, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
+        grid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "OldInvoicePdf",
+            DataPropertyName = nameof(PriceAlertGridRow.OldInvoicePdf),
+            HeaderText = "Old Price PDF",
+            ReadOnly = true,
+            FlatStyle = FlatStyle.Flat,
+            MinimumWidth = 115,
+            FillWeight = 90
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewCost", DataPropertyName = nameof(PriceAlertGridRow.NewCost), HeaderText = "New Price", ReadOnly = true, MinimumWidth = 88, FillWeight = 70, DefaultCellStyle = new DataGridViewCellStyle { Format = "C4" } });
+        grid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "NewInvoicePdf",
+            DataPropertyName = nameof(PriceAlertGridRow.NewInvoicePdf),
+            HeaderText = "New Price PDF",
+            ReadOnly = true,
+            FlatStyle = FlatStyle.Flat,
+            MinimumWidth = 115,
+            FillWeight = 90
+        });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Change", DataPropertyName = nameof(PriceAlertGridRow.Change), HeaderText = "Change", ReadOnly = true, MinimumWidth = 88, FillWeight = 70 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PriceAlertGridRow.Status), HeaderText = "Status", ReadOnly = true, MinimumWidth = 82, FillWeight = 65 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Created", DataPropertyName = nameof(PriceAlertGridRow.Created), HeaderText = "Created", ReadOnly = true, MinimumWidth = 130, FillWeight = 110, DefaultCellStyle = new DataGridViewCellStyle { Format = "g" } });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing price alerts for selected store"), 0, 3);
+
+        var alertFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var alertTo = DateTime.Today;
+        var previousAlertPeriod = "Current Month";
+        var changingAlertPeriod = false;
 
         void refresh()
         {
             using var db = CreateDb();
-            var rows = db.PriceAlerts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).OrderByDescending(x => x.CreatedUtc).ToList();
+            var fromDate = alertFrom.Date;
+            var toExclusive = alertTo.Date.AddDays(1);
+            var rows = db.PriceAlerts.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.CreatedUtc >= fromDate && x.CreatedUtc < toExclusive)
+                .OrderByDescending(x => x.CreatedUtc)
+                .ToList();
+            var invoiceSources = db.PurchaseInvoices.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.FilePath != "")
+                .OrderByDescending(x => x.InvoiceDate)
+                .ToList();
             grid.DataSource = rows
                 .Select(x =>
                 {
                     var pct = x.OldUnitCost == 0 ? 0 : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m;
                     var priority = Math.Abs(pct) >= 10m ? "High" : Math.Abs(pct) >= 5m ? "Medium" : "Low";
-                    return new { x.Id, Select = false, Priority = x.IsRead ? "Read" : priority, Product = x.ProductName, SKU = x.Sku, Supplier = x.VendorName, OldCost = x.OldUnitCost, NewCost = x.NewUnitCost, Change = PercentText(pct), AlertPrice = x.NewUnitCost, Status = x.IsRead ? "Read" : "New", Created = x.CreatedUtc };
+                    var oldInvoicePath = ResolvePriceAlertInvoicePath(invoiceSources, null, x.OldInvoiceNumber, x.OldVendorName, x.InvoiceDate);
+                    var newInvoicePath = ResolvePriceAlertInvoicePath(invoiceSources, x.PurchaseInvoiceId, x.InvoiceNumber, x.VendorName, x.InvoiceDate);
+                    return new PriceAlertGridRow
+                    {
+                        Id = x.Id,
+                        Select = false,
+                        Priority = x.IsRead ? "Read" : priority,
+                        Product = x.ProductName,
+                        SKU = x.Sku,
+                        OldCost = x.OldUnitCost,
+                        OldInvoicePdf = File.Exists(oldInvoicePath) ? "View PDF" : "Not found",
+                        OldInvoicePath = oldInvoicePath,
+                        OldInvoiceDetails = $"{x.OldVendorName} • Invoice {x.OldInvoiceNumber}".Trim(' ', '•'),
+                        NewCost = x.NewUnitCost,
+                        NewInvoicePdf = File.Exists(newInvoicePath) ? "View PDF" : "Not found",
+                        NewInvoicePath = newInvoicePath,
+                        NewInvoiceDetails = $"{x.VendorName} • Invoice {x.InvoiceNumber}".Trim(' ', '•'),
+                        Change = PercentText(pct),
+                        Status = x.IsRead ? "Read" : "New",
+                        Created = x.CreatedUtc
+                    };
                 })
                 .ToList();
-            HideId(grid);
+            foreach (DataGridViewRow gridRow in grid.Rows)
+            {
+                if (gridRow.DataBoundItem is not PriceAlertGridRow alertRow)
+                    continue;
+                gridRow.Cells["OldInvoicePdf"].ToolTipText = alertRow.OldInvoiceDetails;
+                gridRow.Cells["NewInvoicePdf"].ToolTipText = alertRow.NewInvoiceDetails;
+            }
             newAlerts.Text = rows.Count(x => !x.IsRead).ToString(CultureInfo.InvariantCulture);
             highPriority.Text = rows.Count(x => !x.IsRead && Math.Abs(x.OldUnitCost == 0 ? 0 : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m) >= 10m).ToString(CultureInfo.InvariantCulture);
-            resolved.Text = rows.Count(x => x.IsRead && x.ReadUtc?.Month == DateTime.UtcNow.Month && x.ReadUtc?.Year == DateTime.UtcNow.Year).ToString(CultureInfo.InvariantCulture);
+            resolved.Text = rows.Count(x => x.IsRead).ToString(CultureInfo.InvariantCulture);
         }
+        alertPeriod.SelectedIndexChanged += (_, _) =>
+        {
+            if (changingAlertPeriod)
+                return;
+
+            if (!TryResolveStandardPeriod(alertPeriod.Text, alertFrom, alertTo, out var selectedFrom, out var selectedTo))
+            {
+                changingAlertPeriod = true;
+                alertPeriod.SelectedItem = previousAlertPeriod;
+                changingAlertPeriod = false;
+                return;
+            }
+
+            alertFrom = selectedFrom;
+            alertTo = selectedTo;
+            previousAlertPeriod = alertPeriod.Text;
+            refresh();
+        };
+        grid.CellContentClick += (_, e) =>
+        {
+            if (e.RowIndex < 0 || grid.Rows[e.RowIndex].DataBoundItem is not PriceAlertGridRow alertRow)
+                return;
+            var columnName = grid.Columns[e.ColumnIndex].Name;
+            if (string.Equals(columnName, "OldInvoicePdf", StringComparison.Ordinal))
+                OpenStoredDocument(alertRow.OldInvoicePath, "Old Price Invoice");
+            else if (string.Equals(columnName, "NewInvoicePdf", StringComparison.Ordinal))
+                OpenStoredDocument(alertRow.NewInvoicePath, "New Price Invoice");
+        };
         AddSectionButton(actions, "Home", (_, _) => ShowModule("Dashboard"), width: 160);
         AddSectionButton(actions, "Manage Alerts", async () =>
         {
@@ -5025,22 +5981,526 @@ internal sealed partial class MainForm : Form
         return ModuleShell("\uE7BA", "Price Alerts", "Review supplier cost changes and alert thresholds.", root);
     }
 
+    private Control BuildActivityLog()
+    {
+        if (!_session.IsAdmin)
+            return BuildModuleError("Activity", new UnauthorizedAccessException("Only Owner/Admin accounts can view activity history."));
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 3,
+            ColumnCount = 1,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(2)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+
+        var filters = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoScroll = true,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(6, 10, 6, 8)
+        };
+        var allDates = new CheckBox
+        {
+            Text = "All Dates",
+            Checked = true,
+            AutoSize = true,
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.BoldFont(9),
+            Padding = new Padding(0, 8, 4, 0)
+        };
+        var from = WinTheme.DatePicker();
+        from.Width = 135;
+        from.Value = DateTime.Today.AddDays(-30);
+        from.Enabled = false;
+        var through = WinTheme.DatePicker();
+        through.Width = 135;
+        through.Value = DateTime.Today;
+        var section = WinTheme.ComboBox();
+        section.Width = 190;
+        section.Items.AddRange(new object[]
+        {
+            "All Sections", "Shift Cash Drop", "Cash On Hand", "Cash & Sales Summary",
+            "Check Payout", "Purchases", "Bank Statement", "Product Costs", "Price Alerts",
+            "Payroll", "Scheduling", "Employees", "Stores", "User Accounts", "Settings"
+        });
+        section.SelectedIndex = 0;
+        var search = SectionTextBox();
+        search.Width = 220;
+        search.PlaceholderText = "User, action, reason, or record";
+        filters.Controls.Add(allDates);
+        filters.Controls.Add(new Label { Text = "From", AutoSize = true, ForeColor = WinTheme.Text, Padding = new Padding(0, 10, 4, 0), Font = WinTheme.BoldFont(9) });
+        filters.Controls.Add(from);
+        filters.Controls.Add(new Label { Text = "Through", AutoSize = true, ForeColor = WinTheme.Text, Padding = new Padding(12, 10, 4, 0), Font = WinTheme.BoldFont(9) });
+        filters.Controls.Add(through);
+        filters.Controls.Add(new Label { Text = "Section", AutoSize = true, ForeColor = WinTheme.Text, Padding = new Padding(12, 10, 4, 0), Font = WinTheme.BoldFont(9) });
+        filters.Controls.Add(section);
+        filters.Controls.Add(new Label { Text = "Find", AutoSize = true, ForeColor = WinTheme.Text, Padding = new Padding(12, 10, 4, 0), Font = WinTheme.BoldFont(9) });
+        filters.Controls.Add(search);
+        var refresh = WinTheme.Button("Refresh", true);
+        refresh.Width = 130;
+        filters.Controls.Add(refresh);
+        root.Controls.Add(filters, 0, 0);
+
+        var grid = WinTheme.Grid();
+        var undoColumn = new DataGridViewButtonColumn
+        {
+            Name = "UndoActivity",
+            HeaderText = "Owner Action",
+            DataPropertyName = "Undo",
+            UseColumnTextForButtonValue = false,
+            Width = 115,
+            MinimumWidth = 105,
+            FlatStyle = FlatStyle.Flat
+        };
+        grid.Columns.Add(undoColumn);
+        root.Controls.Add(grid, 0, 1);
+        var footer = new Label
+        {
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = WinTheme.Muted,
+            Font = WinTheme.BodyFont(9),
+            Padding = new Padding(8, 0, 0, 0)
+        };
+        root.Controls.Add(footer, 0, 2);
+
+        void RefreshActivity()
+        {
+            var fromDate = DateOnly.FromDateTime(from.Value.Date);
+            var throughExclusive = DateOnly.FromDateTime(through.Value.Date).AddDays(1);
+            var fromUtc = DateTime.SpecifyKind(fromDate.ToDateTime(TimeOnly.MinValue), DateTimeKind.Local).ToUniversalTime();
+            var throughUtc = DateTime.SpecifyKind(throughExclusive.ToDateTime(TimeOnly.MinValue), DateTimeKind.Local).ToUniversalTime();
+            var selectedSection = section.SelectedItem?.ToString() ?? "All Sections";
+            var find = search.Text.Trim();
+            using var db = CreateDb();
+            var query = db.ActivityLogs.AsNoTracking()
+                .Where(x => (x.StoreId == null || x.StoreId == _currentStoreId) && x.OccurredUtc < throughUtc);
+            if (!allDates.Checked)
+                query = query.Where(x => x.OccurredUtc >= fromUtc);
+            if (!string.Equals(selectedSection, "All Sections", StringComparison.OrdinalIgnoreCase))
+                query = query.Where(x => x.Section == selectedSection);
+            if (!string.IsNullOrWhiteSpace(find))
+                query = query.Where(x => x.UserName.Contains(find) || x.Action.Contains(find) || x.Description.Contains(find) || x.EntityType.Contains(find));
+            var rows = query.OrderByDescending(x => x.OccurredUtc).ThenByDescending(x => x.Id).Take(2000).ToList();
+            var shiftCorrections = db.ShiftLogs.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue)
+                .Select(x => new { x.Id, x.CorrectsId, x.CreatedUtc })
+                .ToList();
+            var latestShiftCorrectionIds = shiftCorrections
+                .GroupBy(x => x.CorrectsId!.Value)
+                .Select(group => group.OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id).First().Id)
+                .ToHashSet();
+            var correctedShiftIds = shiftCorrections.Select(x => x.CorrectsId!.Value).ToHashSet();
+            var cashCorrections = db.CashOnHand.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue)
+                .Select(x => new { x.Id, x.CorrectsId, x.CreatedUtc })
+                .ToList();
+            var latestCashCorrectionIds = cashCorrections
+                .GroupBy(x => x.CorrectsId!.Value)
+                .Select(group => group.OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id).First().Id)
+                .ToHashSet();
+            var correctedCashIds = cashCorrections.Select(x => x.CorrectsId!.Value).ToHashSet();
+            var checkCorrections = db.CheckPayouts.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue)
+                .Select(x => new { x.Id, x.CorrectsId, x.CreatedUtc })
+                .ToList();
+            var latestCheckCorrectionIds = checkCorrections
+                .GroupBy(x => x.CorrectsId!.Value)
+                .Select(group => group.OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id).First().Id)
+                .ToHashSet();
+            var correctedCheckIds = checkCorrections.Select(x => x.CorrectsId!.Value).ToHashSet();
+
+            grid.DataSource = rows.Select(x =>
+            {
+                var localTime = DateTime.SpecifyKind(x.OccurredUtc, DateTimeKind.Utc).ToLocalTime();
+                var ownerOrManager = !x.IsSystem &&
+                    (string.Equals(x.UserRole, nameof(UserRole.Manager), StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(x.UserRole, nameof(UserRole.OwnerAdmin), StringComparison.OrdinalIgnoreCase));
+                var effectiveCorrection =
+                    (string.Equals(x.Action, "Correction", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(x.Action, "Undo", StringComparison.OrdinalIgnoreCase)) &&
+                    ((x.EntityType == nameof(ShiftLogEntry) && latestShiftCorrectionIds.Contains(x.EntityId)) ||
+                     (x.EntityType == nameof(CashOnHandEntry) && latestCashCorrectionIds.Contains(x.EntityId)) ||
+                     (x.EntityType == nameof(CheckPayout) && latestCheckCorrectionIds.Contains(x.EntityId)));
+                var effectiveCreatedEntry = string.Equals(x.Action, "Created", StringComparison.OrdinalIgnoreCase) &&
+                    ((x.EntityType == nameof(ShiftLogEntry) && !correctedShiftIds.Contains(x.EntityId)) ||
+                     (x.EntityType == nameof(CashOnHandEntry) && !correctedCashIds.Contains(x.EntityId)) ||
+                     (x.EntityType == nameof(CheckPayout) && !correctedCheckIds.Contains(x.EntityId)));
+                var canUndo = ownerOrManager && (effectiveCorrection || effectiveCreatedEntry);
+                return new
+                {
+                    x.Id,
+                    Date = localTime.ToString("M/d/yyyy", CultureInfo.CurrentCulture),
+                    Time = localTime.ToString("h:mm:ss tt", CultureInfo.CurrentCulture),
+                    UserName = string.IsNullOrWhiteSpace(x.UserName) ? (x.IsSystem ? "Background Service" : "Unknown") : x.UserName,
+                    Role = x.IsSystem ? "System" : x.UserRole,
+                    x.Section,
+                    x.Action,
+                    Record = x.EntityId > 0 ? $"{x.EntityType} #{x.EntityId}" : x.EntityType,
+                    Details = x.Description,
+                    Undo = canUndo ? "Undo" : "—"
+                };
+            }).ToList();
+            HideId(grid);
+            footer.Text = rows.Count == 2000
+                ? "Showing the newest 2,000 matching activities. Narrow the date range to see older activity."
+                : $"{rows.Count:N0} activity record(s). Every reversible owner/manager entry has Undo; undo creates a new audited correction and never erases history.";
+        }
+
+        async Task UndoActivityAsync(int activityId)
+        {
+            await using var db = CreateDb();
+            var activity = await db.ActivityLogs.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == activityId && (x.StoreId == null || x.StoreId == _currentStoreId));
+            if (activity is null)
+                return;
+            var ownerOrManager = !activity.IsSystem &&
+                (string.Equals(activity.UserRole, nameof(UserRole.Manager), StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(activity.UserRole, nameof(UserRole.OwnerAdmin), StringComparison.OrdinalIgnoreCase));
+            var isCreatedEntry = string.Equals(activity.Action, "Created", StringComparison.OrdinalIgnoreCase);
+            var isCorrection =
+                string.Equals(activity.Action, "Correction", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(activity.Action, "Undo", StringComparison.OrdinalIgnoreCase);
+            if (!ownerOrManager || (!isCreatedEntry && !isCorrection))
+            {
+                MessageBox.Show(this, "This item is informational or cannot be safely reversed. Undo is available for effective owner/manager entries in Shift Cash Drop, Cash On Hand, and Check Payout.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var occurredLocal = DateTime.SpecifyKind(activity.OccurredUtc, DateTimeKind.Utc).ToLocalTime();
+            if (MessageBox.Show(
+                    this,
+                    $"Undo this {activity.Action.ToLowerInvariant()} by {activity.UserName} from {occurredLocal:M/d/yyyy h:mm:ss tt}?\n\n" +
+                    $"{activity.Description}\n\nA new owner correction will reverse the effective values. Nothing will be deleted.",
+                    "Confirm Audited Undo",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            DateOnly? firstAffectedDate = null;
+            DateOnly? secondAffectedDate = null;
+            var undoReason = $"Owner/Admin undo of {activity.Action.ToLowerInvariant()} #{activity.EntityId} entered by {activity.UserName} on {occurredLocal:M/d/yyyy h:mm:ss tt}.";
+
+            if (activity.EntityType == nameof(ShiftLogEntry))
+            {
+                if (isCreatedEntry)
+                {
+                    var original = await db.ShiftLogs.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && !x.IsCorrection);
+                    var alreadyCorrected = original is not null && await db.ShiftLogs.AsNoTracking()
+                        .AnyAsync(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == original.Id);
+                    if (original is null || alreadyCorrected)
+                    {
+                        MessageBox.Show(this, "That Shift Cash Drop entry is no longer effective and cannot be undone again.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        RefreshActivity();
+                        return;
+                    }
+                    db.ShiftLogs.Add(new ShiftLogEntry
+                    {
+                        StoreId = _currentStoreId,
+                        Date = original.Date,
+                        Employee = original.Employee,
+                        ShiftNo = original.ShiftNo,
+                        CashTotal = 0,
+                        CardTotal = 0,
+                        NetSales = 0,
+                        Tax = 0,
+                        CashDropReceived = 0,
+                        RegisterPayout = 0,
+                        PayoutReason = "",
+                        IsCorrection = true,
+                        CorrectsId = original.Id,
+                        CorrectionReason = undoReason,
+                        CreatedByUserId = _session.UserId,
+                        CreatedByName = _session.DisplayName,
+                        CreatedUtc = DateTime.UtcNow
+                    });
+                    firstAffectedDate = original.Date;
+                }
+                else
+                {
+                var correction = await db.ShiftLogs.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue);
+                if (correction is null)
+                {
+                    MessageBox.Show(this, "The corrected Shift Cash Drop record is no longer available.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                var latestId = await db.ShiftLogs.AsNoTracking()
+                    .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == correction.CorrectsId)
+                    .OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id)
+                    .Select(x => x.Id)
+                    .FirstAsync();
+                if (latestId != correction.Id)
+                {
+                    MessageBox.Show(this, "That manager correction has already been superseded and is no longer effective.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    RefreshActivity();
+                    return;
+                }
+                var previous = await db.ShiftLogs.AsNoTracking()
+                    .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == correction.CorrectsId && x.Id != correction.Id)
+                    .OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id)
+                    .FirstOrDefaultAsync()
+                    ?? await db.ShiftLogs.AsNoTracking().FirstOrDefaultAsync(x => x.Id == correction.CorrectsId!.Value && x.StoreId == _currentStoreId);
+                if (previous is null)
+                {
+                    MessageBox.Show(this, "The prior Shift Cash Drop values are no longer available, so this correction cannot be safely undone.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                db.ShiftLogs.Add(new ShiftLogEntry
+                {
+                    StoreId = _currentStoreId,
+                    Date = previous.Date,
+                    Employee = previous.Employee,
+                    ShiftNo = previous.ShiftNo,
+                    CashTotal = previous.CashTotal,
+                    CardTotal = previous.CardTotal,
+                    NetSales = previous.NetSales,
+                    Tax = previous.Tax,
+                    CashDropReceived = previous.CashDropReceived,
+                    RegisterPayout = previous.RegisterPayout,
+                    PayoutReason = previous.PayoutReason,
+                    IsCorrection = true,
+                    CorrectsId = correction.CorrectsId,
+                    CorrectionReason = undoReason,
+                    CreatedByUserId = _session.UserId,
+                    CreatedByName = _session.DisplayName,
+                    CreatedUtc = DateTime.UtcNow
+                });
+                firstAffectedDate = correction.Date;
+                secondAffectedDate = previous.Date;
+                }
+            }
+            else if (activity.EntityType == nameof(CashOnHandEntry))
+            {
+                if (isCreatedEntry)
+                {
+                    var original = await db.CashOnHand.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && !x.IsCorrection);
+                    var alreadyCorrected = original is not null && await db.CashOnHand.AsNoTracking()
+                        .AnyAsync(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == original.Id);
+                    if (original is null || alreadyCorrected)
+                    {
+                        MessageBox.Show(this, "That Cash On Hand entry is no longer effective and cannot be undone again.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        RefreshActivity();
+                        return;
+                    }
+                    db.CashOnHand.Add(new CashOnHandEntry
+                    {
+                        StoreId = _currentStoreId,
+                        Date = original.Date,
+                        CashAdded = 0,
+                        Reference = original.Reference,
+                        IsPayout = original.IsPayout,
+                        PayoutAmount = 0,
+                        VendorId = original.VendorId,
+                        PurposeId = original.PurposeId,
+                        Description = original.Description,
+                        IsCorrection = true,
+                        CorrectsId = original.Id,
+                        CorrectionReason = undoReason,
+                        CreatedByUserId = _session.UserId,
+                        CreatedByName = _session.DisplayName,
+                        CreatedUtc = DateTime.UtcNow
+                    });
+                }
+                else
+                {
+                var correction = await db.CashOnHand.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue);
+                if (correction is null)
+                {
+                    MessageBox.Show(this, "The corrected Cash On Hand record is no longer available.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                var latestId = await db.CashOnHand.AsNoTracking()
+                    .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == correction.CorrectsId)
+                    .OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id)
+                    .Select(x => x.Id)
+                    .FirstAsync();
+                if (latestId != correction.Id)
+                {
+                    MessageBox.Show(this, "That manager correction has already been superseded and is no longer effective.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    RefreshActivity();
+                    return;
+                }
+                var previous = await db.CashOnHand.AsNoTracking()
+                    .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == correction.CorrectsId && x.Id != correction.Id)
+                    .OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id)
+                    .FirstOrDefaultAsync()
+                    ?? await db.CashOnHand.AsNoTracking().FirstOrDefaultAsync(x => x.Id == correction.CorrectsId!.Value && x.StoreId == _currentStoreId);
+                if (previous is null)
+                {
+                    MessageBox.Show(this, "The prior Cash On Hand values are no longer available, so this correction cannot be safely undone.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                db.CashOnHand.Add(new CashOnHandEntry
+                {
+                    StoreId = _currentStoreId,
+                    Date = previous.Date,
+                    CashAdded = previous.CashAdded,
+                    Reference = previous.Reference,
+                    IsPayout = previous.IsPayout,
+                    PayoutAmount = previous.PayoutAmount,
+                    VendorId = previous.VendorId,
+                    PurposeId = previous.PurposeId,
+                    Description = previous.Description,
+                    IsCorrection = true,
+                    CorrectsId = correction.CorrectsId,
+                    CorrectionReason = undoReason,
+                    CreatedByUserId = _session.UserId,
+                    CreatedByName = _session.DisplayName,
+                    CreatedUtc = DateTime.UtcNow
+                });
+                }
+            }
+            else if (activity.EntityType == nameof(CheckPayout))
+            {
+                if (isCreatedEntry)
+                {
+                    var original = await db.CheckPayouts.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && !x.IsCorrection);
+                    var alreadyCorrected = original is not null && await db.CheckPayouts.AsNoTracking()
+                        .AnyAsync(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == original.Id);
+                    if (original is null || alreadyCorrected)
+                    {
+                        MessageBox.Show(this, "That Check Payout entry is no longer effective and cannot be undone again.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        RefreshActivity();
+                        return;
+                    }
+                    db.CheckPayouts.Add(new CheckPayout
+                    {
+                        StoreId = _currentStoreId,
+                        Date = original.Date,
+                        VendorName = original.VendorName,
+                        Description = original.Description,
+                        CheckAmount = 0,
+                        CheckNumber = original.CheckNumber,
+                        Cleared = original.Cleared,
+                        IsCorrection = true,
+                        CorrectsId = original.Id,
+                        CorrectionReason = undoReason,
+                        CreatedByUserId = _session.UserId,
+                        CreatedByName = _session.DisplayName,
+                        CreatedUtc = DateTime.UtcNow
+                    });
+                }
+                else
+                {
+                var correction = await db.CheckPayouts.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue);
+                if (correction is null)
+                {
+                    MessageBox.Show(this, "The corrected Check Payout record is no longer available.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                var latestId = await db.CheckPayouts.AsNoTracking()
+                    .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == correction.CorrectsId)
+                    .OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id)
+                    .Select(x => x.Id)
+                    .FirstAsync();
+                if (latestId != correction.Id)
+                {
+                    MessageBox.Show(this, "That manager correction has already been superseded and is no longer effective.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    RefreshActivity();
+                    return;
+                }
+                var previous = await db.CheckPayouts.AsNoTracking()
+                    .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == correction.CorrectsId && x.Id != correction.Id)
+                    .OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id)
+                    .FirstOrDefaultAsync()
+                    ?? await db.CheckPayouts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == correction.CorrectsId!.Value && x.StoreId == _currentStoreId);
+                if (previous is null)
+                {
+                    MessageBox.Show(this, "The prior Check Payout values are no longer available, so this correction cannot be safely undone.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                db.CheckPayouts.Add(new CheckPayout
+                {
+                    StoreId = _currentStoreId,
+                    Date = previous.Date,
+                    VendorName = previous.VendorName,
+                    Description = previous.Description,
+                    CheckAmount = previous.CheckAmount,
+                    CheckNumber = previous.CheckNumber,
+                    Cleared = previous.Cleared,
+                    IsCorrection = true,
+                    CorrectsId = correction.CorrectsId,
+                    CorrectionReason = undoReason,
+                    CreatedByUserId = _session.UserId,
+                    CreatedByName = _session.DisplayName,
+                    CreatedUtc = DateTime.UtcNow
+                });
+                }
+            }
+            else
+            {
+                MessageBox.Show(this, "Undo is available for manager corrections in Shift Cash Drop, Cash On Hand, and Check Payout.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            await db.SaveChangesAsync();
+            if (firstAffectedDate.HasValue)
+                await SyncShiftLogAccountingAsync(firstAffectedDate.Value);
+            if (secondAffectedDate.HasValue && secondAffectedDate != firstAffectedDate)
+                await SyncShiftLogAccountingAsync(secondAffectedDate.Value);
+            RefreshActivity();
+            MessageBox.Show(this, "The activity was undone with a new owner correction. The full history remains visible.", "Undo Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        refresh.Click += (_, _) => RefreshActivity();
+        allDates.CheckedChanged += (_, _) => from.Enabled = !allDates.Checked;
+        grid.CellContentClick += async (_, eventArgs) =>
+        {
+            if (eventArgs.RowIndex < 0 || grid.Columns[eventArgs.ColumnIndex].Name != "UndoActivity")
+                return;
+            var value = grid.Rows[eventArgs.RowIndex].Cells["Id"].Value;
+            if (value is null || !int.TryParse(value.ToString(), out var activityId))
+                return;
+            var undoText = grid.Rows[eventArgs.RowIndex].Cells["UndoActivity"].Value?.ToString();
+            if (!string.Equals(undoText, "Undo", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this, "This activity is informational or has already been superseded. There is nothing currently effective to undo.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            await UndoActivityAsync(activityId);
+        };
+        _pendingModuleActivation = () =>
+        {
+            RefreshActivity();
+            return Task.CompletedTask;
+        };
+        return ModuleShell("\uE81C", "Activity", "Owner-only history of changes, corrections, imports, and system activity.", root);
+    }
+
     private Control BuildProfitLoss()
     {
         using var db = CreateDb();
         var month = DateTime.Today.Month;
         var year = DateTime.Today.Year;
-        var shifts = db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
-            .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
         var purchases = db.PurchaseInvoices.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
             .Where(x => x.InvoiceDate.Month == month && x.InvoiceDate.Year == year).ToList();
-        var cash = db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
+        var cash = EffectiveRows(db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
-        var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
+        var checks = EffectiveRows(db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
             .Where(x => x.Date.Month == month && x.Date.Year == year).ToList();
         var payroll = db.PayrollEntries.AsNoTracking()
             .Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate.Month == month && x.PayrollRun.PayDate.Year == year)
-            .Sum(x => (decimal?)x.GrossPay).GetValueOrDefault();
+            .Select(x => x.GrossPay)
+            .ToList()
+            .Sum();
         var periodFrom = new DateOnly(year, month, 1);
         var periodTo = DateOnly.FromDateTime(DateTime.Today);
         var profitLoss = Task.Run(() => _reportService.GetProfitLossDataAsync(periodFrom, periodTo))
@@ -5153,7 +6613,7 @@ internal sealed partial class MainForm : Form
     private Control BuildReports()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = WinTheme.Bg, Padding = new Padding(2) };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 205));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 230));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
@@ -5197,7 +6657,7 @@ internal sealed partial class MainForm : Form
         var includeDetails = SectionCombo("Include Details", "Summary Only");
         AddMockField(gen, "Report Type *", type, 0, 1, 120);
         gen.SetColumnSpan(gen.GetControlFromPosition(0, 1)!, 2);
-        AddMockField(gen, "Period *", period, 2, 1, 70);
+        AddMockField(gen, "Period *", period, 2, 1, 110);
         gen.SetColumnSpan(gen.GetControlFromPosition(2, 1)!, 2);
         AddMockField(gen, "Format", format, 0, 2, 80);
         AddMockField(gen, "Details", includeDetails, 1, 2, 80);
@@ -5279,20 +6739,25 @@ internal sealed partial class MainForm : Form
         void previewReport()
         {
             using var db = CreateDb();
-            var shifts = db.ShiftLogs.AsNoTracking()
-                .Where(x => x.StoreId == _currentStoreId && x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo))
-                .OrderBy(x => x.Date)
+            var fromDate = DateOnly.FromDateTime(reportFrom);
+            var toDate = DateOnly.FromDateTime(reportTo);
+            var summaries = db.PosSalesSummaries.AsNoTracking()
+                .Where(x => x.StoreId == _currentStoreId && x.ReportTo >= fromDate && x.ReportFrom <= toDate)
                 .ToList();
             var purchases = db.PurchaseInvoices.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
                 .Where(x => x.InvoiceDate >= DateOnly.FromDateTime(reportFrom) && x.InvoiceDate <= DateOnly.FromDateTime(reportTo)).ToList();
-            var cash = db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
-                .Where(x => x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo)).ToList();
-            var checks = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList()
-                .Where(x => x.Date >= DateOnly.FromDateTime(reportFrom) && x.Date <= DateOnly.FromDateTime(reportTo)).ToList();
+            var cash = EffectiveRows(db.CashOnHand.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                    x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+                .Where(x => x.Date >= fromDate && x.Date <= toDate).ToList();
+            var checks = EffectiveRows(db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList(),
+                    x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+                .Where(x => x.Date >= fromDate && x.Date <= toDate).ToList();
             var payroll = db.PayrollEntries.AsNoTracking()
                 .Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate >= DateOnly.FromDateTime(reportFrom) && x.PayrollRun.PayDate <= DateOnly.FromDateTime(reportTo))
-                .Sum(x => (decimal?)x.GrossPay).GetValueOrDefault();
-            var netSales = shifts.Sum(x => x.NetSales);
+                .Select(x => x.GrossPay)
+                .ToList()
+                .Sum();
+            var netSales = summaries.Sum(x => x.NetSales);
             var cogs = purchases.Sum(x => x.Total);
             var expenses = cash.Sum(x => x.PayoutAmount) + checks.Sum(x => x.CheckAmount) + payroll;
             var profit = netSales - cogs - expenses;
@@ -5302,7 +6767,7 @@ internal sealed partial class MainForm : Form
             expensesLabel.Text = MoneyText(expenses);
             netProfitLabel.Text = MoneyText(profit);
             netProfitLabel.ForeColor = profit >= 0 ? WinTheme.Green : WinTheme.Red;
-            txLabel.Text = shifts.Count.ToString(CultureInfo.InvariantCulture);
+            txLabel.Text = summaries.Sum(x => x.CustomerTransactionCount).ToString(CultureInfo.InvariantCulture);
             var reportHistory = new[]
             {
                 new { ReportName = "Sales Summary by Date", DateRange = $"{reportFrom:M/d/yyyy} - {reportTo:M/d/yyyy}", Format = format.Text, GeneratedBy = _session.DisplayName, GeneratedOn = DateTime.Now.ToString("M/d/yyyy h:mm tt"), FileStatus = "Ready", Actions = "Preview / Save / Print" },
@@ -5411,6 +6876,75 @@ internal sealed partial class MainForm : Form
         };
         previewReport();
         return ModuleShell("\uE749", "Reports", "Generate, export, and review store reports.", root);
+    }
+
+    private static ComboBox CreateStandardPeriodCombo()
+    {
+        var period = SectionCombo(
+            "Today",
+            "Yesterday",
+            "Current Week",
+            "Previous Week",
+            "Current Month",
+            "Previous Month",
+            "Current Year",
+            "Previous Year",
+            "Custom");
+        period.SelectedItem = "Current Month";
+        return period;
+    }
+
+    private bool TryResolveStandardPeriod(
+        string selection,
+        DateTime currentFrom,
+        DateTime currentTo,
+        out DateTime selectedFrom,
+        out DateTime selectedTo)
+    {
+        var today = DateTime.Today;
+        var firstDayOfWeek = CultureInfo.CurrentCulture.DateTimeFormat.FirstDayOfWeek;
+        var daysFromWeekStart = (7 + (int)today.DayOfWeek - (int)firstDayOfWeek) % 7;
+        var currentWeekStart = today.AddDays(-daysFromWeekStart);
+
+        selectedFrom = currentFrom;
+        selectedTo = currentTo;
+        switch (selection)
+        {
+            case "Today":
+                selectedFrom = selectedTo = today;
+                return true;
+            case "Yesterday":
+                selectedFrom = selectedTo = today.AddDays(-1);
+                return true;
+            case "Current Week":
+                selectedFrom = currentWeekStart;
+                selectedTo = today;
+                return true;
+            case "Previous Week":
+                selectedFrom = currentWeekStart.AddDays(-7);
+                selectedTo = currentWeekStart.AddDays(-1);
+                return true;
+            case "Current Month":
+                selectedFrom = new DateTime(today.Year, today.Month, 1);
+                selectedTo = today;
+                return true;
+            case "Previous Month":
+                selectedTo = new DateTime(today.Year, today.Month, 1).AddDays(-1);
+                selectedFrom = new DateTime(selectedTo.Year, selectedTo.Month, 1);
+                return true;
+            case "Current Year":
+                selectedFrom = new DateTime(today.Year, 1, 1);
+                selectedTo = today;
+                return true;
+            case "Previous Year":
+                selectedFrom = new DateTime(today.Year - 1, 1, 1);
+                selectedTo = new DateTime(today.Year - 1, 12, 31);
+                return true;
+            case "Custom":
+                return TrySelectCustomReportPeriod(currentFrom, currentTo, out selectedFrom, out selectedTo);
+            default:
+                return false;
+        }
     }
 
     private bool TrySelectCustomReportPeriod(DateTime currentFrom, DateTime currentTo, out DateTime selectedFrom, out DateTime selectedTo)
@@ -5800,13 +7334,26 @@ internal sealed partial class MainForm : Form
 
         using var db = CreateDb();
         var invoice = db.PurchaseInvoices.AsNoTracking().FirstOrDefault(x => x.Id == id.Value && x.StoreId == _currentStoreId);
-        if (invoice is null || string.IsNullOrWhiteSpace(invoice.FilePath) || !File.Exists(invoice.FilePath))
+        OpenStoredDocument(invoice?.FilePath, "Purchase Invoice");
+    }
+
+    private void OpenStoredDocument(string? filePath, string documentName)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
-            MessageBox.Show(this, "The selected invoice does not have an attached file.", "Purchases", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, $"No {documentName.ToLowerInvariant()} is attached to this record.", documentName, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        Process.Start(new ProcessStartInfo(invoice.FilePath) { UseShellExecute = true });
+        try
+        {
+            using var viewer = new StoredDocumentViewerForm(filePath, documentName);
+            viewer.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), documentName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private async Task UpdateBankTransactionAsync(int id, string? category, string? checkNumber)
@@ -6169,6 +7716,7 @@ CREATE TABLE [dbo].[BankStatementTransactions] (
     [IsMatched] BIT NOT NULL DEFAULT 0,
     [MatchReference] NVARCHAR(200) NOT NULL DEFAULT '',
     [IncludeInProfitLoss] BIT NOT NULL DEFAULT 0,
+    [CheckCopyPath] NVARCHAR(1000) NOT NULL DEFAULT '',
     [ImportedUtc] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
     [CreatedByName] NVARCHAR(100) NOT NULL DEFAULT ''
 );
@@ -6203,6 +7751,7 @@ CREATE TABLE [dbo].[BankConnections] (
     IsMatched INTEGER NOT NULL DEFAULT 0,
     MatchReference TEXT NOT NULL DEFAULT '',
     IncludeInProfitLoss INTEGER NOT NULL DEFAULT 0,
+    CheckCopyPath TEXT NOT NULL DEFAULT '',
     ImportedUtc TEXT NOT NULL DEFAULT (datetime('now')),
     CreatedByName TEXT NOT NULL DEFAULT ''
 );
@@ -6251,6 +7800,8 @@ IF COL_LENGTH('dbo.BankStatementTransactions', 'MatchReference') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [MatchReference] NVARCHAR(200) NOT NULL CONSTRAINT DF_BankStatementTransactions_MatchReference DEFAULT '';
 IF COL_LENGTH('dbo.BankStatementTransactions', 'IncludeInProfitLoss') IS NULL
     ALTER TABLE [dbo].[BankStatementTransactions] ADD [IncludeInProfitLoss] BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IncludeInProfitLoss DEFAULT 0;
+IF COL_LENGTH('dbo.BankStatementTransactions', 'CheckCopyPath') IS NULL
+    ALTER TABLE [dbo].[BankStatementTransactions] ADD [CheckCopyPath] NVARCHAR(1000) NOT NULL CONSTRAINT DF_BankStatementTransactions_CheckCopyPath DEFAULT '';
 IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BankConnections')
 CREATE TABLE [dbo].[BankConnections] (
     [Id] INT IDENTITY(1,1) PRIMARY KEY,
@@ -6304,6 +7855,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await addColumn("IsMatched", "IsMatched INTEGER NOT NULL DEFAULT 0");
         await addColumn("MatchReference", "MatchReference TEXT NOT NULL DEFAULT ''");
         await addColumn("IncludeInProfitLoss", "IncludeInProfitLoss INTEGER NOT NULL DEFAULT 0");
+        await addColumn("CheckCopyPath", "CheckCopyPath TEXT NOT NULL DEFAULT ''");
         await ExecuteBankSchemaCommandAsync(conn, @"CREATE TABLE IF NOT EXISTS BankConnections (
     Id INTEGER PRIMARY KEY AUTOINCREMENT,
     StoreId INTEGER NOT NULL,
@@ -6374,8 +7926,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = conn is SqlConnection
-            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
-            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
+            ? $"SELECT Id, [Date], [Description], Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss, CheckCopyPath FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY [Date]"
+            : $"SELECT Id, Date, Description, Credit, Debit, CheckNumber, Category, Source, IsMatched, MatchReference, IncludeInProfitLoss, CheckCopyPath FROM BankStatementTransactions WHERE StoreId=@sid AND {BankStatementDatePeriodFilter(conn)} ORDER BY Date";
         AddParam(cmd, "@sid", _currentStoreId);
         AddBankStatementDatePeriodParams(cmd, conn, month, year);
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -6395,7 +7947,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
                 reader.IsDBNull(7) ? "Statement Import" : reader[7]?.ToString() ?? "Statement Import",
                 !reader.IsDBNull(8) && Convert.ToBoolean(reader[8]),
                 reader.IsDBNull(9) ? "" : reader[9]?.ToString() ?? "",
-                !reader.IsDBNull(10) && Convert.ToBoolean(reader[10])));
+                !reader.IsDBNull(10) && Convert.ToBoolean(reader[10]),
+                reader.IsDBNull(11) ? "" : reader[11]?.ToString() ?? ""));
         }
         return rows;
     }
@@ -6445,6 +7998,19 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_BankStatementTransacti
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "UPDATE BankStatementTransactions SET IncludeInProfitLoss=@include WHERE Id=@id AND StoreId=@sid";
         AddParam(cmd, "@include", include);
+        AddParam(cmd, "@id", id);
+        AddParam(cmd, "@sid", _currentStoreId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task UpdateBankCheckCopyPathAsync(int id, string checkCopyPath)
+    {
+        await EnsureBankStatementTablesAsync();
+        await using var conn = CreateBankConnection();
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE BankStatementTransactions SET CheckCopyPath=@path WHERE Id=@id AND StoreId=@sid";
+        AddParam(cmd, "@path", checkCopyPath);
         AddParam(cmd, "@id", id);
         AddParam(cmd, "@sid", _currentStoreId);
         await cmd.ExecuteNonQueryAsync();
@@ -6558,6 +8124,77 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             AddParam(command, "@include", DefaultIncludeInProfitLoss(transaction.Category, transaction.Credit, transaction.Debit));
             await command.ExecuteNonQueryAsync();
         }
+    }
+
+    private async Task AttachOrOpenBankCheckCopyAsync(BankStatementGridRow row)
+    {
+        if (!IsBankCheckTransaction(row.Check, row.Description))
+        {
+            MessageBox.Show(this, "This transaction is not identified as a check transaction.", "Check Copy",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (File.Exists(row.CheckCopyPath))
+        {
+            OpenStoredDocument(row.CheckCopyPath, "Check Copy");
+            return;
+        }
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Attach Check Copy",
+            Filter = "Check copies (*.pdf;*.png;*.jpg;*.jpeg;*.tif;*.tiff)|*.pdf;*.png;*.jpg;*.jpeg;*.tif;*.tiff|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        MessageBox.Show(this,
+            "The connected bank feed provides this check transaction and its check number, but it does not provide the scanned check image. " +
+            "Select the check PDF or image downloaded from the bank. It will be attached to this transaction and will open inside HISAB KITAB.",
+            "Attach Bank Check Copy", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        var folder = Path.Combine(_paths.AppDataDirectory, "Bank Check Copies", $"Store_{_currentStoreId}", row.Date.ToString("yyyy-MM"));
+        Directory.CreateDirectory(folder);
+        var checkLabel = string.IsNullOrWhiteSpace(row.Check) ? $"Transaction_{row.Id}" : $"Check_{row.Check}";
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+            checkLabel = checkLabel.Replace(invalid, '_');
+        var extension = Path.GetExtension(dialog.FileName);
+        var targetPath = Path.Combine(folder, $"{row.Date:yyyy-MM-dd}_{checkLabel}_{row.Id}{extension}");
+        File.Copy(dialog.FileName, targetPath, overwrite: true);
+        await UpdateBankCheckCopyPathAsync(row.Id, targetPath);
+        OpenStoredDocument(targetPath, "Check Copy");
+    }
+
+    private static bool IsBankCheckTransaction(string? checkNumber, string? description)
+        => !string.IsNullOrWhiteSpace(checkNumber)
+           || (!string.IsNullOrWhiteSpace(description) && description.Contains("check", StringComparison.OrdinalIgnoreCase));
+
+    private static string ResolvePriceAlertInvoicePath(
+        IReadOnlyList<PurchaseInvoice> invoices,
+        int? purchaseInvoiceId,
+        string? invoiceNumber,
+        string? vendorName,
+        DateOnly effectiveDate)
+    {
+        var available = invoices.Where(x => !string.IsNullOrWhiteSpace(x.FilePath) && File.Exists(x.FilePath));
+        if (purchaseInvoiceId.HasValue)
+        {
+            var byId = available.FirstOrDefault(x => x.Id == purchaseInvoiceId.Value);
+            if (byId is not null)
+                return byId.FilePath;
+        }
+
+        var normalizedInvoice = invoiceNumber?.Trim() ?? "";
+        var normalizedVendor = vendorName?.Trim() ?? "";
+        var exact = available
+            .Where(x => !string.IsNullOrWhiteSpace(normalizedInvoice) &&
+                        string.Equals(x.InvoiceNumber.Trim(), normalizedInvoice, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => string.Equals(x.VendorName.Trim(), normalizedVendor, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(x => Math.Abs(x.InvoiceDate.DayNumber - effectiveDate.DayNumber))
+            .FirstOrDefault();
+        return exact?.FilePath ?? "";
     }
 
     private async Task<(int Month, int Year)?> ImportBankStatementAsync(int month, int year, Func<Task> refreshAsync)
@@ -7575,15 +9212,16 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
         return form;
     }
 
-    private static void AddSectionButton(FlowLayoutPanel actions, string text, EventHandler click, bool filled = false, int width = 170, bool enabled = true)
+    private static Button AddSectionButton(FlowLayoutPanel actions, string text, EventHandler click, bool filled = false, int width = 170, bool enabled = true)
     {
         var button = MockActionButton("", text, filled, width);
         button.Enabled = enabled;
         button.Click += click;
         actions.Controls.Add(button);
+        return button;
     }
 
-    private static void AddSectionButton(FlowLayoutPanel actions, string text, Func<Task> click, bool filled = false, int width = 170, bool enabled = true)
+    private static Button AddSectionButton(FlowLayoutPanel actions, string text, Func<Task> click, bool filled = false, int width = 170, bool enabled = true)
     {
         var button = MockActionButton("", text, filled, width);
         button.Enabled = enabled;
@@ -7594,6 +9232,7 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             finally { button.Enabled = enabled; }
         };
         actions.Controls.Add(button);
+        return button;
     }
 
     private static string MoneyText(decimal value) => value.ToString("C2", CultureInfo.CurrentCulture);
@@ -7609,6 +9248,15 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
 
     private static decimal Money(string text)
         => decimal.TryParse(text.Replace("$", "").Replace(",", "").Trim(), out var value) ? value : 0m;
+
+    private static long NumericBatchOrder(string? batch)
+        => long.TryParse(
+            batch?.Trim(),
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out var number)
+            ? number
+            : long.MaxValue;
 
     private static void HideId(DataGridView grid)
     {
@@ -7715,69 +9363,12 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             return;
 
         await using var db = CreateDb();
-        var rows = await db.ShiftLogs
-            .AsNoTracking()
-            .Where(item =>
-                item.StoreId == _currentStoreId &&
-                item.Date == date &&
-                item.PosSalesSummaryId == null)
-            .OrderBy(item => item.CreatedUtc)
-            .ToListAsync();
-        var effective = EffectiveRows(
-            rows,
-            item => item.IsCorrection,
-            item => item.CorrectsId,
-            item => item.Id,
-            item => item.CreatedUtc);
-
-        var summary = await db.PosSalesSummaries
-            .Where(item =>
-                item.StoreId == _currentStoreId &&
-                item.ReportFrom == date &&
-                item.ReportTo == date)
-            .OrderByDescending(item => item.ImportedUtc)
-            .FirstOrDefaultAsync();
-        if (summary is null)
-            return;
-
-        summary.CashDropReceived = effective.Sum(item => item.CashDropReceived);
-        summary.RegisterPayout = effective.Sum(item => item.RegisterPayout);
-        summary.PayoutReason = BuildCombinedShiftPayoutReason(effective);
-
-        var hasManagerReconciliation = effective.Any(item =>
-            item.CashDropReceived != 0m ||
-            item.RegisterPayout != 0m ||
-            !string.IsNullOrWhiteSpace(item.PayoutReason));
-        if (hasManagerReconciliation)
-        {
-            summary.IsReconciled = true;
-            summary.ReconciledByUserId = _session.UserId;
-            summary.ReconciledByName = _session.DisplayName;
-            summary.ReconciledUtc = DateTime.UtcNow;
-        }
-        else
-        {
-            summary.IsReconciled = false;
-            summary.ReconciledByUserId = null;
-            summary.ReconciledByName = "";
-            summary.ReconciledUtc = null;
-        }
-
-        await db.SaveChangesAsync();
-    }
-
-    private static string BuildCombinedShiftPayoutReason(IEnumerable<ShiftLogEntry> rows)
-    {
-        var reasons = rows
-            .Where(item => !string.IsNullOrWhiteSpace(item.PayoutReason))
-            .Select(item =>
-                string.IsNullOrWhiteSpace(item.ShiftNo)
-                    ? item.PayoutReason.Trim()
-                    : $"Batch {item.ShiftNo}: {item.PayoutReason.Trim()}")
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var combined = string.Join("; ", reasons);
-        return combined.Length <= 300 ? combined : combined[..300];
+        await CashDropRollupService.SyncDateAsync(
+            db,
+            _currentStoreId,
+            date,
+            _session.UserId,
+            _session.DisplayName);
     }
 
     private async Task SyncShiftLogCashDropsToCashOnHandAsync(DateOnly date)
@@ -7786,11 +9377,13 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
 
         using var db = CreateDb();
         var rows = await db.ShiftLogs
-            .Where(x => x.StoreId == _currentStoreId && x.Date == date)
+            .Where(x => x.StoreId == _currentStoreId)
             .OrderBy(x => x.CreatedUtc)
             .ToListAsync();
 
-        var effective = EffectiveRows(rows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var effective = EffectiveRows(rows, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date == date)
+            .ToList();
 
         Vendor? autoVendor = null;
         Purpose? autoPurpose = null;
@@ -8271,7 +9864,8 @@ internal sealed record BankStatementRow(
     string Source = "Statement Import",
     bool IsMatched = false,
     string MatchReference = "",
-    bool IncludeInProfitLoss = false);
+    bool IncludeInProfitLoss = false,
+    string CheckCopyPath = "");
 
 internal sealed class PurchaseInvoiceGridRow
 {
@@ -8282,7 +9876,28 @@ internal sealed class PurchaseInvoiceGridRow
     public string Invoice { get; set; } = "";
     public decimal Total { get; set; }
     public string Attachment { get; set; } = "";
+    public string FilePath { get; set; } = "";
     public string Status { get; set; } = "";
+}
+
+internal sealed class PriceAlertGridRow
+{
+    public int Id { get; set; }
+    public bool Select { get; set; }
+    public string Priority { get; set; } = "";
+    public string Product { get; set; } = "";
+    public string SKU { get; set; } = "";
+    public decimal OldCost { get; set; }
+    public string OldInvoicePdf { get; set; } = "";
+    public string OldInvoicePath { get; set; } = "";
+    public string OldInvoiceDetails { get; set; } = "";
+    public decimal NewCost { get; set; }
+    public string NewInvoicePdf { get; set; } = "";
+    public string NewInvoicePath { get; set; } = "";
+    public string NewInvoiceDetails { get; set; } = "";
+    public string Change { get; set; } = "";
+    public string Status { get; set; } = "";
+    public DateTime Created { get; set; }
 }
 
 internal sealed class BankStatementGridRow
@@ -8298,6 +9913,9 @@ internal sealed class BankStatementGridRow
     public bool Matched { get; set; }
     public string MatchReference { get; set; } = "";
     public string Check { get; set; } = "";
+    public string CheckCopyAction { get; set; } = "";
+    [System.ComponentModel.Browsable(false)]
+    public string CheckCopyPath { get; set; } = "";
 }
 
 internal sealed class CheckPayoutGridRow

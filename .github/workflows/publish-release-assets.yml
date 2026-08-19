@@ -35,6 +35,21 @@ jobs:
         shell: pwsh
         run: choco install innosetup --yes --no-progress
 
+      - name: Configure Gmail OAuth for the client build
+        shell: pwsh
+        env:
+          GMAIL_OAUTH_CLIENT_JSON_B64: ${{ secrets.GMAIL_OAUTH_CLIENT_JSON_B64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GMAIL_OAUTH_CLIENT_JSON_B64)) {
+            throw "The encrypted Gmail OAuth release credential is not configured."
+          }
+
+          $destination = Join-Path $env:GITHUB_WORKSPACE "src/ManagerPaperworkSystem.WinForms/gmail-oauth-client.json"
+          [IO.File]::WriteAllBytes(
+            $destination,
+            [Convert]::FromBase64String($env:GMAIL_OAUTH_CLIENT_JSON_B64)
+          )
+
       - name: Build installers and automatic-update packages
         shell: pwsh
         run: ./installer/build_three_installers.ps1 -Version '${{ inputs.version }}'

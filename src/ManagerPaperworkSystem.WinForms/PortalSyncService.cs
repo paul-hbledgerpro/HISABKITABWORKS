@@ -8,9 +8,11 @@ using System.Xml.Linq;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
 using ManagerPaperworkSystem.Data.Db;
+using ManagerPaperworkSystem.Data.Services;
 using ManagerPaperworkSystem.UI.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Win32;
 using PuppeteerSharp;
 using PuppeteerSharp.Media;
 
@@ -29,15 +31,14 @@ internal sealed record GeneratedPortalReport(
     string RenderedText,
     string? ExportError);
 internal sealed record CapturedZReport(PosReportData Report, string SourcePath);
-internal sealed record PortalTargetStatus(bool CashSummaryPresent, int ZReportCount)
-{
-    public bool IsComplete(int expectedZReports) =>
-        CashSummaryPresent && ZReportCount >= Math.Max(1, expectedZReports);
-}
+internal sealed record PortalTargetStatus(bool CashSummaryPresent, int ZReportCount);
+internal sealed record PortalSyncScheduleResult(bool WindowsTaskCreated, string Message);
 
 internal static class PortalSyncService
 {
-    private const string TaskName = "HISAB KITAB - Daily POS Report Sync";
+    private const string LegacyTaskName = "HISAB KITAB - Daily POS Report Sync";
+    private const string StartupRunName = "HISAB KITAB POS Report Sync";
+    private const string CurrentUserRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private static readonly SemaphoreSlim RunGate = new(1, 1);
 
     public static string? FindGoogleChrome()
@@ -56,6 +57,12 @@ internal static class PortalSyncService
 
     public static void OpenEnrollmentChrome(PortalStoreSyncSettings settings)
     {
+        if (!PortalSyncSettingsStore.IsConnected(settings))
+        {
+            throw new InvalidOperationException(
+                "This store is disconnected from the current PC login. Reconnect it in Stores before running One-Time Setup.");
+        }
+
         var chrome = FindGoogleChrome()
                      ?? throw new InvalidOperationException(
                          "Google Chrome is not installed. Install Chrome, then try the one-time setup again.");
@@ -76,21 +83,77 @@ internal static class PortalSyncService
         });
     }
 
-    public static void EnsureDailyTask(Guid storeConfigurationId, TimeOnly runAt)
+    public static int StartHistoricalBackfill(
+        Guid storeConfigurationId,
+        PortalSyncReportKind reportKind,
+        DateOnly historicalStartDate,
+        DateOnly historicalEndDate)
+    {
+        if (historicalEndDate < historicalStartDate)
+            throw new InvalidOperationException(
+                "Historical end date must be on or after the start date.");
+        if (historicalEndDate.DayNumber - historicalStartDate.DayNumber > 365)
+            throw new InvalidOperationException(
+                "Historical backfill is limited to 366 days per run.");
+
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+            throw new InvalidOperationException(
+                "The installed HISAB KITAB executable could not be located.");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = Path.GetDirectoryName(executable) ?? "",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList =
+            {
+                "--portal-sync-store", storeConfigurationId.ToString("D"),
+                "--portal-sync-report", ReportArgument(reportKind),
+                "--portal-sync-backfill-from",
+                historicalStartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                "--portal-sync-backfill-through",
+                historicalEndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            }
+        }) ?? throw new InvalidOperationException(
+            "The background historical sync process could not be started.");
+
+        return process.Id;
+    }
+
+    public static PortalSyncScheduleResult EnsureDailyTask(
+        Guid storeConfigurationId,
+        PortalSyncReportKind reportKind,
+        TimeOnly runAt)
     {
         var executable = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
             throw new InvalidOperationException("The installed HISAB KITAB executable could not be located.");
 
-        var taskName = $"{TaskName} - {storeConfigurationId:N}";
+        Exception? startupFallbackError = null;
+        try
+        {
+            EnsureStartupFallback(executable);
+        }
+        catch (Exception exception)
+        {
+            startupFallbackError = exception;
+        }
+
+        // Older releases used a shared task name. That task may have been
+        // created by an administrator or a different Windows account, which
+        // prevents a standard client account from replacing it.
+        RemoveScheduledTask(LegacyScheduledTaskName(storeConfigurationId, reportKind));
+        var taskName = ScheduledTaskName(storeConfigurationId, reportKind);
         var temporaryXml = Path.Combine(
             Path.GetTempPath(),
-            $"hisab-kitab-pos-sync-{storeConfigurationId:N}-{Guid.NewGuid():N}.xml");
+            $"hisab-kitab-pos-sync-{ReportArgument(reportKind)}-{storeConfigurationId:N}-{Guid.NewGuid():N}.xml");
         try
         {
             File.WriteAllText(
                 temporaryXml,
-                CreateScheduledTaskXml(executable, storeConfigurationId, runAt),
+                CreateScheduledTaskXml(executable, storeConfigurationId, reportKind, runAt),
                 Encoding.Unicode);
             using var process = Process.Start(new ProcessStartInfo
             {
@@ -113,10 +176,24 @@ internal static class PortalSyncService
                 var error = process.StandardError.ReadToEnd().Trim();
                 if (string.IsNullOrWhiteSpace(error))
                     error = process.StandardOutput.ReadToEnd().Trim();
-                throw new InvalidOperationException(
-                    "The daily sync task could not be created. " +
-                    (string.IsNullOrWhiteSpace(error) ? "Run HISAB KITAB once as administrator." : error));
+
+                if (startupFallbackError is not null)
+                {
+                    throw new InvalidOperationException(
+                        "Windows rejected both automatic sync startup methods. " +
+                        $"Task Scheduler: {(string.IsNullOrWhiteSpace(error) ? "access denied" : error)} " +
+                        $"Windows sign-in fallback: {startupFallbackError.Message}");
+                }
+
+                return new PortalSyncScheduleResult(
+                    false,
+                    "Settings saved. Windows blocked the timed task, so automatic catch-up will run " +
+                    "at Windows sign-in and whenever HISAB KITAB starts.");
             }
+
+            return new PortalSyncScheduleResult(
+                true,
+                $"Daily Windows task scheduled for {runAt.ToString("h:mm tt", CultureInfo.CurrentCulture)}.");
         }
         finally
         {
@@ -131,12 +208,28 @@ internal static class PortalSyncService
         }
     }
 
+    public static void RemoveDailyTask(
+        Guid storeConfigurationId,
+        PortalSyncReportKind reportKind)
+    {
+        RemoveScheduledTask(ScheduledTaskName(storeConfigurationId, reportKind));
+        RemoveScheduledTask(LegacyScheduledTaskName(storeConfigurationId, reportKind));
+    }
+
     public static void EnsureConfiguredDailyTasks()
     {
-        foreach (var settings in PortalSyncSettingsStore.Load().Stores.Where(item => item.Enabled))
-            EnsureDailyTask(
-                settings.Id,
-                new TimeOnly(settings.DailyHour, settings.DailyMinute));
+        foreach (var settings in PortalSyncSettingsStore.Load().Stores)
+        {
+            RemoveScheduledTask($"{LegacyTaskName} - {settings.Id:N}");
+            var connected = PortalSyncSettingsStore.IsConnected(settings);
+            foreach (var reportKind in Enum.GetValues<PortalSyncReportKind>())
+            {
+                if (connected && settings.IsEnabled(reportKind))
+                    EnsureDailyTask(settings.Id, reportKind, settings.GetRunTime(reportKind));
+                else
+                    RemoveDailyTask(settings.Id, reportKind);
+            }
+        }
     }
 
     public static async Task<IReadOnlyList<PortalSyncRunResult>> RunDueAsync(
@@ -144,9 +237,31 @@ internal static class PortalSyncService
         bool force,
         bool visibleChrome,
         Guid? onlyStoreConfigurationId = null,
+        PortalSyncReportKind? onlyReportKind = null,
+        bool waitForExistingRun = false,
+        TimeSpan? existingRunWaitTimeout = null,
+        DateOnly? historicalStartDate = null,
+        DateOnly? historicalEndDate = null,
         CancellationToken cancellationToken = default)
     {
-        if (!await RunGate.WaitAsync(0, cancellationToken))
+        var historicalBackfill = historicalStartDate.HasValue || historicalEndDate.HasValue;
+        if (historicalBackfill)
+        {
+            if (!historicalStartDate.HasValue || !historicalEndDate.HasValue)
+                throw new InvalidOperationException("Select both a historical start date and end date.");
+            if (historicalEndDate.Value < historicalStartDate.Value)
+                throw new InvalidOperationException("Historical end date must be on or after the start date.");
+            if (historicalEndDate.Value.DayNumber - historicalStartDate.Value.DayNumber > 365)
+                throw new InvalidOperationException("Historical backfill is limited to 366 days per run.");
+            if (!onlyStoreConfigurationId.HasValue || !onlyReportKind.HasValue)
+                throw new InvalidOperationException("Historical backfill must target one licensed store and one report type.");
+        }
+
+        var waitTimeout = existingRunWaitTimeout ?? TimeSpan.FromMinutes(3);
+        var gateAcquired = waitForExistingRun
+            ? await RunGate.WaitAsync(waitTimeout, cancellationToken)
+            : await RunGate.WaitAsync(0, cancellationToken);
+        if (!gateAcquired)
             return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
 
         FileStream? processLock = null;
@@ -154,33 +269,48 @@ internal static class PortalSyncService
         {
             var lockPath = Path.Combine(AppBootstrap.AppDataPath, "pos-portal-sync.lock");
             Directory.CreateDirectory(AppBootstrap.AppDataPath);
-            try
+            var lockDeadline = waitForExistingRun
+                ? DateTime.UtcNow.Add(waitTimeout)
+                : DateTime.UtcNow;
+            while (processLock is null)
             {
-                processLock = new FileStream(
-                    lockPath,
-                    FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite,
-                    FileShare.None);
-            }
-            catch (IOException)
-            {
-                return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
+                try
+                {
+                    processLock = new FileStream(
+                        lockPath,
+                        FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite,
+                        FileShare.None);
+                }
+                catch (IOException) when (DateTime.UtcNow < lockDeadline)
+                {
+                    await Task.Delay(500, cancellationToken);
+                }
+                catch (IOException)
+                {
+                    return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
+                }
             }
 
             var document = PortalSyncSettingsStore.Load();
             var results = new List<PortalSyncRunResult>();
             var configuredStores = document.Stores
-                .Where(item => item.Enabled &&
+                .Where(item => PortalSyncSettingsStore.IsConnected(item) &&
                                (onlyStoreConfigurationId is null ||
-                                item.Id == onlyStoreConfigurationId.Value))
+                                 item.Id == onlyStoreConfigurationId.Value))
                 .ToList();
-            if (onlyStoreConfigurationId is not null && configuredStores.Count == 0)
+            if (onlyStoreConfigurationId is not null &&
+                (configuredStores.Count == 0 ||
+                 (onlyReportKind.HasValue &&
+                  !configuredStores[0].IsEnabled(onlyReportKind.Value) &&
+                  !historicalBackfill)))
             {
                 var missing = new PortalSyncRunResult(
                     "",
                     false,
                     false,
-                    $"The scheduled POS configuration {onlyStoreConfigurationId:D} was not found or is disabled.");
+                    $"The scheduled {ReportDisplayName(onlyReportKind ?? PortalSyncReportKind.CashSalesSummary)} " +
+                    $"configuration {onlyStoreConfigurationId:D} was not found, is disabled, or its store is disconnected.");
                 results.Add(missing);
                 WriteLog(missing);
                 return results;
@@ -189,64 +319,118 @@ internal static class PortalSyncService
             foreach (var settings in configuredStores)
             {
                 var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
-                var pendingDates = await GetPendingTargetDatesAsync(
-                    settings,
-                    yesterday,
-                    cancellationToken);
-                if (!force && pendingDates.Count == 0)
+                var reportKinds = onlyReportKind.HasValue
+                    ? new[] { onlyReportKind.Value }
+                    : Enum.GetValues<PortalSyncReportKind>();
+                foreach (var reportKind in reportKinds)
                 {
-                    var skipped = new PortalSyncRunResult(
-                        settings.BusinessName,
-                        true,
-                        false,
-                        $"Scheduled check completed: no incomplete Cash & Sales Summary or register Z-report dates " +
-                        $"were found through {yesterday:M/d/yyyy}.");
-                    settings.LastAttemptUtc = DateTime.UtcNow;
-                    settings.LastStatus = skipped.Message;
-                    results.Add(skipped);
-                    PortalSyncSettingsStore.Save(document);
-                    WriteLog(skipped);
-                    continue;
-                }
-                if (!force && DateTime.Now.TimeOfDay <
-                    new TimeSpan(settings.DailyHour, settings.DailyMinute, 0))
-                    continue;
+                    if (!settings.IsEnabled(reportKind) && !historicalBackfill)
+                        continue;
+                    if (!force &&
+                        DateTime.Now.TimeOfDay < settings.GetRunTime(reportKind).ToTimeSpan())
+                        continue;
 
-                // A manual run still verifies yesterday when all known dates are complete.
-                if (force && pendingDates.Count == 0)
-                    pendingDates.Add(yesterday);
-
-                foreach (var targetDate in pendingDates)
-                {
-                    PortalSyncRunResult result;
-                    try
+                    List<DateOnly> pendingDates;
+                    if (historicalBackfill)
                     {
-                        result = await RunStoreWithRetriesAsync(
-                            settings, paths, targetDate, visibleChrome, cancellationToken);
+                        pendingDates = reportKind == PortalSyncReportKind.CashSalesSummary
+                            ? Enumerable.Range(
+                                    0,
+                                    historicalEndDate!.Value.DayNumber -
+                                    historicalStartDate!.Value.DayNumber + 1)
+                                .Select(offset => historicalStartDate.Value.AddDays(offset))
+                                .ToList()
+                            : [historicalEndDate!.Value];
                     }
-                    catch (Exception exception)
+                    else
                     {
-                        result = new PortalSyncRunResult(
+                        pendingDates = reportKind == PortalSyncReportKind.CashSalesSummary
+                            ? await GetPendingCashSummaryDatesAsync(
+                                settings,
+                                yesterday,
+                                cancellationToken)
+                            : !force && settings.LastZReportDate >= yesterday
+                                ? []
+                                : [yesterday];
+                    }
+                    if (!force &&
+                        pendingDates.Count == 0)
+                    {
+                        var reportName = reportKind == PortalSyncReportKind.CashSalesSummary
+                            ? "Cash & Sales Summary"
+                            : "Z Report";
+                        var skipped = new PortalSyncRunResult(
                             settings.BusinessName,
+                            true,
                             false,
-                            false,
-                            AppBootstrap.RedactSensitiveText(exception.Message));
+                            $"{reportName} sync is current through {yesterday:M/d/yyyy}.");
+                        UpdateRunStatus(settings, reportKind, skipped, yesterday);
+                        results.Add(skipped);
+                        PortalSyncSettingsStore.Save(document);
+                        WriteLog(skipped);
+                        continue;
                     }
 
-                    settings.LastAttemptUtc = DateTime.UtcNow;
-                    settings.LastStatus = result.Message;
-                    if (result.Success)
+                    // A manual Cash & Sales run verifies yesterday even when the
+                    // stored date cursor is already current.
+                    if (force && pendingDates.Count == 0)
+                        pendingDates.Add(yesterday);
+
+                    foreach (var targetDate in pendingDates)
                     {
-                        settings.LastSuccessUtc = DateTime.UtcNow;
-                        // Success is returned only after both independent
-                        // destinations have their expected report data.
-                        settings.LastImportedReportDate = targetDate;
-                        settings.LastCashSummaryReportDate = targetDate;
-                        settings.LastZReportDate = targetDate;
+                        PortalSyncRunResult result;
+                        using var targetTimeout =
+                            CancellationTokenSource.CreateLinkedTokenSource(
+                                cancellationToken);
+                        targetTimeout.CancelAfter(
+                            historicalBackfill
+                                ? TimeSpan.FromHours(2)
+                                : TimeSpan.FromMinutes(20));
+                        try
+                        {
+                            result = await RunStoreWithRetriesAsync(
+                                settings,
+                                paths,
+                                targetDate,
+                                reportKind,
+                                visibleChrome,
+                                historicalStartDate,
+                                historicalEndDate,
+                                targetTimeout.Token);
+                        }
+                        catch (OperationCanceledException)
+                            when (!cancellationToken.IsCancellationRequested)
+                        {
+                            result = new PortalSyncRunResult(
+                                settings.BusinessName,
+                                false,
+                                false,
+                                $"{ReportDisplayName(reportKind)} sync exceeded " +
+                                $"{(historicalBackfill ? "2 hours" : "20 minutes")} and was stopped. " +
+                                "The next scheduled run will resume from its stored cursor.");
+                        }
+                        catch (Exception exception)
+                        {
+                            result = new PortalSyncRunResult(
+                                settings.BusinessName,
+                                false,
+                                false,
+                                AppBootstrap.RedactSensitiveText(exception.Message));
+                        }
+
+                        UpdateRunStatus(settings, reportKind, result, targetDate);
+                        results.Add(result);
+                        PortalSyncSettingsStore.Save(document);
+                        WriteLog(result);
+
+                        // Do not retry later Cash & Sales dates while the first
+                        // pending date is still blocked. Its date cursor remains
+                        // unchanged, so the next scheduled recovery attempt starts
+                        // with that same date. Z-report catch-up always follows its
+                        // numeric batch cursor in one portal session, so it runs once.
+                        if (!result.Success || reportKind == PortalSyncReportKind.ZReports)
+                            break;
                     }
-                    results.Add(result);
-                    PortalSyncSettingsStore.Save(document);
-                    WriteLog(result);
                 }
             }
             return results;
@@ -258,6 +442,52 @@ internal static class PortalSyncService
         }
     }
 
+    private static void UpdateRunStatus(
+        PortalStoreSyncSettings settings,
+        PortalSyncReportKind reportKind,
+        PortalSyncRunResult result,
+        DateOnly targetDate)
+    {
+        var now = DateTime.UtcNow;
+        settings.LastAttemptUtc = now;
+        settings.LastStatus = result.Message;
+        if (reportKind == PortalSyncReportKind.CashSalesSummary)
+        {
+            settings.LastCashSummaryAttemptUtc = now;
+            settings.LastCashSummaryStatus = result.Message;
+            if (result.Success)
+            {
+                settings.LastCashSummarySuccessUtc = now;
+                settings.LastCashSummaryReportDate = LatestDate(
+                    settings.LastCashSummaryReportDate,
+                    targetDate);
+                settings.LastImportedReportDate = LatestDate(
+                    settings.LastImportedReportDate,
+                    targetDate);
+            }
+        }
+        else
+        {
+            settings.LastZReportAttemptUtc = now;
+            settings.LastZReportStatus = result.Message;
+            if (result.Success)
+            {
+                settings.LastZReportSuccessUtc = now;
+                settings.LastZReportDate = LatestDate(
+                    settings.LastZReportDate,
+                    targetDate);
+            }
+        }
+
+        if (result.Success)
+            settings.LastSuccessUtc = now;
+    }
+
+    private static DateOnly LatestDate(DateOnly? existing, DateOnly candidate) =>
+        existing.HasValue && existing.Value > candidate
+            ? existing.Value
+            : candidate;
+
     internal static void WriteDiagnostic(
         string businessName,
         bool success,
@@ -267,6 +497,7 @@ internal static class PortalSyncService
     private static string CreateScheduledTaskXml(
         string executable,
         Guid storeConfigurationId,
+        PortalSyncReportKind reportKind,
         TimeOnly runAt)
     {
         XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
@@ -281,9 +512,13 @@ internal static class PortalSyncService
                 new XAttribute("version", "1.4"),
                 new XElement(ns + "RegistrationInfo",
                     new XElement(ns + "Description",
-                        "Downloads and imports the prior day's HISAB KITAB POS reports.")),
+                        $"Downloads and imports HISAB KITAB {ReportDisplayName(reportKind)} reports.")),
                 new XElement(ns + "Triggers",
                     new XElement(ns + "CalendarTrigger",
+                        new XElement(ns + "Repetition",
+                            new XElement(ns + "Interval", "PT1H"),
+                            new XElement(ns + "Duration", "PT12H"),
+                            new XElement(ns + "StopAtDurationEnd", "false")),
                         new XElement(ns + "StartBoundary", start),
                         new XElement(ns + "Enabled", "true"),
                         new XElement(ns + "ScheduleByDay",
@@ -315,61 +550,145 @@ internal static class PortalSyncService
                     new XElement(ns + "Exec",
                         new XElement(ns + "Command", executable),
                         new XElement(ns + "Arguments",
-                            $"--portal-sync-store {storeConfigurationId:D}"),
+                            $"--portal-sync-store {storeConfigurationId:D} " +
+                            $"--portal-sync-report {ReportArgument(reportKind)}"),
                         new XElement(ns + "WorkingDirectory",
                             Path.GetDirectoryName(executable) ?? "")))));
         return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string ScheduledTaskName(
+        Guid storeConfigurationId,
+        PortalSyncReportKind reportKind) =>
+        $"{LegacyScheduledTaskName(storeConfigurationId, reportKind)} - U{CurrentWindowsUserScope()}";
+
+    private static string LegacyScheduledTaskName(
+        Guid storeConfigurationId,
+        PortalSyncReportKind reportKind) =>
+        $"HISAB KITAB - Daily {ReportDisplayName(reportKind)} Sync - {storeConfigurationId:N}";
+
+    private static string CurrentWindowsUserScope()
+    {
+        var identity = WindowsIdentity.GetCurrent().User?.Value;
+        if (string.IsNullOrWhiteSpace(identity))
+            identity = $"{Environment.UserDomainName}\\{Environment.UserName}";
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
+        return Convert.ToHexString(digest.AsSpan(0, 6));
+    }
+
+    private static string ReportDisplayName(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? "Cash Sales Summary"
+            : "Z Report";
+
+    private static string ReportArgument(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? "cash-sales"
+            : "z-reports";
+
+    private static void EnsureStartupFallback(string executable)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(CurrentUserRunKey, writable: true)
+                        ?? throw new InvalidOperationException(
+                            "The current Windows user's startup settings could not be opened.");
+        key.SetValue(
+            StartupRunName,
+            $"\"{executable}\" --portal-sync",
+            RegistryValueKind.String);
+    }
+
+    private static void RemoveScheduledTask(string taskName)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                ArgumentList = { "/Delete", "/TN", taskName, "/F" }
+            });
+            process?.WaitForExit(10_000);
+        }
+        catch
+        {
+            // The in-app catch-up remains active even when Windows rejects
+            // removal of an obsolete or disabled scheduled task.
+        }
     }
 
     private static async Task<PortalSyncRunResult> RunStoreWithRetriesAsync(
         PortalStoreSyncSettings settings,
         IAppPaths paths,
         DateOnly targetDate,
+        PortalSyncReportKind reportKind,
         bool visibleChrome,
+        DateOnly? historicalStartDate,
+        DateOnly? historicalEndDate,
         CancellationToken cancellationToken)
     {
         Exception? lastError = null;
-        for (var attempt = 1; attempt <= 3; attempt++)
+        var maximumAttempts = 3;
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
         {
             try
             {
-                return await RunStoreAsync(settings, paths, targetDate, visibleChrome, cancellationToken);
+                return await RunStoreAsync(
+                    settings,
+                    paths,
+                    targetDate,
+                    reportKind,
+                    visibleChrome,
+                    historicalStartDate,
+                    historicalEndDate,
+                    cancellationToken);
             }
-            catch (Exception exception) when (attempt < 3)
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
             {
                 lastError = exception;
-                await Task.Delay(TimeSpan.FromSeconds(attempt * 10), cancellationToken);
+                if (IsTemporaryPortalConnectionFailure(exception))
+                    maximumAttempts = 5;
+                if (attempt >= maximumAttempts)
+                    break;
+                await Task.Delay(
+                    IsTemporaryPortalConnectionFailure(exception)
+                        ? TimeSpan.FromSeconds(attempt * 30)
+                        : TimeSpan.FromSeconds(attempt * 10),
+                    cancellationToken);
             }
         }
-        throw lastError ?? new InvalidOperationException("POS portal sync failed after three attempts.");
+        throw lastError ?? new InvalidOperationException("POS portal sync failed after repeated attempts.");
     }
 
     private static async Task<PortalSyncRunResult> RunStoreAsync(
         PortalStoreSyncSettings settings,
         IAppPaths paths,
         DateOnly targetDate,
+        PortalSyncReportKind reportKind,
         bool visibleChrome,
+        DateOnly? historicalStartDate,
+        DateOnly? historicalEndDate,
         CancellationToken cancellationToken)
     {
+        using var auditScope = ActivityAuditContext.BeginSystem("Automatic POS Portal Sync");
         var chrome = FindGoogleChrome()
                      ?? throw new InvalidOperationException("Google Chrome is not installed.");
         var profile = PortalSyncSettingsStore.ProfileDirectory(settings.Id);
         var downloadDirectory = PortalSyncSettingsStore.DownloadDirectory(settings.Id);
-        var targetStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
+        var targetStatus = reportKind == PortalSyncReportKind.CashSalesSummary
+            ? await GetTargetStatusAsync(settings, targetDate, cancellationToken)
+            : new PortalTargetStatus(false, 0);
         // The database is the accounting source of truth. A missing internal feed copy
         // must never cause the same store/date to be imported a second time.
-        var needsCashSummary = !targetStatus.CashSummaryPresent;
-        var needsZReports =
-            targetStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports);
-        if (!needsCashSummary && !needsZReports)
-        {
-            return new PortalSyncRunResult(
-                settings.BusinessName,
-                true,
-                false,
-                $"POS sync for {targetDate:M/d/yyyy}: Cash & Sales Summary already present; " +
-                $"{targetStatus.ZReportCount} register Z report(s) already present in Shift Cash Drop.");
-        }
+        var needsCashSummary =
+            reportKind == PortalSyncReportKind.CashSalesSummary &&
+            !targetStatus.CashSummaryPresent;
 
         await using var db = CreateStoreDatabase(settings);
         await EnsureTargetDatabaseReadyAsync(db, settings.BusinessName);
@@ -377,22 +696,13 @@ internal static class PortalSyncService
             db,
             settings.BusinessName,
             cancellationToken);
-        var zKeyPrefix = $"ADVENTPOS-Z|{targetDate:yyyy-MM-dd}|";
-        var existingZKeys = await db.ShiftLogs
-            .AsNoTracking()
-            .Where(item =>
-                item.StoreId == dataStoreId &&
-                item.PosReportKey != null &&
-                item.PosReportKey.StartsWith(zKeyPrefix))
-            .Select(item => item.PosReportKey!)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-        var verifiedZBatches = new HashSet<string>(
-            existingZKeys
-                .Where(key => key.Length > zKeyPrefix.Length)
-                .Select(key => key[zKeyPrefix.Length..]),
-            StringComparer.OrdinalIgnoreCase);
-        var zResult = new ZReportImportOutcome(targetStatus.ZReportCount, 0, 0);
+        var latestImportedZBatch = reportKind == PortalSyncReportKind.ZReports
+            ? await GetLatestImportedZBatchAsync(
+                db,
+                dataStoreId,
+                cancellationToken)
+            : null;
+        var zResult = new ZReportImportOutcome(0, 0, 0);
 
         Directory.CreateDirectory(profile);
         Directory.CreateDirectory(downloadDirectory);
@@ -424,8 +734,8 @@ internal static class PortalSyncService
         page.DefaultTimeout = 45_000;
         await ConfigureDownloadsAsync(page, downloadDirectory);
         string? cashSummaryPath = null;
-        var zReportPaths = new List<string>();
         var rejectedZReportDetails = new List<string>();
+        var lastProcessedZBatch = latestImportedZBatch;
         Exception? cashSummaryError = null;
         Exception? zReportsError = null;
         try
@@ -478,110 +788,200 @@ internal static class PortalSyncService
                 }
             }
 
-            if (needsZReports)
+            if (reportKind == PortalSyncReportKind.ZReports)
             {
                 try
                 {
                     await OpenCloseOutZReportAsync(page);
-                    var expectedReports = Math.Max(1, settings.ExpectedDailyZReports);
-                    // The catch-up window is 30 days. Keep enough recent batches
-                    // available to recover two-register stores even after several
-                    // missed days.
-                    var candidateLimit = Math.Max(80, expectedReports * 40);
-                    var candidateBatches = await GetRecentBatchNumbersAsync(
+                    var portalBatches = await GetRecentBatchNumbersAsync(
                         page,
-                        candidateLimit,
+                        5_000,
                         cancellationToken);
-                    if (candidateBatches.Count == 0)
+                    if (portalBatches.Count == 0)
                     {
                         throw new InvalidOperationException(
                             "AdventPOS did not provide any batch numbers for the Close-Out Report (Z-Report).");
                     }
 
-                    foreach (var batch in candidateBatches)
+                    var numericPortalBatches = portalBatches
+                        .Select(batch => new
+                        {
+                            Batch = batch,
+                            Number = long.TryParse(
+                                batch,
+                                NumberStyles.None,
+                                CultureInfo.InvariantCulture,
+                                out var number)
+                                ? number
+                                : (long?)null
+                        })
+                        .Where(item => item.Number.HasValue)
+                        .Select(item => new
+                        {
+                            item.Batch,
+                            Number = item.Number!.Value
+                        })
+                        .ToList();
+
+                    // Genuine AdventPOS-keyed rows are the primary cursor. Older
+                    // databases may predate PosReportKey, so only accept a legacy
+                    // numeric Shift No when that same number exists in this
+                    // portal's batch list. Other shift systems can use much larger
+                    // numeric identifiers and must not make Z sync appear caught up.
+                    if (!latestImportedZBatch.HasValue)
+                    {
+                        latestImportedZBatch =
+                            await GetLatestMatchingLegacyZBatchAsync(
+                                db,
+                                dataStoreId,
+                                numericPortalBatches
+                                    .Select(item => item.Number)
+                                    .ToHashSet(),
+                                cancellationToken);
+                        lastProcessedZBatch = latestImportedZBatch;
+                    }
+
+                    // Track exact imported batches instead of treating the greatest
+                    // batch as a cursor. Multi-register stores can close registers
+                    // out of date order, so importing batch N+1 must not permanently
+                    // hide a still-missing batch N.
+                    var importedZBatches = await GetImportedZBatchNumbersAsync(
+                        db,
+                        dataStoreId,
+                        numericPortalBatches.Select(item => item.Number).ToHashSet(),
+                        cancellationToken);
+                    var hadImportedZBatches = importedZBatches.Count > 0;
+                    var historicalZBackfill =
+                        historicalStartDate.HasValue &&
+                        historicalEndDate.HasValue;
+                    var candidateBatches = historicalZBackfill
+                        ? numericPortalBatches
+                            .Where(item => !importedZBatches.Contains(item.Number))
+                            .OrderByDescending(item => item.Number)
+                            .ToList()
+                        : hadImportedZBatches
+                            ? numericPortalBatches
+                                .Where(item => !importedZBatches.Contains(item.Number))
+                                .OrderBy(item => item.Number)
+                                .ToList()
+                            : numericPortalBatches
+                                .OrderByDescending(item => item.Number)
+                                .ToList();
+
+                    foreach (var candidate in candidateBatches)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        var batch = candidate.Batch;
                         var batchDownloadDirectory = Path.Combine(
                             zDownloadDirectory,
                             $"batch-{SafeFilePart(batch)}");
                         Directory.CreateDirectory(batchDownloadDirectory);
                         try
                         {
-                            var archiveDirectory =
-                                PortalSyncSettingsStore.ZReportArchiveDirectory(settings);
-                            Directory.CreateDirectory(archiveDirectory);
-                            var generated = await GenerateReportAsync(
-                                browser,
-                                page,
-                                batchDownloadDirectory,
-                                targetDate,
-                                $"Close-Out Z Report batch {batch}",
-                                Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.pdf"),
-                                Path.Combine(archiveDirectory, $"{SafeFilePart(batch)}.png"),
-                                cancellationToken,
-                                batch,
-                                browserPdfFirst: true);
+                        var safeBatch = SafeFilePart(batch);
+                        var localPdfPath = Path.Combine(
+                            batchDownloadDirectory,
+                            $"{safeBatch}.pdf");
+                        var localScreenshotPath = Path.Combine(
+                            batchDownloadDirectory,
+                            $"{safeBatch}.png");
+                        var generated = await GenerateReportAsync(
+                            browser,
+                            page,
+                            batchDownloadDirectory,
+                            targetDate,
+                            $"Close-Out Z Report batch {batch}",
+                            localPdfPath,
+                            localScreenshotPath,
+                            cancellationToken,
+                            batch,
+                            browserPdfFirst: true);
+                        ArchiveGeneratedZReport(settings, batch, generated);
 
-                            PosReportData? renderedReport = null;
-                            if (!string.IsNullOrWhiteSpace(generated.PdfPath))
+                        PosReportData report;
+                        var importPdf = false;
+                        if (!string.IsNullOrWhiteSpace(generated.PdfPath))
+                        {
+                            try
                             {
-                                try
-                                {
-                                    ValidateZReportBatch(generated.PdfPath, targetDate, batch);
-                                    var feedPath = StoreZReportFeedFile(
-                                        settings,
-                                        generated.PdfPath,
-                                        targetDate);
-                                    zReportPaths.Add(feedPath);
-                                    var result = await ImportZReportsAsync(
-                                        db,
-                                        paths,
-                                        dataStoreId,
-                                        feedPath,
-                                        targetDate,
-                                        cancellationToken);
-                                    zResult = new ZReportImportOutcome(
-                                        zResult.Total + result.Total,
-                                        zResult.Imported + result.Imported,
-                                        zResult.Updated + result.Updated);
-                                    verifiedZBatches.Add(batch);
-                                }
-                                catch
-                                {
-                                    renderedReport = ParseRenderedZReport(
-                                        generated.RenderedText,
-                                        targetDate,
-                                        batch);
-                                }
+                                report = await WaitForValidZReportBatchAsync(
+                                    generated.PdfPath,
+                                    batch,
+                                    cancellationToken);
+                                importPdf = true;
                             }
-                            else
+                            catch
                             {
-                                renderedReport = ParseRenderedZReport(
+                                report = ParseRenderedZReport(
                                     generated.RenderedText,
-                                    targetDate,
                                     batch);
                             }
+                        }
+                        else
+                        {
+                            report = ParseRenderedZReport(
+                                generated.RenderedText,
+                                batch);
+                        }
 
-                            if (renderedReport is not null)
-                            {
-                                var result = await ImportCapturedZReportAsync(
-                                    db,
-                                    paths,
-                                    dataStoreId,
-                                    new CapturedZReport(
-                                        renderedReport,
-                                        generated.ScreenshotPath),
-                                    targetDate,
-                                    cancellationToken);
-                                zResult = new ZReportImportOutcome(
-                                    zResult.Total + result.Total,
-                                    zResult.Imported + result.Imported,
-                                    zResult.Updated + result.Updated);
-                                verifiedZBatches.Add(batch);
-                            }
+                        var actualDate = report.ReportDate!.Value;
+                        var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
+                        if (historicalZBackfill)
+                        {
+                            if (actualDate > historicalEndDate!.Value)
+                                continue;
+                            if (actualDate < historicalStartDate!.Value)
+                                continue;
+                        }
+                        else
+                        {
+                            if (actualDate > yesterday)
+                                continue;
+                            if (!hadImportedZBatches && actualDate != targetDate)
+                                continue;
+                        }
 
-                            if (verifiedZBatches.Count >= expectedReports)
-                                break;
+                        ZReportImportOutcome result;
+                        if (importPdf)
+                        {
+                            var feedPath = StoreZReportFeedFile(
+                                settings,
+                                generated.PdfPath!,
+                                actualDate);
+                            result = await ImportZReportsAsync(
+                                db,
+                                paths,
+                                dataStoreId,
+                                feedPath,
+                                actualDate,
+                                cancellationToken);
+                        }
+                        else
+                        {
+                            result = await ImportCapturedZReportAsync(
+                                db,
+                                paths,
+                                dataStoreId,
+                                new CapturedZReport(
+                                    report,
+                                    generated.ScreenshotPath),
+                                actualDate,
+                                cancellationToken);
+                        }
+
+                            zResult = new ZReportImportOutcome(
+                                zResult.Total + result.Total,
+                                zResult.Imported + result.Imported,
+                                zResult.Updated + result.Updated);
+                            await CashDropRollupService.SyncDateAsync(
+                                db,
+                                dataStoreId,
+                                actualDate,
+                                cancellationToken: cancellationToken);
+                            lastProcessedZBatch = historicalZBackfill &&
+                                                  lastProcessedZBatch.HasValue
+                                ? Math.Max(lastProcessedZBatch.Value, candidate.Number)
+                                : candidate.Number;
                         }
                         catch (OperationCanceledException)
                         {
@@ -591,15 +991,28 @@ internal static class PortalSyncService
                         {
                             rejectedZReportDetails.Add(
                                 $"batch {batch}: {FirstSentence(exception.Message)}");
+                            // Do not skip over an unreadable next batch. Stopping here
+                            // keeps the database cursor honest so the next run retries it.
+                            throw new InvalidOperationException(
+                                $"AdventPOS Z-report catch-up stopped at next batch {batch}: " +
+                                FirstSentence(exception.Message),
+                                exception);
                         }
                     }
 
-                    if (verifiedZBatches.Count == 0)
+                    if (historicalZBackfill && zResult.Total == 0)
                     {
                         throw new InvalidOperationException(
-                            $"None of the newest AdventPOS Close-Out batches had Start Date " +
-                            $"{targetDate:M/d/yyyy}. " +
-                            string.Join(" ", rejectedZReportDetails.Take(4)));
+                            $"No AdventPOS Close-Out batch had a Start Date from " +
+                            $"{historicalStartDate:M/d/yyyy} through {historicalEndDate:M/d/yyyy}.");
+                    }
+                    if (!historicalZBackfill &&
+                        !latestImportedZBatch.HasValue &&
+                        zResult.Total == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"No AdventPOS Close-Out batch had Start Date {targetDate:M/d/yyyy}. " +
+                            "A first-time sync uses that date to establish the Shift Cash Drop batch cursor.");
                     }
                 }
                 catch (OperationCanceledException)
@@ -671,47 +1084,64 @@ internal static class PortalSyncService
             cashSummaryImported = !outcome.Duplicate;
         }
 
-        var finalStatus = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
-        if (!finalStatus.IsComplete(settings.ExpectedDailyZReports))
+        if (reportKind == PortalSyncReportKind.CashSalesSummary)
         {
-            var reportErrors = new List<string>();
+            await CashDropRollupService.SyncDateAsync(
+                db,
+                dataStoreId,
+                targetDate,
+                cancellationToken: cancellationToken);
+
             if (cashSummaryError is not null)
-                reportErrors.Add($"Cash & Sales Summary: {cashSummaryError.Message}");
-            if (zReportsError is not null)
-                reportErrors.Add($"Z Report: {zReportsError.Message}");
-            if (zReportsError is null &&
-                zReportPaths.Count > 0 &&
-                finalStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports))
+                throw new InvalidOperationException(
+                    $"Cash & Sales Summary sync did not complete for {targetDate:M/d/yyyy}. " +
+                    cashSummaryError.Message,
+                    cashSummaryError);
+
+            var finalStatus = await GetTargetStatusAsync(
+                settings,
+                targetDate,
+                cancellationToken);
+            if (!finalStatus.CashSummaryPresent)
             {
-                var rejected = DescribeRejectedZReports(zReportPaths, targetDate);
-                if (!string.IsNullOrWhiteSpace(rejected))
-                    reportErrors.Add(rejected);
+                throw new InvalidOperationException(
+                    $"Cash & Sales Summary sync did not complete for {targetDate:M/d/yyyy}. " +
+                    "The report is not present in this store database.");
             }
-            if (rejectedZReportDetails.Count > 0 &&
-                finalStatus.ZReportCount < Math.Max(1, settings.ExpectedDailyZReports))
-            {
-                reportErrors.Add(
-                    $"Checked recent batches: {string.Join("; ", rejectedZReportDetails.Take(6))}");
-            }
-            throw new InvalidOperationException(
-                $"POS sync did not complete for {targetDate:M/d/yyyy}. " +
-                $"Cash & Sales Summary present: {finalStatus.CashSummaryPresent}; " +
-                $"register Z reports: {finalStatus.ZReportCount} of " +
-                $"{Math.Max(1, settings.ExpectedDailyZReports)}." +
-                (reportErrors.Count == 0
-                    ? ""
-                    : $" {string.Join(" ", reportErrors)}"));
+
+            return new PortalSyncRunResult(
+                settings.BusinessName,
+                true,
+                cashSummaryImported,
+                $"Cash & Sales Summary sync for {targetDate:M/d/yyyy}: " +
+                $"{(cashSummaryImported ? "report imported" : "report already present")}. " +
+                "Cash drop was refreshed from the matching Shift Cash Drop batches.");
         }
 
-        var imported = cashSummaryImported || zResult.Imported > 0;
+        if (zReportsError is not null)
+        {
+            var cursorDetails = rejectedZReportDetails.Count == 0
+                ? ""
+                : $" Batch cursor details: {string.Join("; ", rejectedZReportDetails.Take(6))}";
+            throw new InvalidOperationException(
+                $"Z Report sync did not complete. {zReportsError.Message}{cursorDetails}",
+                zReportsError);
+        }
+
+        var zReportDescription = zResult.Total > 0
+            ? $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s) imported " +
+              $"sequentially through batch {lastProcessedZBatch}"
+            : latestImportedZBatch.HasValue
+                ? $"Shift Cash Drop already caught up after batch {latestImportedZBatch.Value}"
+                : "Shift Cash Drop cursor established";
         return new PortalSyncRunResult(
             settings.BusinessName,
             true,
-            imported,
-            $"POS sync for {targetDate:M/d/yyyy}: Cash & Sales Summary " +
-            $"{(cashSummaryImported ? "imported into Cash Sales Summary" : "already present")}; " +
-            $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s), " +
-            $"{finalStatus.ZReportCount} register report(s) verified in Shift Cash Drop.");
+            zResult.Imported > 0,
+            historicalStartDate.HasValue && historicalEndDate.HasValue
+                ? $"Z Report historical sync {historicalStartDate:M/d/yyyy} - " +
+                  $"{historicalEndDate:M/d/yyyy}: {zReportDescription}."
+                : $"Z Report sync: {zReportDescription}.");
     }
 
     private static async Task CloseDedicatedProfileBrowserAsync(
@@ -772,35 +1202,6 @@ internal static class PortalSyncService
         }
     }
 
-    private static string DescribeRejectedZReports(
-        IEnumerable<string> sourcePaths,
-        DateOnly targetDate)
-    {
-        try
-        {
-            var importer = new PosReportImportService();
-            var rejected = sourcePaths
-                .SelectMany(importer.ImportZReports)
-                .Where(report =>
-                    report.ReportDate.HasValue &&
-                    report.ReportDate.Value != targetDate &&
-                    !string.IsNullOrWhiteSpace(report.ShiftOrBatch))
-                .Select(report =>
-                    $"batch {report.ShiftOrBatch!.Trim()} has Start Date " +
-                    $"{report.ReportDate!.Value:M/d/yyyy}")
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            return rejected.Count == 0
-                ? ""
-                : $"Z Report safety check: {string.Join("; ", rejected)} and was not imported as " +
-                  $"{targetDate:M/d/yyyy}. Close/correct that register batch in AdventPOS; the next sync will retry it.";
-        }
-        catch
-        {
-            return "";
-        }
-    }
-
     private static string FirstSentence(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -830,11 +1231,7 @@ internal static class PortalSyncService
                 "document.querySelector('#isRememberMe').checked=true; ValidateUser();");
         }
 
-        await WaitUntilAsync(page, async () =>
-                await IsVisibleAsync(page, "#StoreSelectionModal") ||
-                await IsPortalHomeReadyAsync(page),
-            TimeSpan.FromSeconds(45),
-            "The AdventPOS login did not complete. Complete any verification request in POS Auto Sync Setup.");
+        await WaitForOwnerLoginAsync(page, TimeSpan.FromSeconds(45));
 
         if (await IsVisibleAsync(page, "#StoreSelectionModal"))
         {
@@ -877,6 +1274,81 @@ internal static class PortalSyncService
             TimeSpan.FromSeconds(60),
             "AdventPOS did not reach the store home page. A verification code, CAPTCHA, or password update may require attention.");
     }
+
+    private static async Task WaitForOwnerLoginAsync(IPage page, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await IsVisibleAsync(page, "#StoreSelectionModal") ||
+                await IsPortalHomeReadyAsync(page))
+            {
+                return;
+            }
+
+            var portalMessage = await GetVisiblePortalDialogTextAsync(page);
+            if (IsTemporaryPortalConnectionFailure(portalMessage))
+            {
+                await DismissVisiblePortalDialogAsync(page);
+                throw new InvalidOperationException(
+                    "AdventPOS temporarily reported that its server connection is not open. " +
+                    "HISAB KITAB will retry the login automatically.");
+            }
+
+            await Task.Delay(500);
+        }
+
+        throw new InvalidOperationException(
+            "The AdventPOS login did not complete. Complete any verification request in POS Auto Sync Setup.");
+    }
+
+    private static Task<string> GetVisiblePortalDialogTextAsync(IPage page) =>
+        page.EvaluateExpressionAsync<string>(
+            @"(() => {
+                const visible = element => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const bounds = element.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                           style.visibility !== 'hidden' &&
+                           style.opacity !== '0' &&
+                           bounds.width > 0 &&
+                           bounds.height > 0;
+                };
+                const dialogs = Array.from(document.querySelectorAll(
+                    '.modal.show, .swal2-container, .bootbox, [role=""dialog""]'));
+                const dialog = dialogs.find(visible);
+                return dialog ? (dialog.innerText || '').replace(/\s+/g, ' ').trim() : '';
+            })()");
+
+    private static Task DismissVisiblePortalDialogAsync(IPage page) =>
+        page.EvaluateExpressionAsync(
+            @"(() => {
+                const visible = element => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const bounds = element.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                           style.visibility !== 'hidden' &&
+                           bounds.width > 0 &&
+                           bounds.height > 0;
+                };
+                const buttons = Array.from(document.querySelectorAll(
+                    '.modal.show button, .swal2-container button, .bootbox button, [role=""dialog""] button'));
+                const button = buttons.find(element => visible(element) &&
+                    /^(ok|close|dismiss)$/i.test((element.textContent || '').trim()));
+                if (button) button.click();
+            })()");
+
+    private static bool IsTemporaryPortalConnectionFailure(Exception exception) =>
+        IsTemporaryPortalConnectionFailure(exception.Message) ||
+        (exception.InnerException is not null &&
+         IsTemporaryPortalConnectionFailure(exception.InnerException));
+
+    private static bool IsTemporaryPortalConnectionFailure(string? message) =>
+        !string.IsNullOrWhiteSpace(message) &&
+        (message.Contains("connection is not open", StringComparison.OrdinalIgnoreCase) ||
+         message.Contains("connection was not open", StringComparison.OrdinalIgnoreCase));
 
     private static async Task SelectPortalStoreAsync(IPage page, string configuredStoreName)
     {
@@ -1635,6 +2107,57 @@ internal static class PortalSyncService
             .Trim('-', '.', ' ');
     }
 
+    private static void ArchiveGeneratedZReport(
+        PortalStoreSyncSettings settings,
+        string batch,
+        GeneratedPortalReport generated)
+    {
+        var archiveDirectory = PortalSyncSettingsStore.ZReportArchiveDirectory(settings);
+        Directory.CreateDirectory(archiveDirectory);
+        var safeBatch = SafeFilePart(batch);
+        if (!string.IsNullOrWhiteSpace(generated.PdfPath) &&
+            File.Exists(generated.PdfPath))
+        {
+            File.Copy(
+                generated.PdfPath,
+                Path.Combine(archiveDirectory, $"{safeBatch}.pdf"),
+                true);
+        }
+        if (File.Exists(generated.ScreenshotPath))
+        {
+            File.Copy(
+                generated.ScreenshotPath,
+                Path.Combine(archiveDirectory, $"{safeBatch}.png"),
+                true);
+        }
+    }
+
+    private static async Task<PosReportData> WaitForValidZReportBatchAsync(
+        string path,
+        string expectedBatch,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return ReadZReportBatch(path, expectedBatch);
+            }
+            catch (Exception exception)
+            {
+                lastError = exception;
+                if (attempt < 9)
+                    await Task.Delay(300, cancellationToken);
+            }
+        }
+
+        throw lastError ??
+              new InvalidOperationException(
+                  $"The captured Z report for batch {expectedBatch} could not be read.");
+    }
+
     private static void ValidateZReports(string path, DateOnly targetDate)
     {
         var reports = new PosReportImportService().ImportZReports(path);
@@ -1656,9 +2179,8 @@ internal static class PortalSyncService
                 $"{targetDate:M/d/yyyy}. The batch was not imported.");
     }
 
-    private static void ValidateZReportBatch(
+    private static PosReportData ReadZReportBatch(
         string path,
-        DateOnly targetDate,
         string expectedBatch)
     {
         var reports = new PosReportImportService()
@@ -1676,25 +2198,13 @@ internal static class PortalSyncService
                 $"the downloaded PDF did not contain selected batch {expectedBatch}");
         }
 
-        var matching = reports.FirstOrDefault(report =>
-            report.ReportDate == targetDate);
-        if (matching is not null)
-            return;
-
-        var actualDates = reports
-            .Where(report => report.ReportDate.HasValue)
-            .Select(report => report.ReportDate!.Value.ToString("M/d/yyyy", CultureInfo.InvariantCulture))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        throw new InvalidOperationException(
-            actualDates.Count == 0
-                ? $"batch {expectedBatch} did not expose a valid Start Date"
-                : $"batch {expectedBatch} has Start Date {string.Join(", ", actualDates)}, not {targetDate:M/d/yyyy}");
+        return reports.FirstOrDefault(report => report.ReportDate.HasValue)
+               ?? throw new InvalidOperationException(
+                   $"batch {expectedBatch} did not expose a valid Start Date");
     }
 
     private static PosReportData ParseRenderedZReport(
         string renderedText,
-        DateOnly targetDate,
         string expectedBatch)
     {
         var report = new PosReportImportService().ImportRenderedZReport(renderedText);
@@ -1706,22 +2216,19 @@ internal static class PortalSyncService
             throw new InvalidOperationException(
                 $"the rendered report did not contain selected batch {expectedBatch}");
         }
-        if (report.ReportDate != targetDate)
+        if (!report.ReportDate.HasValue)
         {
             throw new InvalidOperationException(
-                report.ReportDate.HasValue
-                    ? $"batch {expectedBatch} has Start Date {report.ReportDate:M/d/yyyy}, not {targetDate:M/d/yyyy}"
-                    : $"batch {expectedBatch} did not expose a valid Start Date");
+                $"batch {expectedBatch} did not expose a valid Start Date");
         }
         return report;
     }
 
-    private static async Task<List<DateOnly>> GetPendingTargetDatesAsync(
+    private static async Task<List<DateOnly>> GetPendingCashSummaryDatesAsync(
         PortalStoreSyncSettings settings,
         DateOnly yesterday,
         CancellationToken cancellationToken)
     {
-        var windowStart = yesterday.AddDays(-30);
         try
         {
             await using var db = CreateStoreDatabase(settings);
@@ -1731,72 +2238,143 @@ internal static class PortalSyncService
                 settings.BusinessName,
                 cancellationToken);
 
-            var summaryRanges = await db.PosSalesSummaries
+            var reportDates = await db.PosSalesSummaries
                 .AsNoTracking()
-                .Where(item =>
-                    item.StoreId == dataStoreId &&
-                    item.ReportTo >= windowStart &&
-                    item.ReportFrom <= yesterday)
-                .Select(item => new
-                {
-                    item.ReportFrom,
-                    item.ReportTo
-                })
+                .Where(item => item.StoreId == dataStoreId)
+                .Select(item => item.ReportTo)
                 .ToListAsync(cancellationToken);
-            var zReports = await db.ShiftLogs
-                .AsNoTracking()
-                .Where(item =>
-                    item.StoreId == dataStoreId &&
-                    item.Date >= windowStart &&
-                    item.Date <= yesterday &&
-                    item.PosReportKey != null &&
-                    item.PosReportKey.StartsWith("ADVENTPOS-Z|"))
-                .Select(item => new
-                {
-                    item.Date,
-                    item.PosReportKey
-                })
-                .ToListAsync(cancellationToken);
+            var latestCashSummaryDate = reportDates.Count == 0
+                ? (DateOnly?)null
+                : reportDates.Max();
 
-            var candidates = new SortedSet<DateOnly> { yesterday };
-            foreach (var range in summaryRanges)
+            // Cash & Sales Summary has its own date cursor. Pull the next
+            // calendar day after the latest stored report and continue in
+            // chronological order through yesterday.
+            if (!latestCashSummaryDate.HasValue)
+                return [yesterday];
+            if (latestCashSummaryDate.Value >= yesterday)
+                return [];
+
+            var pending = new List<DateOnly>();
+            for (var date = latestCashSummaryDate.Value.AddDays(1);
+                 date <= yesterday;
+                 date = date.AddDays(1))
             {
-                var from = range.ReportFrom < windowStart ? windowStart : range.ReportFrom;
-                var to = range.ReportTo > yesterday ? yesterday : range.ReportTo;
-                for (var date = from; date <= to; date = date.AddDays(1))
-                    candidates.Add(date);
+                pending.Add(date);
             }
-
-            if (settings.LastImportedReportDate is { } lastImported &&
-                lastImported < yesterday)
-            {
-                var from = lastImported.AddDays(1);
-                if (from < windowStart)
-                    from = windowStart;
-                for (var date = from; date <= yesterday; date = date.AddDays(1))
-                    candidates.Add(date);
-            }
-
-            var expectedZReports = Math.Max(1, settings.ExpectedDailyZReports);
-            return candidates
-                .Where(date =>
-                {
-                    var cashSummaryPresent = summaryRanges.Any(range =>
-                        range.ReportFrom <= date && range.ReportTo >= date);
-                    var zReportCount = zReports
-                        .Where(item => item.Date == date)
-                        .Select(item => item.PosReportKey)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .Count();
-                    return !cashSummaryPresent || zReportCount < expectedZReports;
-                })
-                .ToList();
+            return pending;
         }
         catch
         {
             // RunStoreAsync will return the actionable database/schema error.
             return [yesterday];
         }
+    }
+
+    private static async Task<long?> GetLatestImportedZBatchAsync(
+        AppDbContext db,
+        int storeId,
+        CancellationToken cancellationToken)
+    {
+        // Never use every numeric Shift No as a portal cursor. A store can retain
+        // rows from another register system whose identifiers are unrelated to
+        // AdventPOS and much larger than its current batch numbers.
+        var shiftNumbers = await db.ShiftLogs
+            .AsNoTracking()
+            .Where(item =>
+                item.StoreId == storeId &&
+                item.ShiftNo != null &&
+                item.PosReportKey != null &&
+                item.PosReportKey.StartsWith("ADVENTPOS-Z|"))
+            .Select(item => item.ShiftNo!)
+            .ToListAsync(cancellationToken);
+
+        return LatestNumericBatch(shiftNumbers);
+    }
+
+    private static async Task<HashSet<long>> GetImportedZBatchNumbersAsync(
+        AppDbContext db,
+        int storeId,
+        IReadOnlySet<long> portalBatches,
+        CancellationToken cancellationToken)
+    {
+        var rows = await db.ShiftLogs
+            .AsNoTracking()
+            .Where(item => item.StoreId == storeId && item.ShiftNo != null)
+            .Select(item => new { item.ShiftNo, item.PosReportKey })
+            .ToListAsync(cancellationToken);
+
+        var imported = new HashSet<long>();
+        foreach (var row in rows)
+        {
+            if (!long.TryParse(
+                    row.ShiftNo!.Trim(),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var batch) ||
+                !portalBatches.Contains(batch))
+            {
+                continue;
+            }
+
+            // A signed AdventPOS key is definitive. For upgraded databases,
+            // accept an exact legacy shift number only when the same batch is
+            // still advertised by this portal.
+            if (!string.IsNullOrWhiteSpace(row.PosReportKey) &&
+                !row.PosReportKey.StartsWith("ADVENTPOS-Z|", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            imported.Add(batch);
+        }
+        return imported;
+    }
+
+    private static async Task<long?> GetLatestMatchingLegacyZBatchAsync(
+        AppDbContext db,
+        int storeId,
+        IReadOnlySet<long> portalBatches,
+        CancellationToken cancellationToken)
+    {
+        if (portalBatches.Count == 0)
+            return null;
+
+        var shiftNumbers = await db.ShiftLogs
+            .AsNoTracking()
+            .Where(item =>
+                item.StoreId == storeId &&
+                item.ShiftNo != null &&
+                (item.PosReportKey == null || item.PosReportKey == ""))
+            .Select(item => item.ShiftNo!)
+            .ToListAsync(cancellationToken);
+
+        return LatestNumericBatch(
+            shiftNumbers,
+            batch => portalBatches.Contains(batch));
+    }
+
+    private static long? LatestNumericBatch(
+        IEnumerable<string> values,
+        Func<long, bool>? include = null)
+    {
+        long? latest = null;
+        foreach (var value in values)
+        {
+            if (!long.TryParse(
+                    value.Trim(),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var batch))
+            {
+                continue;
+            }
+            if (include is not null && !include(batch))
+                continue;
+
+            if (!latest.HasValue || batch > latest.Value)
+                latest = batch;
+        }
+        return latest;
     }
 
     private static async Task<PortalTargetStatus> GetTargetStatusAsync(
@@ -1850,7 +2428,8 @@ internal static class PortalSyncService
         ValidateZReports(sourcePath, targetDate);
         var reports = new PosReportImportService().ImportZReports(sourcePath)
             .Where(report => report.ReportDate == targetDate)
-            .OrderBy(report => report.ShiftOrBatch)
+            .OrderBy(report => NumericBatchOrder(report.ShiftOrBatch))
+            .ThenBy(report => report.ShiftOrBatch, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var sourceBytes = await File.ReadAllBytesAsync(sourcePath, cancellationToken);
@@ -2015,6 +2594,11 @@ internal static class PortalSyncService
         return $"ADVENTPOS-Z|{date:yyyy-MM-dd}|{safeBatch}";
     }
 
+    private static long NumericBatchOrder(string? batch)
+        => long.TryParse(batch?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            ? number
+            : long.MaxValue;
+
     private static async Task ConfigureDownloadsAsync(IPage page, string downloadDirectory)
     {
         var session = await page.CreateCDPSessionAsync();
@@ -2140,36 +2724,17 @@ internal static class PortalSyncService
 
     private static AppDbContext CreateStoreDatabase(PortalStoreSyncSettings settings)
     {
-        var licensed = LicensedBusinessService.Load().FirstOrDefault(item =>
-            string.Equals(item.DatabaseName, settings.DatabaseName, StringComparison.OrdinalIgnoreCase) ||
-            (!string.IsNullOrWhiteSpace(settings.StoreGuid) &&
-             string.Equals(item.StoreGuid, settings.StoreGuid, StringComparison.OrdinalIgnoreCase)));
+        var businesses = LicensedBusinessService.Load();
+        var licensed = PortalSyncSettingsStore.FindLicensedBusiness(settings, businesses);
         if (licensed is null)
             throw new InvalidOperationException(
                 $"'{settings.BusinessName}' is no longer included in this PC license.");
-
-        var builder = new SqlConnectionStringBuilder
-        {
-            DataSource = licensed.Connection.Server,
-            InitialCatalog = licensed.Connection.Database,
-            TrustServerCertificate = true,
-            Encrypt = true,
-            ConnectTimeout = 15,
-            ConnectRetryCount = 2,
-            ConnectRetryInterval = 2
-        };
-        if (!string.IsNullOrWhiteSpace(licensed.Connection.ConnectionString))
-            builder.ConnectionString = licensed.Connection.ConnectionString;
-        else if (string.IsNullOrWhiteSpace(licensed.Connection.Username))
-            builder.IntegratedSecurity = true;
-        else
-        {
-            builder.UserID = licensed.Connection.Username;
-            builder.Password = licensed.Connection.Password;
-        }
+        if (!StoreDirectoryPreferencesStore.IsConnected(licensed, businesses))
+            throw new InvalidOperationException(
+                $"'{settings.BusinessName}' is disconnected from this PC login.");
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlServer(builder.ConnectionString)
+            .UseSqlServer(LocalSqlServerPolicy.BuildConnectionString(licensed.DatabaseName))
             .Options;
         return new AppDbContext(options);
     }
@@ -2187,17 +2752,10 @@ internal static class PortalSyncService
         string businessName,
         CancellationToken cancellationToken)
     {
-        static string Normalize(string value) =>
-            new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
-        var wanted = Normalize(businessName);
-        var stores = await db.Stores.AsNoTracking()
-            .Where(item => item.IsActive)
-            .OrderBy(item => item.Id)
-            .ToListAsync(cancellationToken);
-        return stores.FirstOrDefault(item => Normalize(item.Name) == wanted)?.Id
-               ?? stores.FirstOrDefault()?.Id
-               ?? throw new InvalidOperationException(
-                   $"The database for '{businessName}' does not contain an active store.");
+        return await StoreDataIdentityResolver.ResolveAsync(
+            db,
+            businessName,
+            cancellationToken);
     }
 
     private static string? FindCompletedPdf(string downloadDirectory) =>

@@ -1,609 +1,542 @@
-# DEVELOPER HANDOFF DOCUMENTATION
-## HB Store Ledger Pro - Major Feature Implementation
+# HISAB KITAB WORKS — DEVELOPER HANDOFF
 
-This document provides complete specifications for implementing the requested changes to the HB Store Ledger Pro application.
+Last updated: July 21, 2026
 
----
+Current release: `1.0.123`
 
-## PROJECT OVERVIEW
+Git branch: `agent/payroll-scheduling-account-billing`
 
-**Application**: HB Store Ledger Pro (WPF .NET 8 Application)
-**Current State**: Working application with complex invoice import system
-**Required Changes**: Simplify purchases, add intelligent multi-vendor invoice parser
+Latest completed feature commit: `97775b7` (`Fix price alert visibility and scaling`)
 
----
+## Latest continuation checkpoint — 1.0.123
 
-## COMPLETED WORK
+- Price Alerts now filters by the alert creation date rather than the source
+  invoice date. This restores existing alerts when a user selects Current Month.
+- The Galaxy Elgin database was checked read-only and contains 9 price alerts,
+  408 product-cost records, 49 invoices, and 456 invoice lines.
+- The Price Alerts filter area and grid were resized for Windows display scaling.
+  Wrapped headers, larger header/row heights, proportional columns, and minimum
+  widths prevent the added invoice/vendor columns from being clipped.
+- The client, License Generator, and Account Manager Release builds completed
+  with zero errors and zero warnings.
+- Release packages for all three applications were rebuilt as version 1.0.123.
+- Generated installers and updater ZIPs are not committed to Git; they are
+  published in the GitHub release and copied to Google Drive under
+  `Important Docs/HB LEDGER PRO/HISAB KITAB WORKS/Release 1.0.123`.
 
-### ✅ 1. Login Window (DONE)
-- **File**: `src/ManagerPaperworkSystem.UI/Views/LoginWindow.xaml`
-- **Status**: Complete and working
-- Size: 650x420 pixels
-- Layout: Two-panel (branding left, form right)
-- Buttons: Login, Cancel (regular), Create Account, Forgot Password (link-style)
+At the work PC, use the branch commands in section 2. The only intentionally
+untracked local item at the home PC is `tmp/`; do not add it without reviewing
+its contents.
 
-### ✅ 2. Calendar Controls (DONE)
-- All custom DatePicker styling removed
-- Uses Windows native calendar throughout app
+This is the canonical continuation document for moving work between the home PC
+and work PC. It replaces the obsolete WPF-era handoff that previously occupied
+this file.
 
-### ⚠️ 3. Home Button (SIMPLE FIX NEEDED)
-**File**: `src/ManagerPaperworkSystem.UI/Views/MainWindow.xaml`
-**Line**: ~104-120
-**Current**: Large button with text
-**Required**: Small icon-only button (35x35px) matching logo size
+## 1. Repository and applications
 
-**Code to replace**:
-```xml
-<Button x:Name="btnHomeTop" 
-        Grid.Column="1"
-        Width="35" Height="35"
-        Margin="0,0,15,0"
-        Background="Transparent"
-        BorderBrush="Transparent"
-        Cursor="Hand"
-        ToolTip="Home"
-        Click="Home_Click">
-  <Path Data="M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z" 
-        Fill="White" 
-        Stretch="Uniform"
-        Width="20" Height="20"/>
-</Button>
+Repository:
+
+`https://github.com/paul-hbledgerpro/HISABKITABWORKS`
+
+Active projects:
+
+- Client application:
+  `src/ManagerPaperworkSystem.WinForms/ManagerPaperworkSystem.WinForms.csproj`
+- Reports:
+  `src/ManagerPaperworkSystem.Reports/ManagerPaperworkSystem.Reports.csproj`
+- Developer License Generator:
+  `developer-only/HISAB-KITAB-LICENSE-GENERATOR/HisabKitabWorks.LicenseGenerator.WinForms.csproj`
+- Developer Client Account Manager:
+  `developer-only/HISAB-KITAB-CLIENT-ACCOUNT-MANAGER/HisabKitabWorks.ClientAccountManager.WinForms.csproj`
+- Desktop updater:
+  `src/ManagerPaperworkSystem.Updater/ManagerPaperworkSystem.Updater.csproj`
+- Secure Plaid/report-email gateway:
+  `cloudflare/hisab-kitab-bank-sync`
+- Secure incoming-invoice service:
+  `cloudflare/hisab-kitab-invoice-inbox`
+
+The active customer application is WinForms on .NET 8 for Windows. The
+`src/ManagerPaperworkSystem.UI` WPF project is the old implementation and must
+not receive new work unless specifically requested.
+
+## 2. Getting the correct code at the work PC
+
+The active work is on a feature branch, not `main`.
+
+For an existing clone:
+
+```powershell
+git fetch origin
+git switch agent/payroll-scheduling-account-billing
+git pull --ff-only origin agent/payroll-scheduling-account-billing
+git status
 ```
 
----
+For a fresh clone:
 
-## FEATURE 1: SIMPLIFIED PURCHASES SECTION
-
-### Current Implementation
-- Complex invoice import with PDF parsing
-- Line items grid
-- Vendor name, invoice file, notes fields
-- Multiple import buttons
-
-### Required New Implementation
-
-#### A. Database Schema
-
-**New Table**: `PurchaseRecords`
-```sql
-CREATE TABLE IF NOT EXISTS PurchaseRecords (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    Date TEXT NOT NULL,
-    VendorId INTEGER NOT NULL,
-    InvoiceNumber TEXT NOT NULL,
-    TotalAmount REAL NOT NULL,
-    CreatedDate TEXT NOT NULL,
-    FOREIGN KEY (VendorId) REFERENCES Vendors(Id)
-);
+```powershell
+cd C:\Dev
+git clone https://github.com/paul-hbledgerpro/HISABKITABWORKS.git
+cd HISABKITABWORKS
+git switch agent/payroll-scheduling-account-billing
 ```
 
-#### B. User Interface (MainWindow.xaml)
+Do not copy `%LOCALAPPDATA%\Hisab Kitab` from one PC to another. That folder can
+contain licenses, encrypted settings, cached tokens, databases, and
+machine-specific state.
 
-**Location**: Purchases tab section (currently around lines 850-940)
+## 3. Release 1.0.120
 
-**Replace entire section with**:
-```xml
-<!-- Purchases Section - Simplified -->
-<TabItem Header="Purchases">
-  <Grid>
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="*"/>
-    </Grid.RowDefinitions>
+GitHub release:
 
-    <Border Grid.Row="0" Style="{StaticResource CardStyle}" Padding="20" Margin="10">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="100"/>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="100"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="4"/>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="15"/>
-          <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+`https://github.com/paul-hbledgerpro/HISABKITABWORKS/releases/tag/v1.0.120`
 
-        <!-- Date -->
-        <TextBlock Grid.Row="0" Grid.Column="0" Text="Date" VerticalAlignment="Center" Margin="0,0,4,0"/>
-        <DatePicker Grid.Row="0" Grid.Column="1" x:Name="purchDate" Height="34" VerticalAlignment="Center"/>
+The release contains installers and automatic-update ZIP packages for all three
+applications:
 
-        <!-- Vendor -->
-        <TextBlock Grid.Row="0" Grid.Column="2" Text="Vendor" VerticalAlignment="Center" Margin="8,0,4,0"/>
-        <ComboBox Grid.Row="0" Grid.Column="3" x:Name="purchVendor" Height="34" VerticalAlignment="Center" DisplayMemberPath="Name" SelectedValuePath="Id"/>
+- `HISAB_KITAB_WORKS_Client_Setup_1.0.120.exe`
+- `HISAB_KITAB_WORKS_License_Generator_Setup_1.0.120.exe`
+- `HISAB_KITAB_WORKS_Account_Manager_Setup_1.0.120.exe`
+- `HISAB_KITAB_Update_win-x64_1.0.120.zip`
+- `HISAB_KITAB_License_Generator_Update_win-x64_1.0.120.zip`
+- `HISAB_KITAB_Account_Manager_Update_win-x64_1.0.120.zip`
 
-        <!-- Invoice Number -->
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="Invoice #" VerticalAlignment="Center" Margin="0,0,4,0"/>
-        <TextBox Grid.Row="2" Grid.Column="1" x:Name="purchInvoiceNum" Height="34" VerticalAlignment="Center"/>
+Combined installer bundle:
 
-        <!-- Total Amount -->
-        <TextBlock Grid.Row="2" Grid.Column="2" Text="Total Amount" VerticalAlignment="Center" Margin="8,0,4,0"/>
-        <TextBox Grid.Row="2" Grid.Column="3" x:Name="purchAmount" Height="34" VerticalAlignment="Center"/>
+- File: `HISAB_KITAB_WORKS_1.0.120_All_Installers.zip`
+- Size: `375,469,638` bytes
+- SHA-256:
+  `7F47F52DF889D5B863663BECEE91C0779ACD2CC4E2F4E17FD898DEA4B7680B27`
+- Google Drive:
+  `https://drive.google.com/file/d/1NpO7ph0Z3EJ9uTM6y1EN70PFTjlpR0Sq/view`
 
-        <!-- Buttons -->
-        <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Orientation="Horizontal" HorizontalAlignment="Right">
-          <Button Content="Add Invoice" Width="120" Height="40" Margin="0,0,10,0" Click="Purchase_Add_Click" Style="{StaticResource PrimaryButton}"/>
-          <Button Content="Update Selected" Width="120" Height="40" Margin="0,0,10,0" Click="Purchase_Update_Click" Style="{StaticResource SecondaryButton}"/>
-          <Button Content="Delete Selected" Width="120" Height="40" Click="Purchase_Delete_Click" Style="{StaticResource SecondaryButton}"/>
-        </StackPanel>
-      </Grid>
-    </Border>
+The source repository intentionally does not track generated `bin`, `obj`,
+publish, updater ZIP, or installer output files.
 
-    <!-- Purchases Grid -->
-    <DataGrid Grid.Row="1" x:Name="gridPurchases" Margin="10" IsReadOnly="True" SelectionMode="Single" AutoGenerateColumns="False" SelectionChanged="Purchases_SelectionChanged">
-      <DataGrid.Columns>
-        <DataGridTextColumn Header="Date" Binding="{Binding Date, StringFormat=\{0:MM/dd/yyyy\}}" Width="100"/>
-        <DataGridTextColumn Header="Vendor" Binding="{Binding VendorName}" Width="*"/>
-        <DataGridTextColumn Header="Invoice #" Binding="{Binding InvoiceNumber}" Width="120"/>
-        <DataGridTextColumn Header="Amount" Binding="{Binding TotalAmount, StringFormat=C2}" Width="100"/>
-      </DataGrid.Columns>
-    </DataGrid>
-  </Grid>
-</TabItem>
+## 4. Current product structure
+
+### 4.1 Customer WinForms application
+
+The customer application now includes:
+
+- Professional white/blue/orange/green visual theme.
+- Dashboard, Cash Sales Summary, Shift Cash Drop, Cash On Hand, Check Payout,
+  Operation Hub, vendors, purchases, bank statements, product costs, price
+  alerts, payroll, scheduling, profit/loss, reports, stores, and users.
+- Multi-store selection under a signed license.
+- Store-level feature gating based on developer-issued license data.
+- Visible application version in the main status area.
+- Automatic-update checking and a separate update manager.
+- SQL Server as the business data store.
+
+The former Database Settings screen that exposed server, database, username,
+password, and local file paths was treated as a security issue. Customer-facing
+screens must never display connection credentials. SQLite references in old
+diagnostic text were legacy fallback/diagnostic material and are not the
+authoritative production business database when the licensed store is using SQL
+Server.
+
+### 4.2 Device-bound licensing
+
+The current licensing flow is intentionally per computer:
+
+1. The customer activation screen generates a stable protected PC identity.
+2. The developer copies the Store GUID, PC ID, store name, and ZIP into the
+   License Generator.
+3. The License Generator checks the store subscription and PC-seat allowance.
+4. It issues a signed license bound to that PC and the licensed business data.
+5. A copied application folder or license file does not turn another computer
+   into a licensed seat because the device identity will not match.
+
+If an existing Store GUID is presented with a different PC ID, the developer
+workflow is designed to decide whether to:
+
+- add it as another paid PC seat, or
+- replace/revoke the previous PC while retaining the allowed seat count.
+
+Store GUID format follows:
+
+`STATE_STORENAME_BUSINESSTYPE_ZIP`
+
+Example:
+
+`IL_GALAXYELGIN_TBC_60123`
+
+The private signing key must never be committed. Use the License Generator's
+Backup Key and Restore/Replace Key functions when moving the developer tool to
+another trusted developer computer.
+
+### 4.3 Client Account Manager
+
+The separate developer-only Account Manager supports:
+
+- Creating and editing client accounts.
+- Assigning the primary Store GUID and SQL business database.
+- Paid PC seats and licensed business/store slots.
+- Subscription expiry and active/inactive status.
+- Developer-controlled services:
+  - Core Accounting
+  - Payroll
+  - Scheduling
+  - Monthly Reports
+- Developer-assigned payroll processing state.
+- Monthly report email and delivery day.
+- Per-service pricing, monthly totals, account payments, and PDF invoices.
+- Opening the License Generator.
+- Provisioning a private invoice inbox for a licensed store.
+
+Current standard monthly price constants in code are:
+
+- Accounting: see `StandardServicePricing.Accounting`
+- Payroll: `$19.99`
+- Scheduling: `$12.99`
+- Monthly Reports: `$9.99`
+
+The one-time license fee discussed with the product owner is `$200`. Active
+employee count is not charged as a separate fee. Per-account prices remain
+editable for older accounts and negotiated clients.
+
+### 4.4 Payroll and scheduling
+
+Implemented foundations include:
+
+- Employee directory and onboarding information.
+- Personal data handling, employee documents, W-4/ID attachment areas.
+- Hourly/annual pay type, pay frequency, pay rate, state, and overtime.
+- Payroll-period employee loading and manually editable hours.
+- Regular, overtime, holiday, bonus, advance/deduction, tax, gross, and net
+  fields.
+- Draft, preview, approval/finalization, check and pay-stub PDF workflow.
+- Payroll history and payroll reporting.
+- Payroll expense inclusion in profit/loss.
+- Scheduling entry, employee/date/start/end selection, publishing, and schedule
+  PDF output.
+- Unscheduled days rendered as OFF in schedule output.
+- Scheduling hours feeding payroll while retaining final admin control.
+
+Important compliance warning: the application has a signed tax-rule package
+architecture and developer-assigned payroll state, but it must not be marketed
+as automatically compliant for all 50 states until each state's current rules,
+effective dates, calculation tests, and update source have been independently
+verified. Payroll should block or warn when the selected state's rule package is
+not verified for the applicable year.
+
+### 4.5 Reports
+
+Reports were returned to the professional QuestPDF path rather than relying on
+the GrapeCity ActiveReports trial. Relevant files include:
+
+- `src/ManagerPaperworkSystem.Reports/Pdf/SelectedOptionReportPdf.cs`
+- `src/ManagerPaperworkSystem.WinForms/ReportViewerForm.cs`
+- report routing in `src/ManagerPaperworkSystem.WinForms/MainForm.cs`
+
+The report viewer generates the actual PDF first and then lets the user:
+
+- view/preview,
+- save as PDF,
+- print, or
+- email the PDF.
+
+Report sending is routed through the secure server-side endpoint so the Resend
+API key is not embedded in the client application. The intended sender is:
+
+`donotreply@hisabkitabworks.com`
+
+Monthly report delivery is a developer-enabled licensed service, with recipient
+and delivery day assigned in Account Manager and included in the signed
+license.
+
+### 4.6 Bank integration
+
+Live bank connectivity uses Plaid through
+`cloudflare/hisab-kitab-bank-sync`. Plaid secrets and access tokens must never
+be shipped in the WinForms application.
+
+The gateway includes:
+
+- device-license authentication,
+- per-request device signatures,
+- expiring requests and nonce replay protection,
+- encrypted Plaid access-token storage,
+- link-token and connection flow,
+- transaction sync,
+- webhook endpoint,
+- server-side PDF report email through Resend.
+
+Manual bank-statement upload remains available. Multiple stores are expected to
+have separate store-scoped connections.
+
+### 4.7 POS web portal automation
+
+The client app contains Google Chrome automation for AdventPOS/POSWebOffice.
+
+Two distinct accounting feeds must remain separate:
+
+1. Cash Sales Summary section:
+   - pulls the Cash and Sales Summary report,
+   - uses the report business date,
+   - prevents a second record for the same report/date,
+   - allows the manager to enter cash drop and register payout later.
+2. Shift Cash Drop section:
+   - pulls individual Z Reports by batch,
+   - normally expects two batches per day for a two-register store,
+   - creates one shift record per unique batch,
+   - lets the manager double-click later to enter the actual drop/payout.
+
+Portal setup stores the site selection and credentials in protected local
+settings. The scheduled sync is intended to run after the previous business day
+has closed. Report archives are designed to use:
+
+`Documents\<Store Name> Reports\Cash Sales Summary`
+
+and:
+
+`Documents\<Store Name> Reports\Z Reports`
+
+with OneDrive Documents preferred when available and local Documents as the
+fallback.
+
+### 4.8 Purchase invoices, product costs, and price alerts
+
+Purchase import includes vendor-specific PDF parsing and review-first behavior.
+Reference vendor PDFs supplied during development included American
+Distributors, AK Wholesale, Skynet/Skygate, DemandVape, and other vendors.
+
+The safety rule is important: parsed invoices are queued for review. Financial
+entries should not be silently posted when the parser is uncertain.
+
+The Purchases grid now includes vendor and PDF attachment information. Invoice
+line lengths and schema migrations were widened/updated after truncation and
+missing-column errors were observed.
+
+The prior Gmail methods were:
+
+- IMAP with a 16-character Google App Password, or
+- Gmail OAuth read-only access.
+
+Those methods are difficult to manage across many unrelated client accounts, so
+the new preferred architecture is the private Cloudflare invoice inbox
+described next.
+
+## 5. Cloudflare private invoice inbox
+
+Release 1.0.120 introduced:
+
+`cloudflare/hisab-kitab-invoice-inbox`
+
+Security model:
+
+- Each licensed store receives a unique address under
+  `invoices.hisabkitabworks.com`.
+- Unknown or disabled addresses are rejected.
+- PDF attachments are stored privately in R2.
+- Metadata and duplicate hashes are stored in D1.
+- The WinForms client receives only a store-specific API token.
+- The Cloudflare admin secret remains server-side/developer-only.
+- Incoming PDFs are queued for review and are not automatically posted as final
+  financial transactions.
+
+Cloudflare setup completed during the project:
+
+- `hisabkitabworks.com` activated in Cloudflare.
+- `invoices.hisabkitabworks.com` enabled for Email Routing.
+- Worker `hisab-kitab-invoice-inbox` deployed.
+- D1 and R2 bindings created.
+- Catch-all Email Routing rule sends inbound invoice mail to the Worker.
+- Root Email Routing DNS records were added/unlocked.
+
+The Worker requires the secret:
+
+`INVOICE_ADMIN_SECRET`
+
+Do not save this value in source control.
+
+Developer provisioning:
+
+1. Open Client Account Manager.
+2. Select the licensed client/store.
+3. Open Invoice Inbox provisioning.
+4. Create or rotate the store inbox token.
+5. Reissue/renew the store's signed PC license so the inbox URL/address/token is
+   included.
+6. In the client Purchases section, open Email Invoices and test the protected
+   cloud inbox.
+7. Send a real vendor PDF invoice to the generated store address and verify it
+   is downloaded once and queued for review.
+
+Worker source and setup notes:
+
+- `cloudflare/hisab-kitab-invoice-inbox/README.md`
+- `cloudflare/hisab-kitab-invoice-inbox/wrangler.jsonc`
+- `cloudflare/hisab-kitab-invoice-inbox/migrations/0001_initial.sql`
+
+## 6. Items that still require real-world validation or completion
+
+Priority order:
+
+### Priority 1 — Cloud invoice inbox end-to-end test
+
+- Confirm a real message to the generated store address reaches the Worker.
+- Confirm the Worker stores the PDF in R2 and metadata in D1.
+- Confirm the licensed client authenticates with the store token.
+- Confirm Sync New Invoices downloads only unseen attachments.
+- Confirm duplicate messages/files do not create duplicate purchase records.
+- Confirm a disabled/unknown store address and invalid token are rejected.
+
+### Priority 2 — POS Z-report reliability
+
+- Validate two different batches are pulled for each two-register business day.
+- Backfill missing historical batches, especially the July 17 and July 18 cases
+  discussed during testing.
+- Validate the batch dropdown and report page after real portal layout changes.
+- Confirm unique-batch duplicate prevention.
+- Confirm saved archive files/screenshots are named by batch and business date.
+- Confirm cash drops entered later reconcile to Cash Sales Summary without a
+  second manual entry.
+
+### Priority 3 — Invoice parsing accuracy
+
+- Re-test every supplied vendor sample after cloud download.
+- Validate vendor, invoice date/number, tax, total, product description,
+  quantity, pack/ship quantity, and unit cost.
+- Add confidence flags and mandatory review when extracted totals do not
+  reconcile.
+- Confirm long product descriptions no longer truncate.
+- Confirm price changes create alerts only after an approved invoice.
+
+### Priority 4 — Updater compatibility
+
+- Test all three automatic updaters from genuinely older installed versions,
+  not only from a development build.
+- Confirm Update Now closes the owning app before replacing locked DLLs.
+- Confirm a failed or interrupted update rolls back or remains recoverable.
+- Confirm the client, License Generator, and Account Manager each use their own
+  correct update manifest/package.
+
+### Priority 5 — Accounting and reports
+
+- Revalidate Bank Statement checkboxes and Check Payout clearing checkboxes.
+- Confirm bank transaction classification does not double-count sales or
+  expenses already entered elsewhere.
+- Confirm Profit/Loss includes approved payroll and classified bank data once.
+- Visually inspect every report type, multi-page tables, headers, row density,
+  print, save, and email behavior.
+- Confirm report email uses the client/profile email where required.
+- Confirm month-end bank/report automation only runs for opted-in clients.
+
+### Priority 6 — Payroll tax packages
+
+- Establish an authoritative, maintainable federal and state source.
+- Implement and test current federal withholding and every supported state.
+- Add effective-date/version tests and signed package publishing.
+- Have calculations reviewed before selling payroll processing in a new state.
+
+## 7. Security and privacy rules
+
+Never commit or upload to the repository:
+
+- SQL Server usernames or passwords.
+- Connection strings containing credentials.
+- Plaid client secret, access tokens, or encryption key.
+- Resend API keys.
+- Cloudflare admin secrets or store API tokens.
+- Gmail OAuth secrets, refresh tokens, or App Passwords.
+- License signing private keys.
+- Customer license files or activation requests.
+- SSNs, W-4s, IDs, bank data, invoices, or customer databases.
+- Anything under `%LOCALAPPDATA%\Hisab Kitab`.
+
+Use Cloudflare Worker secrets for server credentials. Use Windows-protected
+storage for developer/client local secrets. Customer screens must never display
+raw connection configuration or secrets.
+
+Database migrations for active clients should be additive and backward
+compatible so the existing WPF installations continue to operate until they are
+intentionally upgraded.
+
+## 8. Building and packaging
+
+Client build:
+
+```powershell
+dotnet build src\ManagerPaperworkSystem.WinForms\ManagerPaperworkSystem.WinForms.csproj -c Release
 ```
 
-#### C. Code-Behind (MainWindow.xaml.cs)
+License Generator build:
 
-**Add these methods**:
-```csharp
-private async void Purchase_Add_Click(object sender, RoutedEventArgs e)
-{
-    if (!purchDate.SelectedDate.HasValue)
-    {
-        MessageBox.Show("Please select a date", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
-        return;
-    }
-
-    if (purchVendor.SelectedValue == null)
-    {
-        MessageBox.Show("Please select a vendor", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
-        return;
-    }
-
-    if (string.IsNullOrWhiteSpace(purchInvoiceNum.Text))
-    {
-        MessageBox.Show("Please enter an invoice number", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
-        return;
-    }
-
-    if (!decimal.TryParse(purchAmount.Text, out decimal amount) || amount <= 0)
-    {
-        MessageBox.Show("Please enter a valid amount", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
-        return;
-    }
-
-    var purchase = new PurchaseRecord
-    {
-        Date = purchDate.SelectedDate.Value.ToString("yyyy-MM-dd"),
-        VendorId = (int)purchVendor.SelectedValue,
-        InvoiceNumber = purchInvoiceNum.Text.Trim(),
-        TotalAmount = amount,
-        CreatedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-    };
-
-    _db.PurchaseRecords.Add(purchase);
-    await _db.SaveChangesAsync();
-
-    MessageBox.Show("Purchase record added successfully", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
-    
-    await LoadPurchasesAsync();
-    ClearPurchaseForm();
-}
-
-private async Task LoadPurchasesAsync()
-{
-    var purchases = await _db.PurchaseRecords
-        .Include(p => p.Vendor)
-        .OrderByDescending(p => p.Date)
-        .Select(p => new
-        {
-            p.Id,
-            Date = DateTime.Parse(p.Date),
-            VendorName = p.Vendor.Name,
-            p.InvoiceNumber,
-            p.TotalAmount
-        })
-        .ToListAsync();
-
-    gridPurchases.ItemsSource = purchases;
-}
-
-private void ClearPurchaseForm()
-{
-    purchDate.SelectedDate = DateTime.Now;
-    purchVendor.SelectedIndex = -1;
-    purchInvoiceNum.Text = "";
-    purchAmount.Text = "";
-}
+```powershell
+dotnet build developer-only\HISAB-KITAB-LICENSE-GENERATOR\HisabKitabWorks.LicenseGenerator.WinForms.csproj -c Release
 ```
 
-#### D. Entity Model
+Account Manager build:
 
-**File**: `src/ManagerPaperworkSystem.Core/Models/Entities.cs`
-
-**Add**:
-```csharp
-public sealed class PurchaseRecord : Entity
-{
-    public string Date { get; set; } = "";
-    public int VendorId { get; set; }
-    public Vendor? Vendor { get; set; }
-    public string InvoiceNumber { get; set; } = "";
-    public decimal TotalAmount { get; set; }
-    public string CreatedDate { get; set; } = "";
-}
+```powershell
+dotnet build developer-only\HISAB-KITAB-CLIENT-ACCOUNT-MANAGER\HisabKitabWorks.ClientAccountManager.WinForms.csproj -c Release
 ```
 
-#### E. DbContext Update
+Build all three installers/update packages:
 
-**File**: `src/ManagerPaperworkSystem.Data/Db/AppDbContext.cs`
-
-**Add**:
-```csharp
-public DbSet<PurchaseRecord> PurchaseRecords => Set<PurchaseRecord>();
+```powershell
+.\installer\build_three_installers.ps1 -Version 1.0.120
 ```
 
----
+For a new release, change the version argument and verify the generated Inno
+Setup files and update metadata before publishing. Do not commit generated
+installer, publish, `bin`, or `obj` folders.
 
-## FEATURE 2: INTELLIGENT MULTI-VENDOR INVOICE PARSER
+Cloudflare Workers:
 
-### Overview
-This is the most complex feature. It requires parsing PDF invoices from 7 different vendors and extracting product cost information.
+```powershell
+cd cloudflare\hisab-kitab-bank-sync
+npm.cmd install
+npm.cmd run check
 
-### Vendor Formats Analysis
-
-Based on provided samples, here are the extraction patterns:
-
-#### Vendor 1: TRI STATE DISTRO
-**File Pattern**: Sales Order format
-**Invoice Number**: 4-digit (e.g., 1466)
-**Vendor Detection**: Header contains "TRI STATE DISTRO"
-**Line Items Table**:
-- Columns: SKU | Product Name / Description | SO | IO | Out | Price | Sold Price | Tax | Amount
-- Extract: SKU, Product Name, **Sold Price** (this is unit cost)
-
-**Pattern**:
-```
-Regex for line: 
-^(\d+)\s+(\d+)\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+\$(\d+\.\d{2})\s+\$(\d+\.\d{2})
-Group 2 = SKU
-Group 3 = Product Name
-Group 8 = Sold Price (unit cost)
+cd ..\hisab-kitab-invoice-inbox
+npm.cmd install
+npm.cmd run check
 ```
 
-#### Vendor 2: SAFA GOODS
-**Invoice Number**: 5-digit (40155, 40149)
-**Vendor Detection**: "SAFA GOODS" in header
-**Line Items**:
-- Columns: UPC | Product Name / Description | SO | IO | Out | Sold Price | Tax | Amount
-- Extract: UPC, Product Name, **Sold Price**
+Deploy only after verifying the correct Cloudflare account, D1 database, R2
+bucket, bindings, and secrets.
 
-**Pattern**:
-```
-Regex:
-^(\d+)\s+(\d{13})\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+\$(\d+\.\d{2})
-Group 2 = UPC
-Group 3 = Product Name
-Group 7 = Sold Price
-```
+## 9. Setting up the Microsoft Surface Pro 11
 
-#### Vendor 3: SKYGATE WHOLESALE
-**Invoice Number**: S + 6-digit (S036382)
-**Vendor Detection**: "SKYGATE WHOLESALE" in header
-**Line Items**:
-- Columns: ITEM# | ORD | SHIP | UNIT | DESCRIPTION | PRICE | TAX | AMOUNT
-- Extract: ITEM#, DESCRIPTION, **PRICE**
+The developer requested three-PC capacity. That does not mean one reusable
+license key for three computers.
 
-**Pattern**:
-```
-Regex:
-^(\d+)\s+(\w+)\s+(\d+)\s+(\d+)\s+(\w+)\s+(.+?)\s+\$\d+\.\d{2}\s+\$(\d+\.\d{2})
-Group 2 = ITEM#
-Group 6 = DESCRIPTION
-Group 7 = PRICE
-```
+- The License Generator and Client Account Manager are developer-only tools and
+  do not consume a customer's client-app seat.
+- The test copy of the customer app on the Surface is a separate device and
+  needs its own PC-bound license.
+- A client account may allow three paid PC seats, but each PC receives a
+  separately signed device license.
 
-#### Vendor 4: 1OAK WHOLESALE
-**Invoice Number**: #000105366
-**Vendor Detection**: "1OAK WHOLESALE" in header
-**Line Items**:
-- Format: Product Name (SKU: xxx) | Qty | Price | Subtotal
-- Extract: SKU, Product Name, **Price**
+Surface procedure:
 
-**Pattern**:
-```
-Look for lines with:
-SKU: \w+
-Then extract price from same line
-```
+1. Install the 1.0.120 developer tools from the combined installer bundle.
+2. On the current trusted developer PC, use Backup Key in License Generator.
+3. Transfer that encrypted backup securely and use Restore/Replace Key on the
+   Surface.
+4. Configure the licensing SQL connection in each developer tool without
+   committing credentials.
+5. Install the customer app on the Surface.
+6. Let its activation screen generate the Surface PC ID/request.
+7. In License Generator, select/create the developer test subscription with
+   enough PC seats and issue a license specifically for the Surface request.
+8. Import/paste that license on the Surface and verify the PC registration in
+   the License Generator.
 
-#### Vendor 5: HS WHOLESALE
-**Order Number**: #486044
-**Vendor Detection**: "HS WHOLESALE" in header
-**Line Items**:
-- Format: Qty | Code/SKU | Product Name | Price | Total
-- Extract: Code/SKU, Product Name, **Price**
+The Surface cannot be pre-licensed before its protected PC identity is
+generated.
 
-#### Vendor 6: AMERICAN DISTRIBUTORS
-**Transaction Number**: 10603626
-**Vendor Detection**: "AMERICAN DISTRIBUTORS" in header
-**Line Items**:
-- Columns: SKU | QTY | DESCRIPTION | UNIT PRICE | UNIT TAX | EXTENDED PRICE
-- Extract: SKU, DESCRIPTION, **UNIT PRICE**
+## 10. Suggested continuation prompt
 
-#### Vendor 7: AK WHOLESALE
-**Invoice**: S + 6-digit
-**Vendor Detection**: "AK WHOLESALE" in header
-**Line Items**:
-- Columns: UPC | ORD | SHIP | UNIT | DESCRIPTION | VOL(ML) | TAX | PRICE | AMOUNT
-- Extract: UPC, DESCRIPTION, **PRICE**
+Use this at the work PC:
 
-### Implementation Structure
-
-#### A. Create InvoiceParserService.cs
-
-**File**: `src/ManagerPaperworkSystem.Core/Services/InvoiceParserService.cs`
-
-```csharp
-using UglyToad.PdfPig;
-using System.Text.RegularExpressions;
-
-public class InvoiceParserService
-{
-    public class ParsedInvoice
-    {
-        public string VendorName { get; set; }
-        public string InvoiceNumber { get; set; }
-        public DateTime InvoiceDate { get; set; }
-        public List<InvoiceLineItem> LineItems { get; set; } = new();
-    }
-
-    public class InvoiceLineItem
-    {
-        public string SKU { get; set; }
-        public string UPC { get; set; }
-        public string ProductName { get; set; }
-        public decimal UnitCost { get; set; }
-    }
-
-    public ParsedInvoice ParseInvoice(string pdfPath)
-    {
-        using var document = PdfDocument.Open(pdfPath);
-        var text = ExtractAllText(document);
-        
-        var vendor = DetectVendor(text);
-        
-        return vendor switch
-        {
-            "TRI STATE DISTRO" => ParseTriStateDistro(text),
-            "SAFA GOODS" => ParseSafaGoods(text),
-            "SKYGATE WHOLESALE" => ParseSkygateWholesale(text),
-            "1OAK WHOLESALE" => ParseOneOakWholesale(text),
-            "HS WHOLESALE" => ParseHSWholesale(text),
-            "AMERICAN DISTRIBUTORS" => ParseAmericanDistributors(text),
-            "AK WHOLESALE" => ParseAKWholesale(text),
-            _ => throw new Exception("Unknown vendor format")
-        };
-    }
-
-    private string DetectVendor(string text)
-    {
-        if (text.Contains("TRI STATE DISTRO")) return "TRI STATE DISTRO";
-        if (text.Contains("SAFA GOODS")) return "SAFA GOODS";
-        if (text.Contains("SKYGATE WHOLESALE")) return "SKYGATE WHOLESALE";
-        if (text.Contains("1OAK WHOLESALE") || text.Contains("1oakwholesale")) return "1OAK WHOLESALE";
-        if (text.Contains("HS WHOLESALE")) return "HS WHOLESALE";
-        if (text.Contains("AMERICAN DISTRIBUTORS")) return "AMERICAN DISTRIBUTORS";
-        if (text.Contains("AK WHOLESALE") || text.Contains("AK Wholesale")) return "AK WHOLESALE";
-        
-        return "UNKNOWN";
-    }
-
-    // Implement parsing methods for each vendor
-    // See vendor-specific patterns above
-}
-```
-
-#### B. Create ProductCostService.cs
-
-```csharp
-public class ProductCostService
-{
-    private readonly AppDbContext _db;
-
-    public async Task<List<PriceChange>> ProcessInvoiceAsync(ParsedInvoice invoice)
-    {
-        var priceChanges = new List<PriceChange>();
-
-        foreach (var item in invoice.LineItems)
-        {
-            var existing = await _db.ProductCosts
-                .Where(pc => pc.SKU == item.SKU || pc.UPC == item.UPC)
-                .FirstOrDefaultAsync();
-
-            if (existing != null)
-            {
-                if (existing.CurrentCost != item.UnitCost)
-                {
-                    // Price changed!
-                    var change = new PriceChange
-                    {
-                        ProductName = item.ProductName,
-                        OldPrice = existing.CurrentCost,
-                        NewPrice = item.UnitCost,
-                        ChangePercent = ((item.UnitCost - existing.CurrentCost) / existing.CurrentCost) * 100,
-                        DetectedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                        VendorName = invoice.VendorName
-                    };
-
-                    priceChanges.Add(change);
-
-                    existing.PreviousCost = existing.CurrentCost;
-                    existing.CurrentCost = item.UnitCost;
-                    existing.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                }
-            }
-            else
-            {
-                // New product
-                _db.ProductCosts.Add(new ProductCost
-                {
-                    SKU = item.SKU,
-                    UPC = item.UPC,
-                    ProductName = item.ProductName,
-                    CurrentCost = item.UnitCost,
-                    PreviousCost = 0,
-                    VendorName = invoice.VendorName,
-                    LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                });
-            }
-        }
-
-        await _db.SaveChangesAsync();
-        return priceChanges;
-    }
-}
-```
-
-#### C. Database Schema
-
-**Add to AppDbContext**:
-
-```sql
-CREATE TABLE IF NOT EXISTS ProductCosts (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    UPC TEXT,
-    SKU TEXT,
-    ProductName TEXT NOT NULL,
-    CurrentCost REAL NOT NULL,
-    PreviousCost REAL NOT NULL DEFAULT 0,
-    VendorName TEXT NOT NULL,
-    LastUpdated TEXT NOT NULL,
-    InvoiceNumber TEXT
-);
-
-CREATE TABLE IF NOT EXISTS PriceAlerts (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ProductName TEXT NOT NULL,
-    OldPrice REAL NOT NULL,
-    NewPrice REAL NOT NULL,
-    ChangePercent REAL NOT NULL,
-    DetectedDate TEXT NOT NULL,
-    VendorName TEXT NOT NULL,
-    IsRead INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX idx_productcosts_sku ON ProductCosts(SKU);
-CREATE INDEX idx_productcosts_upc ON ProductCosts(UPC);
-```
-
-#### D. UI for Product Costs
-
-**In MainWindow.xaml, Product Costs tab**:
-
-```xml
-<TabItem Header="Product Costs">
-  <Grid>
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="*"/>
-    </Grid.RowDefinitions>
-
-    <!-- Upload Section -->
-    <Border Grid.Row="0" Style="{StaticResource CardStyle}" Padding="20" Margin="10">
-      <StackPanel>
-        <TextBlock Text="Upload Vendor Invoice" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
-        <Button Content="Upload Invoice PDF" Width="200" Height="40" Click="UploadInvoice_Click" Style="{StaticResource PrimaryButton}"/>
-        <TextBlock x:Name="txtUploadStatus" Margin="0,10,0,0" Foreground="{StaticResource MutedTextBrush}"/>
-      </StackPanel>
-    </Border>
-
-    <!-- Product Costs Grid -->
-    <DataGrid Grid.Row="1" x:Name="gridProductCosts" Margin="10" IsReadOnly="True" AutoGenerateColumns="False">
-      <DataGrid.Columns>
-        <DataGridTextColumn Header="SKU/UPC" Binding="{Binding Identifier}" Width="120"/>
-        <DataGridTextColumn Header="Product Name" Binding="{Binding ProductName}" Width="*"/>
-        <DataGridTextColumn Header="Current Cost" Binding="{Binding CurrentCost, StringFormat=C2}" Width="100"/>
-        <DataGridTextColumn Header="Previous Cost" Binding="{Binding PreviousCost, StringFormat=C2}" Width="100"/>
-        <DataGridTextColumn Header="Change %" Binding="{Binding ChangePercent, StringFormat=F2}" Width="80"/>
-        <DataGridTextColumn Header="Vendor" Binding="{Binding VendorName}" Width="150"/>
-        <DataGridTextColumn Header="Last Updated" Binding="{Binding LastUpdated}" Width="120"/>
-      </DataGrid.Columns>
-    </DataGrid>
-  </Grid>
-</TabItem>
-```
-
----
-
-## TESTING REQUIREMENTS
-
-### Test Cases for Purchases
-1. Add purchase record with all fields
-2. Update existing purchase record
-3. Delete purchase record
-4. Verify data persists across app restart
-
-### Test Cases for Invoice Parser
-1. Upload TRI STATE DISTRO invoice → Extract all line items correctly
-2. Upload SAFA GOODS invoice → Extract all line items correctly
-3. Upload SKYGATE invoice → Extract all line items correctly
-4. Upload 1OAK invoice → Extract all line items correctly
-5. Upload HS WHOLESALE invoice → Extract all line items correctly
-6. Upload AMERICAN DISTRIBUTORS invoice → Extract all line items correctly
-7. Upload AK WHOLESALE invoice → Extract all line items correctly
-8. Verify price changes detected when uploading second invoice with different prices
-9. Verify alerts created for price changes
-10. Verify product costs grid displays correctly
-
----
-
-## DEPENDENCIES
-
-**NuGet Packages Required**:
-- PdfPig (for PDF parsing)
-```xml
-<PackageReference Include="PdfPig" Version="0.1.8" />
-```
-
----
-
-## ESTIMATED EFFORT
-
-- **Purchases Simplification**: 2-3 hours
-- **Invoice Parser Core**: 4-5 hours
-- **Price Change Detection**: 1-2 hours
-- **UI Integration**: 1-2 hours
-- **Testing & Refinement**: 2-3 hours
-
-**Total**: 10-15 hours
-
----
-
-## DELIVERABLES CHECKLIST
-
-- [ ] Purchases section simplified with new UI
-- [ ] PurchaseRecord database table created
-- [ ] Purchase CRUD operations working
-- [ ] InvoiceParserService implemented for all 7 vendors
-- [ ] ProductCostService implemented
-- [ ] ProductCosts database table created
-- [ ] PriceAlerts database table created
-- [ ] Product Costs UI implemented
-- [ ] Price change detection working
-- [ ] All test cases passing
-- [ ] Home button resized to match logo
-
----
-
-## CONTACT & SUPPORT
-
-For questions or clarifications, refer to:
-- Sample invoices in `/samples` folder
-- Current working code in the application
-- This specification document
-
-Good luck with the implementation!
+> Continue the HISAB KITAB WORKS WinForms project from `DEVELOPER_HANDOFF.md`.
+> Work on branch `agent/payroll-scheduling-account-billing` and first verify the
+> 1.0.120 Cloudflare invoice inbox end to end with a real store email/PDF. Then
+> fix any observed sync issue without exposing secrets or automatically posting
+> unreviewed financial entries. After that, validate two Z-report batches per
+> day and historical backfill. Preserve existing WPF clients and use additive
+> SQL migrations.

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
+using ManagerPaperworkSystem.Core.Utils;
 using ManagerPaperworkSystem.Data.Db;
 using Microsoft.EntityFrameworkCore;
 
@@ -36,10 +37,11 @@ internal sealed class StoreManagerForm : Form
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 104));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
         var message = WinTheme.Label(
             "These businesses are digitally signed into this PC license.\r\n"
-            + "To add or remove one, the developer updates the client account and reissues this PC license.");
+            + "Choose the login default, arrange the store lineup, or disconnect an additional store from this PC. "
+            + "Disconnecting hides it from login without deleting its database or paid license.");
         message.Dock = DockStyle.Fill;
         message.TextAlign = ContentAlignment.MiddleLeft;
         message.ForeColor = WinTheme.Muted;
@@ -48,20 +50,22 @@ internal sealed class StoreManagerForm : Form
         root.Controls.Add(message, 0, 0);
         _grid.Margin = new Padding(4, 0, 4, 10);
         root.Controls.Add(_grid, 0, 1);
-        var actions = new TableLayoutPanel
+        var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 4,
-            RowCount = 1,
-            Margin = new Padding(4, 2, 4, 0)
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            AutoScroll = true,
+            Margin = new Padding(4, 2, 4, 0),
+            Padding = new Padding(0, 4, 0, 4)
         };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 165));
-        actions.Controls.Add(Button("Import Updated License", ImportUpdatedLicense), 1, 0);
-        actions.Controls.Add(Button("Add Store", AddLicensedStore, true), 2, 0);
-        actions.Controls.Add(Button("Close", () => Close()), 3, 0);
+        actions.Controls.Add(Button("Add Store", AddLicensedStore, true, 150));
+        actions.Controls.Add(Button("Import Updated License", ImportUpdatedLicense, false, 220));
+        actions.Controls.Add(Button("Set as Login Default", SetSelectedAsDefault, true, 210));
+        actions.Controls.Add(Button("Move Up", () => MoveSelected(-1), false, 130));
+        actions.Controls.Add(Button("Move Down", () => MoveSelected(1), false, 140));
+        actions.Controls.Add(Button("Disconnect / Reconnect", ToggleSelectedConnection, false, 220));
+        actions.Controls.Add(Button("Close", () => Close(), false, 120));
         root.Controls.Add(actions, 0, 2);
         return root;
     }
@@ -88,32 +92,44 @@ internal sealed class StoreManagerForm : Form
         }
     }
 
-    private Button Button(string text, Action action, bool filled = false)
+    private Button Button(string text, Action action, bool filled = false, int width = 170)
     {
         var b = WinTheme.Button(text, filled);
-        b.Dock = DockStyle.Fill;
-        b.Margin = new Padding(6, 8, 0, 8);
+        b.Width = width;
+        b.Height = 44;
+        b.Margin = new Padding(5);
         b.Click += (_, _) => action();
         return b;
     }
 
     private void RefreshGrid()
     {
-        _grid.DataSource = LicensedBusinessService.Load()
-            .OrderByDescending(x => x.IsPrimary)
-            .ThenBy(x => x.BusinessName)
-            .Select(x => new
+        var businesses = LicensedBusinessService.Load();
+        var ordered = StoreDirectoryPreferencesStore.GetOrderedBusinesses(
+            businesses,
+            includeDisconnected: true);
+        _grid.DataSource = ordered
+            .Select((business, index) => new
             {
-                x.BusinessId,
-                Name = x.BusinessName,
-                x.StoreGuid,
-                x.Address,
-                Database = x.DatabaseName,
-                Type = x.IsPrimary ? "Primary Login Business" : "Additional Business",
-                Licensed = true
+                StoreKey = StoreDirectoryPreferencesStore.Key(business),
+                Order = index + 1,
+                business.BusinessId,
+                Name = business.BusinessName,
+                business.StoreGuid,
+                business.Address,
+                Database = business.DatabaseName,
+                Type = business.IsPrimary ? "Primary Login Business" : "Additional Business",
+                Default = StoreDirectoryPreferencesStore.IsDefault(business, businesses) ? "Yes" : "",
+                Connection = StoreDirectoryPreferencesStore.IsConnected(business, businesses)
+                    ? "Connected"
+                    : "Disconnected"
             })
             .ToList();
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        if (_grid.Columns.Contains("StoreKey"))
+            _grid.Columns["StoreKey"]!.Visible = false;
+        if (_grid.Columns.Contains("Order"))
+            _grid.Columns["Order"]!.FillWeight = 45;
         if (_grid.Columns.Contains("BusinessId"))
         {
             _grid.Columns["BusinessId"]!.HeaderText = "Business ID";
@@ -132,8 +148,149 @@ internal sealed class StoreManagerForm : Form
             _grid.Columns["Database"]!.FillWeight = 145;
         if (_grid.Columns.Contains("Type"))
             _grid.Columns["Type"]!.FillWeight = 135;
-        if (_grid.Columns.Contains("Licensed"))
-            _grid.Columns["Licensed"]!.FillWeight = 70;
+        if (_grid.Columns.Contains("Default"))
+            _grid.Columns["Default"]!.FillWeight = 60;
+        if (_grid.Columns.Contains("Connection"))
+            _grid.Columns["Connection"]!.FillWeight = 90;
+    }
+
+    private LicensedBusinessConnection? SelectedBusiness()
+    {
+        if (_grid.CurrentRow is null || !_grid.Columns.Contains("StoreKey"))
+            return null;
+        var key = _grid.CurrentRow.Cells["StoreKey"].Value?.ToString();
+        return LicensedBusinessService.Load().FirstOrDefault(business =>
+            string.Equals(
+                StoreDirectoryPreferencesStore.Key(business),
+                key,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void SetSelectedAsDefault()
+    {
+        var business = SelectedBusiness();
+        if (business is null)
+        {
+            MessageBox.Show(this, "Select the store to use by default at login.",
+                "Licensed Businesses", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            var businesses = LicensedBusinessService.Load();
+            StoreDirectoryPreferencesStore.SetDefault(business, businesses);
+            RefreshGrid();
+            MessageBox.Show(this,
+                $"{business.BusinessName} will be preselected the next time a user logs in.",
+                "Login Default Updated", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, AppBootstrap.RedactSensitiveText(exception.Message),
+                "Default Store", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void MoveSelected(int direction)
+    {
+        var business = SelectedBusiness();
+        if (business is null)
+            return;
+        var businesses = LicensedBusinessService.Load();
+        StoreDirectoryPreferencesStore.Move(business, businesses, direction);
+        RefreshGrid();
+        SelectBusiness(business);
+    }
+
+    private async void ToggleSelectedConnection()
+    {
+        var business = SelectedBusiness();
+        if (business is null)
+        {
+            MessageBox.Show(this, "Select the store to disconnect or reconnect.",
+                "Licensed Businesses", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var businesses = LicensedBusinessService.Load();
+        var connected = StoreDirectoryPreferencesStore.IsConnected(business, businesses);
+        var action = connected ? "disconnect" : "reconnect";
+        var detail = connected
+            ? "It will disappear from login and the store selector on this PC. Its database and license will not be deleted."
+            : "It will return to login and the store selector on this PC.";
+        if (MessageBox.Show(
+                this,
+                $"{char.ToUpperInvariant(action[0])}{action[1..]} {business.BusinessName}?\r\n\r\n{detail}",
+                $"{char.ToUpperInvariant(action[0])}{action[1..]} Store",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            StoreDirectoryPreferencesStore.SetConnected(
+                business,
+                businesses,
+                connected: !connected);
+            if (connected)
+                DisablePortalSync(business);
+            await LicensedBusinessService.SynchronizeAsync(_services);
+            RefreshGrid();
+            MessageBox.Show(this,
+                connected
+                    ? $"{business.BusinessName} was disconnected from this PC login. You can reconnect it here later."
+                    : $"{business.BusinessName} was reconnected to this PC login.",
+                "Store Connection Updated",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, AppBootstrap.RedactSensitiveText(exception.Message),
+                "Store Connection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void SelectBusiness(LicensedBusinessConnection business)
+    {
+        var key = StoreDirectoryPreferencesStore.Key(business);
+        foreach (DataGridViewRow row in _grid.Rows)
+        {
+            if (string.Equals(
+                    row.Cells["StoreKey"].Value?.ToString(),
+                    key,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                row.Selected = true;
+                _grid.CurrentCell = row.Cells.Cast<DataGridViewCell>()
+                    .First(cell => cell.Visible);
+                return;
+            }
+        }
+    }
+
+    private static void DisablePortalSync(LicensedBusinessConnection business)
+    {
+        var document = PortalSyncSettingsStore.Load();
+        var changed = false;
+        foreach (var settings in document.Stores.Where(settings =>
+                     PortalSyncSettingsStore.IsForBusiness(settings, business)))
+        {
+            settings.Enabled = false;
+            settings.CashSalesSummaryEnabled = false;
+            settings.ZReportsEnabled = false;
+            settings.LastStatus = "Store disconnected from this PC login.";
+            settings.LastCashSummaryStatus = settings.LastStatus;
+            settings.LastZReportStatus = settings.LastStatus;
+            foreach (var reportKind in Enum.GetValues<PortalSyncReportKind>())
+                PortalSyncService.RemoveDailyTask(settings.Id, reportKind);
+            changed = true;
+        }
+        if (changed)
+            PortalSyncSettingsStore.Save(document);
     }
 
     private void ImportUpdatedLicense()
@@ -203,7 +360,11 @@ internal sealed class UserAccountsForm : Form
         var toggle = WinTheme.Button("Activate / Deactivate");
         toggle.Width = 190;
         toggle.Click += async (_, _) => await ToggleSelectedAsync();
+        var setPin = WinTheme.Button("Set / Reset PIN", true);
+        setPin.Width = 160;
+        setPin.Click += (_, _) => SetSelectedPin();
         actions.Controls.Add(add);
+        actions.Controls.Add(setPin);
         actions.Controls.Add(toggle);
         root.Controls.Add(actions, 0, 0);
         root.Controls.Add(_grid, 0, 1);
@@ -214,7 +375,18 @@ internal sealed class UserAccountsForm : Form
     {
         var users = await _auth.GetUsersAsync();
         _grid.DataSource = users.OrderBy(x => x.Username)
-            .Select(x => new { x.Id, Name = x.DisplayName, x.Username, x.Email, x.Role, x.IsActive, x.CreatedUtc, x.LastLoginUtc })
+            .Select(x => new
+            {
+                x.Id,
+                Name = x.DisplayName,
+                x.Username,
+                x.Email,
+                x.Role,
+                Pin = x.HasPin ? "Configured" : "Not Set",
+                x.IsActive,
+                x.CreatedUtc,
+                x.LastLoginUtc
+            })
             .ToList();
         if (_grid.Columns.Contains("Id"))
             _grid.Columns["Id"]!.Visible = false;
@@ -230,52 +402,131 @@ internal sealed class UserAccountsForm : Form
         await _auth.SetUserActiveAsync(id, !active);
         RefreshGrid();
     }
+
+    private void SetSelectedPin()
+    {
+        if (_grid.CurrentRow is null || !_grid.Columns.Contains("Id"))
+        {
+            MessageBox.Show(this, "Select a user first.", "User PIN", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (!int.TryParse(_grid.CurrentRow.Cells["Id"].Value?.ToString(), out var id))
+            return;
+
+        var username = _grid.CurrentRow.Cells["Username"].Value?.ToString() ?? "user";
+        using var form = new SetUserPinForm(_auth, id, username);
+        if (form.ShowDialog(this) == DialogResult.OK)
+            RefreshGrid();
+    }
 }
 
-internal sealed class DatabaseSettingsForm : Form
+internal sealed class SetUserPinForm : Form
 {
-    private readonly IAppPaths _paths;
-    private readonly TextBox _settings = WinTheme.TextBox();
+    private readonly IAuthService _auth;
+    private readonly int _userId;
+    private readonly TextBox _pin = WinTheme.TextBox();
+    private readonly TextBox _confirm = WinTheme.TextBox();
+    private readonly Label _status = WinTheme.Label("");
 
-    public DatabaseSettingsForm(IAppPaths paths)
+    public SetUserPinForm(IAuthService auth, int userId, string username)
     {
-        _paths = paths;
+        _auth = auth;
+        _userId = userId;
         WinTheme.Apply(this);
-        Text = "Database Settings - HISAB KITAB";
-        Size = new Size(900, 520);
-        _settings.Multiline = true;
-        _settings.Dock = DockStyle.Fill;
-        _settings.ScrollBars = ScrollBars.Both;
-        _settings.ReadOnly = true;
-        Controls.Add(_settings);
-        Load += (_, _) => LoadSettingsText();
+        Text = $"Set PIN for {username} - HISAB KITAB";
+        Size = new Size(540, 330);
+        MinimumSize = new Size(500, 300);
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ConfigurePinBox(_pin);
+        ConfigurePinBox(_confirm);
+        Controls.Add(Build(username));
     }
 
-    private void LoadSettingsText()
+    private Control Build(string username)
     {
-        var lines = new List<string>
+        var root = new TableLayoutPanel
         {
-            "HISAB KITAB Database Settings",
-            "",
-            "App Data Folder:",
-            _paths.AppDataDirectory,
-            "",
-            "SQLite Database Path:",
-            _paths.DatabasePath,
-            "",
-            "Connection Settings File:",
-            AppBootstrap.ConnectionSettingsPath,
-            "",
-            "Store Connections File:",
-            AppBootstrap.StoreConnectionsPath,
-            ""
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(24),
+            ColumnCount = 2,
+            RowCount = 5
         };
-        if (File.Exists(AppBootstrap.ConnectionSettingsPath))
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+
+        var heading = WinTheme.Label($"Assign a 4-digit login PIN to {username}.", true);
+        heading.ForeColor = WinTheme.Copper;
+        root.Controls.Add(heading, 0, 0);
+        root.SetColumnSpan(heading, 2);
+        AddField(root, "New PIN", _pin, 1);
+        AddField(root, "Confirm PIN", _confirm, 2);
+        _status.ForeColor = WinTheme.Red;
+        root.Controls.Add(_status, 0, 3);
+        root.SetColumnSpan(_status, 2);
+
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
+        var save = WinTheme.Button("Save PIN", true);
+        save.Width = 130;
+        save.Click += async (_, _) => await SaveAsync();
+        var cancel = WinTheme.Button("Cancel");
+        cancel.Width = 100;
+        cancel.Click += (_, _) => Close();
+        actions.Controls.Add(save);
+        actions.Controls.Add(cancel);
+        root.Controls.Add(actions, 0, 4);
+        root.SetColumnSpan(actions, 2);
+        return root;
+    }
+
+    private static void AddField(TableLayoutPanel root, string label, Control field, int row)
+    {
+        root.Controls.Add(WinTheme.Label(label, true), 0, row);
+        field.Dock = DockStyle.Fill;
+        root.Controls.Add(field, 1, row);
+    }
+
+    private static void ConfigurePinBox(TextBox box)
+    {
+        box.UseSystemPasswordChar = true;
+        box.MaxLength = UserCredentialVerifier.PinLength;
+        box.KeyPress += (_, e) =>
         {
-            lines.Add("connection_settings.json:");
-            lines.Add(AppBootstrap.RedactSensitiveText(File.ReadAllText(AppBootstrap.ConnectionSettingsPath)));
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                e.Handled = true;
+        };
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!UserCredentialVerifier.IsValidPin(_pin.Text))
+        {
+            _status.Text = "Enter exactly four digits.";
+            return;
         }
-        _settings.Text = string.Join(Environment.NewLine, lines);
+        if (!string.Equals(_pin.Text, _confirm.Text, StringComparison.Ordinal))
+        {
+            _status.Text = "The PIN entries do not match.";
+            return;
+        }
+
+        try
+        {
+            await _auth.SetUserPinAsync(_userId, _pin.Text);
+            MessageBox.Show(this, "The login PIN was saved securely.", "User PIN", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            DialogResult = DialogResult.OK;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = AppBootstrap.RedactSensitiveText(ex.Message);
+        }
     }
 }
 
@@ -287,6 +538,7 @@ internal sealed class CreateAccountForm : Form
     private readonly TextBox _email = WinTheme.TextBox();
     private readonly TextBox _username = WinTheme.TextBox();
     private readonly TextBox _password = WinTheme.TextBox();
+    private readonly TextBox _pin = WinTheme.TextBox();
     private readonly ComboBox _role = WinTheme.ComboBox();
     private readonly ComboBox _question = WinTheme.ComboBox();
     private readonly TextBox _answer = WinTheme.TextBox();
@@ -297,16 +549,24 @@ internal sealed class CreateAccountForm : Form
         _auth = auth;
         WinTheme.Apply(this);
         Text = "Create User - HISAB KITAB";
-        Size = new Size(680, 620);
+        Size = new Size(680, 680);
+        MinimumSize = new Size(620, 620);
         Controls.Add(Build());
     }
 
     private Control Build()
     {
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Bg, Padding = new Padding(22), RowCount = 10, ColumnCount = 2 };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Bg, Padding = new Padding(22), RowCount = 11, ColumnCount = 2 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _password.UseSystemPasswordChar = true;
+        _pin.UseSystemPasswordChar = true;
+        _pin.MaxLength = UserCredentialVerifier.PinLength;
+        _pin.KeyPress += (_, e) =>
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                e.Handled = true;
+        };
         _role.Items.AddRange(Enum.GetNames<UserRole>());
         _role.SelectedItem = UserRole.Manager.ToString();
         _question.Items.AddRange(new object[]
@@ -324,9 +584,10 @@ internal sealed class CreateAccountForm : Form
         Add(root, "Role *", _role, 3);
         Add(root, "Username *", _username, 4);
         Add(root, "Password *", _password, 5);
-        Add(root, "Security Question *", _question, 6);
-        Add(root, "Security Answer *", _answer, 7);
-        root.Controls.Add(_status, 0, 8);
+        Add(root, "4-Digit PIN *", _pin, 6);
+        Add(root, "Security Question *", _question, 7);
+        Add(root, "Security Answer *", _answer, 8);
+        root.Controls.Add(_status, 0, 9);
         root.SetColumnSpan(_status, 2);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         var save = WinTheme.Button("Create User", true);
@@ -337,7 +598,7 @@ internal sealed class CreateAccountForm : Form
         cancel.Click += (_, _) => Close();
         actions.Controls.Add(save);
         actions.Controls.Add(cancel);
-        root.Controls.Add(actions, 0, 9);
+        root.Controls.Add(actions, 0, 10);
         root.SetColumnSpan(actions, 2);
         return root;
     }
@@ -355,7 +616,9 @@ internal sealed class CreateAccountForm : Form
         try
         {
             var role = Enum.TryParse<UserRole>(_role.Text, out var r) ? r : UserRole.Manager;
-            await _auth.CreateUserAsync(_first.Text, _last.Text, role, _username.Text, _password.Text, _question.Text, _answer.Text, _email.Text);
+            if (!UserCredentialVerifier.IsValidPin(_pin.Text))
+                throw new InvalidOperationException("PIN must contain exactly 4 digits.");
+            await _auth.CreateUserAsync(_first.Text, _last.Text, role, _username.Text, _password.Text, _question.Text, _answer.Text, _email.Text, _pin.Text);
             DialogResult = DialogResult.OK;
         }
         catch (Exception ex)

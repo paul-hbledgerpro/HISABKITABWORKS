@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.IO.Compression;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -23,7 +24,6 @@ internal static class AppUpdateStartupService
     private const string GitHubLatestReleaseApi =
         "https://api.github.com/repos/paul-hbledgerpro/HISABKITABWORKS/releases/latest";
     private const string PreferredAssetPrefix = "HISAB_KITAB_Update_win-x64";
-    private const string UpdaterPayloadDirectoryName = "UpdaterPayload";
     private const int MaximumDeferrals = 3;
     private static readonly byte[] StateEntropy =
         Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-APP-UPDATE-DEFERRALS-V1");
@@ -186,44 +186,34 @@ internal static class AppUpdateStartupService
         return new AvailableAppUpdate(latestVersion, downloadUrl, notes);
     }
 
-    private static Task<bool> DownloadAndLaunchUpdaterAsync(
+    private static async Task<bool> DownloadAndLaunchUpdaterAsync(
         Form? owner,
         AvailableAppUpdate update,
         bool required)
     {
-        var updaterSourceDirectory = Path.Combine(
-            AppContext.BaseDirectory,
-            UpdaterPayloadDirectoryName);
-        if (!File.Exists(Path.Combine(updaterSourceDirectory, "Upgrade.exe")))
-            updaterSourceDirectory = AppContext.BaseDirectory;
-
-        var installedUpdaterPath = Path.Combine(updaterSourceDirectory, "Upgrade.exe");
-        if (!File.Exists(installedUpdaterPath))
-        {
-            MessageBox.Show(
-                owner,
-                "Upgrade.exe is missing from the HISAB KITAB installation. " +
-                "Please reinstall the latest client setup package.",
-                "Software Update",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-            return Task.FromResult(false);
-        }
-
-        var updaterWorkingDirectory = PrepareUpdaterWorkingCopy(updaterSourceDirectory);
+        // Bootstrap the updater from the release being installed. Older client
+        // folders can contain a leftover UpdaterPayload\Upgrade.exe whose
+        // manifest requests administrator elevation. Selecting that stale file
+        // caused UAC prompts and then relaunched the app in the administrator's
+        // Windows profile, where the normal user's license is intentionally not
+        // present. The release ZIP contains the matching asInvoker updater, so
+        // download it once and run that exact binary as the current user.
+        var prepared = await PrepareReleaseUpdaterAsync(update);
+        var updaterWorkingDirectory = prepared.WorkingDirectory;
         var updaterPath = Path.Combine(updaterWorkingDirectory, "Upgrade.exe");
         var appExe = Application.ExecutablePath;
         var startInfo = new ProcessStartInfo
         {
             FileName = updaterPath,
             WorkingDirectory = updaterWorkingDirectory,
-            UseShellExecute = true,
-            Verb = "runas"
+            // CreateProcess never displays a credential/UAC prompt. If a future
+            // package accidentally ships an elevated updater, startup fails
+            // safely instead of switching Windows accounts and losing sight of
+            // the existing per-user license.
+            UseShellExecute = false
         };
-        startInfo.ArgumentList.Add("--download-url");
-        startInfo.ArgumentList.Add(update.DownloadUrl);
-        startInfo.ArgumentList.Add("--version");
-        startInfo.ArgumentList.Add(update.Version);
+        startInfo.ArgumentList.Add("--zip");
+        startInfo.ArgumentList.Add(prepared.PackagePath);
         startInfo.ArgumentList.Add("--app");
         startInfo.ArgumentList.Add(appExe);
         startInfo.ArgumentList.Add("--pid");
@@ -249,44 +239,81 @@ internal static class AppUpdateStartupService
             }));
         }
 
-        return Task.FromResult(true);
+        return true;
     }
 
-    private static string PrepareUpdaterWorkingCopy(string sourceDirectory)
+    private static async Task<PreparedReleaseUpdater> PrepareReleaseUpdaterAsync(
+        AvailableAppUpdate update)
     {
-        var updaterRoot = Path.Combine(
-            Path.GetTempPath(),
-            "HISAB_KITAB_UPDATER");
+        var updaterRoot = Path.Combine(Path.GetTempPath(), "HISAB_KITAB_UPDATER");
         Directory.CreateDirectory(updaterRoot);
         var workingDirectory = Path.Combine(
             updaterRoot,
             $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}");
         Directory.CreateDirectory(workingDirectory);
+        var packagePath = Path.Combine(workingDirectory, "update.zip");
 
-        var copiedFiles = 0;
-        foreach (var source in Directory.EnumerateFiles(
-                     sourceDirectory,
-                     "*",
-                     SearchOption.AllDirectories))
+        using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) })
         {
-            var relativePath = Path.GetRelativePath(sourceDirectory, source);
-            var destination = Path.Combine(workingDirectory, relativePath);
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(
-                source,
-                destination,
+            client.DefaultRequestHeaders.UserAgent.Add(
+                new ProductInfoHeaderValue("HisabKitabWorks", GetCurrentVersion()));
+            await using var source = await client.GetStreamAsync(update.DownloadUrl);
+            await using var destination = new FileStream(
+                packagePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 128 * 1024,
+                useAsync: true);
+            await source.CopyToAsync(destination);
+        }
+
+        using (var archive = ZipFile.OpenRead(packagePath))
+        {
+            var updaterEntry = archive.Entries
+                .Where(entry => string.Equals(
+                    Path.GetFileName(entry.FullName),
+                    "Upgrade.exe",
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(entry => entry.FullName.Count(character => character is '/' or '\\'))
+                .FirstOrDefault()
+                ?? throw new InvalidDataException(
+                    "The release package does not contain Upgrade.exe.");
+            updaterEntry.ExtractToFile(
+                Path.Combine(workingDirectory, "Upgrade.exe"),
                 overwrite: true);
-            copiedFiles++;
         }
 
-        if (copiedFiles == 0 ||
-            !File.Exists(Path.Combine(workingDirectory, "Upgrade.exe")))
+        var updaterPath = Path.Combine(workingDirectory, "Upgrade.exe");
+        var updaterVersion = NormalizeVersion(
+            FileVersionInfo.GetVersionInfo(updaterPath).FileVersion);
+        if (!Version.TryParse(updaterVersion, out var parsedUpdaterVersion) ||
+            !Version.TryParse(NormalizeVersion(update.Version), out var parsedReleaseVersion) ||
+            parsedUpdaterVersion < parsedReleaseVersion)
         {
-            throw new InvalidOperationException(
-                "The updater runtime could not be prepared.");
+            throw new InvalidDataException(
+                $"The release updater version {updaterVersion} does not match update {update.Version}.");
         }
 
-        return workingDirectory;
+        WriteUpdateDiagnostic(
+            $"Prepared release updater {updaterVersion} from {update.DownloadUrl} for Windows user {Environment.UserName}.");
+        return new PreparedReleaseUpdater(workingDirectory, packagePath);
+    }
+
+    private static void WriteUpdateDiagnostic(string message)
+    {
+        try
+        {
+            var logDirectory = Path.Combine(AppBootstrap.AppDataPath, "Logs");
+            Directory.CreateDirectory(logDirectory);
+            File.AppendAllText(
+                Path.Combine(logDirectory, "update_log.txt"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [Application] {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Diagnostics must never block application startup.
+        }
     }
 
     private static AppUpdateDeferralState LoadState(string updateVersion)
@@ -399,6 +426,10 @@ internal static class AppUpdateStartupService
         public int DeferralCount { get; set; }
         public DateTime? LastDeferredUtc { get; set; }
     }
+
+    private sealed record PreparedReleaseUpdater(
+        string WorkingDirectory,
+        string PackagePath);
 }
 
 internal sealed class AppUpdatePromptForm : Form

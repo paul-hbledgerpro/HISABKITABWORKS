@@ -40,6 +40,8 @@ internal static class LicensedBusinessService
                     business.EncryptedConnection,
                     business.ConnectionNonce,
                     business.ConnectionTag);
+                LocalSqlServerPolicy.MarkMigrationPendingIfRemote(settings);
+                settings = LocalSqlServerPolicy.Normalize(settings);
                 if (!string.Equals(settings.Database, business.DatabaseName, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("A signed business record does not match its encrypted database connection.");
                 businesses.Add(new LicensedBusinessConnection
@@ -51,6 +53,9 @@ internal static class LicensedBusinessService
                         ? business.DatabaseName.Trim()
                         : business.StoreGuid.Trim(),
                     DatabaseName = business.DatabaseName.Trim(),
+                    InvoiceInboxApiUrl = business.InvoiceInboxApiUrl.Trim().TrimEnd('/'),
+                    InvoiceInboxAddress = business.InvoiceInboxAddress.Trim().ToLowerInvariant(),
+                    InvoiceInboxApiToken = business.InvoiceInboxApiToken.Trim(),
                     IsPrimary = business.IsPrimary,
                     Connection = settings
                 });
@@ -75,7 +80,7 @@ internal static class LicensedBusinessService
         try
         {
             var protectedBytes = ProtectedData.Protect(clear, Entropy, DataProtectionScope.LocalMachine);
-            File.WriteAllBytes(ProtectedBusinessesPath, protectedBytes);
+            WriteProtectedBusinesses(protectedBytes);
         }
         finally
         {
@@ -91,8 +96,25 @@ internal static class LicensedBusinessService
         var clear = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.LocalMachine);
         try
         {
-            return JsonSerializer.Deserialize<List<LicensedBusinessConnection>>(clear, JsonOptions)
+            var businesses = JsonSerializer.Deserialize<List<LicensedBusinessConnection>>(clear, JsonOptions)
                 ?? new List<LicensedBusinessConnection>();
+            var changed = false;
+            foreach (var business in businesses)
+            {
+                LocalSqlServerPolicy.MarkMigrationPendingIfRemote(business.Connection);
+                var local = LocalSqlServerPolicy.Normalize(business.Connection);
+                if (!string.Equals(business.Connection.Server, local.Server, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(business.Connection.Username, local.Username, StringComparison.Ordinal) ||
+                    !string.Equals(business.Connection.Password, local.Password, StringComparison.Ordinal) ||
+                    !string.Equals(business.Connection.ConnectionString, local.ConnectionString, StringComparison.Ordinal))
+                {
+                    business.Connection = local;
+                    changed = true;
+                }
+            }
+            if (changed)
+                SaveBusinesses(businesses);
+            return businesses;
         }
         finally
         {
@@ -102,13 +124,16 @@ internal static class LicensedBusinessService
 
     public static async Task SynchronizeAsync(IServiceProvider services)
     {
-        var businesses = Load();
-        if (businesses.Count == 0)
+        var licensedBusinesses = Load();
+        if (licensedBusinesses.Count == 0)
             return;
 
-        if (businesses.Count(x => x.IsPrimary) != 1)
+        if (licensedBusinesses.Count(x => x.IsPrimary) != 1)
             throw new InvalidOperationException("The licensed business directory does not contain exactly one primary business.");
 
+        var businesses = StoreDirectoryPreferencesStore
+            .GetOrderedBusinesses(licensedBusinesses)
+            .ToList();
         await UpgradeLicensedDatabasesAsync(businesses);
 
         using var scope = services.CreateScope();
@@ -118,7 +143,7 @@ internal static class LicensedBusinessService
         var matchedIds = new HashSet<int>();
         var connections = new Dictionary<string, string>();
 
-        foreach (var licensed in businesses.OrderByDescending(x => x.IsPrimary).ThenBy(x => x.BusinessName))
+        foreach (var licensed in businesses)
         {
             var store = existing.FirstOrDefault(x => NamesMatch(x.Name, licensed.BusinessName));
             if (store is null)
@@ -156,6 +181,7 @@ internal static class LicensedBusinessService
 
             try
             {
+                await LocalSqlServerPolicy.EnsureDatabaseExistsAsync(connectionString);
                 await DatabaseSchemaService.EnsureSchemaAsync(connectionString, licensed.BusinessName);
                 var options = new DbContextOptionsBuilder<AppDbContext>()
                     .UseSqlServer(connectionString, sql => sql.CommandTimeout(30))
@@ -182,26 +208,46 @@ internal static class LicensedBusinessService
 
     private static string BuildConnectionString(DatabaseConnectionSettings settings)
     {
-        if (!string.IsNullOrWhiteSpace(settings.ConnectionString))
-            return new SqlConnectionStringBuilder(settings.ConnectionString) { ConnectTimeout = 10, TrustServerCertificate = true }.ConnectionString;
-        var builder = new SqlConnectionStringBuilder
+        var local = LocalSqlServerPolicy.Normalize(settings);
+        return LocalSqlServerPolicy.BuildConnectionString(local.Database);
+    }
+
+    private static void SaveBusinesses(IReadOnlyList<LicensedBusinessConnection> businesses)
+    {
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var clear = JsonSerializer.SerializeToUtf8Bytes(businesses, JsonOptions);
+        try
         {
-            DataSource = settings.Server,
-            InitialCatalog = settings.Database,
-            TrustServerCertificate = true,
-            Encrypt = true,
-            ConnectTimeout = 10,
-            ConnectRetryCount = 2,
-            ConnectRetryInterval = 2
-        };
-        if (string.IsNullOrWhiteSpace(settings.Username))
-            builder.IntegratedSecurity = true;
-        else
-        {
-            builder.UserID = settings.Username;
-            builder.Password = settings.Password;
+            var protectedBytes = ProtectedData.Protect(clear, Entropy, DataProtectionScope.LocalMachine);
+            WriteProtectedBusinesses(protectedBytes);
         }
-        return builder.ConnectionString;
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
+    }
+
+    private static void WriteProtectedBusinesses(byte[] protectedBytes)
+    {
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var temporaryPath =
+            $"{ProtectedBusinessesPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(temporaryPath, protectedBytes);
+            File.Move(temporaryPath, ProtectedBusinessesPath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // A later license refresh can safely replace a leftover file.
+            }
+        }
     }
 }
 
@@ -212,6 +258,9 @@ internal sealed class LicensedBusinessConnection
     public string Address { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
+    public string InvoiceInboxApiUrl { get; set; } = "";
+    public string InvoiceInboxAddress { get; set; } = "";
+    public string InvoiceInboxApiToken { get; set; } = "";
     public bool IsPrimary { get; set; }
     public DatabaseConnectionSettings Connection { get; set; } = new();
 }

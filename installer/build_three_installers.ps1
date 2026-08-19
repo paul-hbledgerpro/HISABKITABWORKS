@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "1.0.115"
+    [string]$Version = "1.0.160"
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,11 +88,11 @@ New-Item -ItemType Directory -Force -Path $publishRoot, $releaseDir | Out-Null
 
 Publish-DesktopApp $clientProject $clientPublish "HISAB KITAB.exe"
 Publish-DesktopApp $updaterProject $updaterPublish "Upgrade.exe" $true
-$updaterPayloadDirectory = Join-Path $clientPublish "UpdaterPayload"
-New-Item -ItemType Directory -Force -Path $updaterPayloadDirectory | Out-Null
-foreach ($updaterFile in Get-ChildItem -LiteralPath $updaterPublish -File) {
-    Copy-Item -LiteralPath $updaterFile.FullName -Destination (Join-Path $updaterPayloadDirectory $updaterFile.Name) -Force
-}
+# The client updater must remain beside HISAB KITAB.exe. Centriq and other
+# deployment tools may copy only top-level files, and the running client also
+# uses this location as its backward-compatible updater fallback.
+Copy-Item -LiteralPath (Join-Path $updaterPublish "Upgrade.exe") `
+    -Destination (Join-Path $clientPublish "Upgrade.exe") -Force
 Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value $Version -Encoding Ascii
 
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
@@ -114,7 +114,7 @@ $scripts = @(
 
 foreach ($script in $scripts) {
     Write-Host "Compiling $(Split-Path -Leaf $script) ..." -ForegroundColor Cyan
-    & $iscc $script
+    & $iscc "/DMyAppVersion=$Version" $script
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup compilation failed for $script (exit code $LASTEXITCODE)."
     }
@@ -128,6 +128,17 @@ function New-ClientUpdatePackage([string]$Version) {
 
     $entries = [Collections.Generic.List[object]]::new()
 
+    foreach ($required in @(
+        "HISAB KITAB.exe",
+        "Upgrade.exe",
+        "version.txt"
+    )) {
+        $requiredPath = Join-Path $clientPublish $required
+        if (-not (Test-Path -LiteralPath $requiredPath)) {
+            throw "Required client update file is missing: $requiredPath"
+        }
+    }
+
     # Include every published top-level runtime file. A hand-maintained
     # allowlist previously omitted newly added dependencies such as MailKit,
     # MimeKit, and BouncyCastle from automatic updates even though the full
@@ -139,7 +150,7 @@ function New-ClientUpdatePackage([string]$Version) {
         })
     }
 
-    foreach ($directoryName in @("UpdaterPayload", "Assets", "TaxRules")) {
+    foreach ($directoryName in @("Assets", "TaxRules")) {
         $directory = Join-Path $clientPublish $directoryName
         if (-not (Test-Path -LiteralPath $directory)) {
             continue

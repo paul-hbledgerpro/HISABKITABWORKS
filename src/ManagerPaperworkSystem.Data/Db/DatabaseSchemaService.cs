@@ -102,6 +102,8 @@ public static class DatabaseSchemaService
                     [Email] NVARCHAR(200) NOT NULL DEFAULT '',
                     [PasswordHashBase64] NVARCHAR(500) NOT NULL DEFAULT '',
                     [SaltBase64] NVARCHAR(500) NOT NULL DEFAULT '',
+                    [PinHashBase64] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [PinSaltBase64] NVARCHAR(200) NOT NULL DEFAULT '',
                     [DisplayName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [Role] INT NOT NULL DEFAULT 0,
                     [IsActive] BIT NOT NULL DEFAULT 1,
@@ -109,7 +111,38 @@ public static class DatabaseSchemaService
                     [SecurityAnswerHash] NVARCHAR(500) NULL,
                     [LastLoginUtc] DATETIME2 NULL,
                     [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-                )");
+                );
+
+                IF OBJECT_ID(N'[dbo].[UserAccounts]', N'U') IS NOT NULL
+                BEGIN
+                    IF COL_LENGTH(N'[dbo].[UserAccounts]', N'PinHashBase64') IS NULL
+                        ALTER TABLE [dbo].[UserAccounts] ADD [PinHashBase64] NVARCHAR(200) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[UserAccounts]', N'PinSaltBase64') IS NULL
+                        ALTER TABLE [dbo].[UserAccounts] ADD [PinSaltBase64] NVARCHAR(200) NOT NULL DEFAULT '';
+                END");
+
+            await ExecuteSafe(conn, @"
+                IF OBJECT_ID(N'[dbo].[ActivityLogs]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[ActivityLogs] (
+                        [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                        [StoreId] INT NULL,
+                        [UserId] INT NOT NULL DEFAULT 0,
+                        [UserName] NVARCHAR(120) NOT NULL DEFAULT '',
+                        [UserRole] NVARCHAR(40) NOT NULL DEFAULT '',
+                        [Section] NVARCHAR(80) NOT NULL DEFAULT '',
+                        [Action] NVARCHAR(40) NOT NULL DEFAULT '',
+                        [EntityType] NVARCHAR(100) NOT NULL DEFAULT '',
+                        [EntityId] INT NOT NULL DEFAULT 0,
+                        [Description] NVARCHAR(800) NOT NULL DEFAULT '',
+                        [IsSystem] BIT NOT NULL DEFAULT 0,
+                        [OccurredUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+                    );
+                    CREATE INDEX [IX_ActivityLogs_Store_OccurredUtc]
+                        ON [dbo].[ActivityLogs] ([StoreId], [OccurredUtc]);
+                    CREATE INDEX [IX_ActivityLogs_User_OccurredUtc]
+                        ON [dbo].[ActivityLogs] ([UserId], [OccurredUtc]);
+                END");
 
             await ExecuteSafe(conn, @"
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ShiftLogs')
@@ -174,6 +207,12 @@ public static class DatabaseSchemaService
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportKey", "NVARCHAR(200) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportPath", "NVARCHAR(500) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "ShiftLogs", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CashOnHand", "CreatedByUserId", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "CashOnHand", "CreatedByName", "NVARCHAR(120) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CashOnHand", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CheckPayouts", "CreatedByUserId", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "CheckPayouts", "CreatedByName", "NVARCHAR(120) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "CheckPayouts", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
             await ExecuteSafe(conn, @"
                 UPDATE [dbo].[ShiftLogs]
                 SET [Employee] = COALESCE([Employee], ''),
@@ -498,6 +537,8 @@ public static class DatabaseSchemaService
                     [Direction] INT NOT NULL DEFAULT 0,
                     [AlertType] INT NOT NULL DEFAULT 0,
                     [VendorName] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [OldVendorName] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [OldInvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
                     [OtherVendorName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [InvoiceNumber] NVARCHAR(100) NOT NULL DEFAULT '',
                     [InvoiceDate] DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME()),
@@ -522,6 +563,8 @@ public static class DatabaseSchemaService
                 "IF COL_LENGTH(N'[dbo].[PriceAlerts]', N'NewPrice') IS NOT NULL UPDATE [dbo].[PriceAlerts] SET [NewUnitCost] = CONVERT(DECIMAL(18,4), [NewPrice])");
             await EnsureColumnAsync(conn, "PriceAlerts", "Direction", "INT NOT NULL DEFAULT 0");
             await EnsureColumnAsync(conn, "PriceAlerts", "AlertType", "INT NOT NULL DEFAULT 0");
+            await EnsureColumnAsync(conn, "PriceAlerts", "OldVendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "PriceAlerts", "OldInvoiceNumber", "NVARCHAR(100) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "OtherVendorName", "NVARCHAR(200) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "InvoiceNumber", "NVARCHAR(100) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "PriceAlerts", "InvoiceDate",
@@ -831,12 +874,14 @@ public static class DatabaseSchemaService
                     [IsMatched] BIT NOT NULL DEFAULT 0,
                     [MatchReference] NVARCHAR(200) NOT NULL DEFAULT '',
                     [IncludeInProfitLoss] BIT NOT NULL DEFAULT 0,
+                    [CheckCopyPath] NVARCHAR(1000) NOT NULL DEFAULT '',
                     [ImportedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
                 )");
 
             await EnsureColumnAsync(conn, "BankStatementTransactions", "IsMatched", "BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IsMatched DEFAULT 0");
             await EnsureColumnAsync(conn, "BankStatementTransactions", "MatchReference", "NVARCHAR(200) NOT NULL CONSTRAINT DF_BankStatementTransactions_MatchReference DEFAULT ''");
             await EnsureColumnAsync(conn, "BankStatementTransactions", "IncludeInProfitLoss", "BIT NOT NULL CONSTRAINT DF_BankStatementTransactions_IncludeInProfitLoss DEFAULT 0");
+            await EnsureColumnAsync(conn, "BankStatementTransactions", "CheckCopyPath", "NVARCHAR(1000) NOT NULL CONSTRAINT DF_BankStatementTransactions_CheckCopyPath DEFAULT ''");
 
             // Phase 3: Seed default data if tables are empty
             var sName = storeName ?? "Store 1";

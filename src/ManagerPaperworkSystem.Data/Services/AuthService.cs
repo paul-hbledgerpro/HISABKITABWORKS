@@ -37,7 +37,7 @@ public sealed class AuthService : IAuthService
         return await db.Users.AsNoTracking().AnyAsync(ct);
     }
 
-    public async Task<UserAccount> CreateUserAsync(string firstName, string lastName, UserRole role, string username, string password, string securityQuestion, string securityAnswer, string email = "", CancellationToken ct = default)
+    public async Task<UserAccount> CreateUserAsync(string firstName, string lastName, UserRole role, string username, string password, string securityQuestion, string securityAnswer, string email = "", string pin = "", CancellationToken ct = default)
     {
         firstName = (firstName ?? "").Trim();
         lastName = (lastName ?? "").Trim();
@@ -47,6 +47,8 @@ public sealed class AuthService : IAuthService
             throw new ArgumentException("Username is required.", nameof(username));
         if (string.IsNullOrWhiteSpace(password) || password.Length < 4)
             throw new ArgumentException("Password must be at least 4 characters.", nameof(password));
+        if (!string.IsNullOrEmpty(pin) && !UserCredentialVerifier.IsValidPin(pin))
+            throw new ArgumentException("PIN must contain exactly 4 digits.", nameof(pin));
 
         securityQuestion = (securityQuestion ?? "").Trim();
         if (string.IsNullOrWhiteSpace(securityQuestion))
@@ -63,6 +65,9 @@ public sealed class AuthService : IAuthService
 
         var (hash, salt) = PasswordHasher.HashPassword(password);
         var (aHash, aSalt) = PasswordHasher.HashPassword(securityAnswer.Trim());
+        var (pinHash, pinSalt) = string.IsNullOrEmpty(pin)
+            ? ("", "")
+            : PasswordHasher.HashPassword(pin);
 
         var user = new UserAccount
         {
@@ -73,6 +78,8 @@ public sealed class AuthService : IAuthService
             Email = (email ?? "").Trim(),
             PasswordHashBase64 = hash,
             SaltBase64 = salt,
+            PinHashBase64 = pinHash,
+            PinSaltBase64 = pinSalt,
             SecurityQuestion = securityQuestion,
             SecurityAnswerHashBase64 = aHash,
             SecurityAnswerSaltBase64 = aSalt,
@@ -133,7 +140,7 @@ public sealed class AuthService : IAuthService
         if (user is null || !user.IsActive)
             return null;
 
-        if (!PasswordHasher.VerifyPassword(password ?? "", user.PasswordHashBase64, user.SaltBase64))
+        if (!UserCredentialVerifier.Verify(user, password))
             return null;
 
         user.LastLoginUtc = DateTime.UtcNow;
@@ -172,6 +179,23 @@ public sealed class AuthService : IAuthService
         var (hash, salt) = PasswordHasher.HashPassword(newPassword);
         user.PasswordHashBase64 = hash;
         user.SaltBase64 = salt;
+        user.LastChangedUtc = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetUserPinAsync(int userId, string pin, CancellationToken ct = default)
+    {
+        if (!UserCredentialVerifier.IsValidPin(pin))
+            throw new ArgumentException("PIN must contain exactly 4 digits.", nameof(pin));
+
+        using var db = CreateDb();
+        var user = await db.Users.FirstOrDefaultAsync(x => x.Id == userId, ct);
+        if (user is null)
+            throw new InvalidOperationException("User not found.");
+
+        var (hash, salt) = PasswordHasher.HashPassword(pin);
+        user.PinHashBase64 = hash;
+        user.PinSaltBase64 = salt;
         user.LastChangedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }

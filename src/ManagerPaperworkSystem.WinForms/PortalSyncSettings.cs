@@ -4,9 +4,15 @@ using System.Text.Json;
 
 namespace ManagerPaperworkSystem.WinForms;
 
+internal enum PortalSyncReportKind
+{
+    CashSalesSummary,
+    ZReports
+}
+
 internal sealed class PortalSyncSettingsDocument
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 3;
     public List<PortalStoreSyncSettings> Stores { get; set; } = [];
 }
 
@@ -14,6 +20,7 @@ internal sealed class PortalStoreSyncSettings
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public bool Enabled { get; set; } = true;
+    public int BusinessId { get; set; }
     public string BusinessName { get; set; } = "";
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
@@ -25,13 +32,39 @@ internal sealed class PortalStoreSyncSettings
     public string StorePassword { get; set; } = "";
     public int DailyHour { get; set; } = 1;
     public int DailyMinute { get; set; } = 15;
-    public int ExpectedDailyZReports { get; set; } = 2;
     public DateTime? LastAttemptUtc { get; set; }
     public DateTime? LastSuccessUtc { get; set; }
     public DateOnly? LastImportedReportDate { get; set; }
+    public bool CashSalesSummaryEnabled { get; set; } = true;
+    public int CashSalesDailyHour { get; set; } = 1;
+    public int CashSalesDailyMinute { get; set; } = 15;
+    public DateTime? LastCashSummaryAttemptUtc { get; set; }
+    public DateTime? LastCashSummarySuccessUtc { get; set; }
     public DateOnly? LastCashSummaryReportDate { get; set; }
+    public string LastCashSummaryStatus { get; set; } = "Not run yet";
+    public bool ZReportsEnabled { get; set; } = true;
+    public int ZReportsDailyHour { get; set; } = 1;
+    public int ZReportsDailyMinute { get; set; } = 30;
+    public DateTime? LastZReportAttemptUtc { get; set; }
+    public DateTime? LastZReportSuccessUtc { get; set; }
     public DateOnly? LastZReportDate { get; set; }
+    public string LastZReportStatus { get; set; } = "Not run yet";
     public string LastStatus { get; set; } = "Not run yet";
+
+    public bool IsEnabled(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? CashSalesSummaryEnabled
+            : ZReportsEnabled;
+
+    public TimeOnly GetRunTime(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? new TimeOnly(CashSalesDailyHour, CashSalesDailyMinute)
+            : new TimeOnly(ZReportsDailyHour, ZReportsDailyMinute);
+
+    public string GetLastStatus(PortalSyncReportKind reportKind) =>
+        reportKind == PortalSyncReportKind.CashSalesSummary
+            ? LastCashSummaryStatus
+            : LastZReportStatus;
 }
 
 internal static class PortalSyncSettingsStore
@@ -103,8 +136,9 @@ internal static class PortalSyncSettingsStore
             var clear = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.CurrentUser);
             try
             {
-                return JsonSerializer.Deserialize<PortalSyncSettingsDocument>(clear, JsonOptions)
-                       ?? new PortalSyncSettingsDocument();
+                var document = JsonSerializer.Deserialize<PortalSyncSettingsDocument>(clear, JsonOptions)
+                               ?? new PortalSyncSettingsDocument();
+                return Normalize(document);
             }
             finally
             {
@@ -120,6 +154,7 @@ internal static class PortalSyncSettingsStore
     public static void Save(PortalSyncSettingsDocument document)
     {
         Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        Normalize(document);
         var clear = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
         try
         {
@@ -132,6 +167,180 @@ internal static class PortalSyncSettingsStore
         {
             CryptographicOperations.ZeroMemory(clear);
         }
+    }
+
+    public static PortalStoreSyncSettings? FindForBusiness(
+        IEnumerable<PortalStoreSyncSettings> stores,
+        LicensedBusinessConnection business)
+    {
+        if (business.BusinessId > 0)
+        {
+            var byBusinessId = stores.FirstOrDefault(settings =>
+                settings.BusinessId == business.BusinessId);
+            if (byBusinessId is not null)
+                return byBusinessId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(business.DatabaseName))
+        {
+            var byDatabase = stores.FirstOrDefault(settings =>
+                string.Equals(
+                    settings.DatabaseName,
+                    business.DatabaseName,
+                    StringComparison.OrdinalIgnoreCase));
+            if (byDatabase is not null)
+                return byDatabase;
+        }
+
+        // Store GUID is only a legacy fallback when there is no database identity.
+        // Older databases can share a migrated GUID, so a GUID must never override
+        // a different database or business ID.
+        if (!string.IsNullOrWhiteSpace(business.DatabaseName) ||
+            string.IsNullOrWhiteSpace(business.StoreGuid))
+        {
+            return null;
+        }
+
+        var guidMatches = stores
+            .Where(settings =>
+                settings.BusinessId <= 0 &&
+                string.IsNullOrWhiteSpace(settings.DatabaseName) &&
+                string.Equals(
+                    settings.StoreGuid,
+                    business.StoreGuid,
+                    StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+        return guidMatches.Count == 1 ? guidMatches[0] : null;
+    }
+
+    public static LicensedBusinessConnection? FindLicensedBusiness(
+        PortalStoreSyncSettings settings,
+        IReadOnlyList<LicensedBusinessConnection> businesses)
+    {
+        if (settings.BusinessId > 0)
+        {
+            var byBusinessId = businesses.FirstOrDefault(business =>
+                business.BusinessId == settings.BusinessId);
+            if (byBusinessId is not null)
+                return byBusinessId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.DatabaseName))
+        {
+            return businesses.FirstOrDefault(business =>
+                string.Equals(
+                    business.DatabaseName,
+                    settings.DatabaseName,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.StoreGuid))
+            return null;
+
+        var guidMatches = businesses
+            .Where(business =>
+                string.Equals(
+                    business.StoreGuid,
+                    settings.StoreGuid,
+                    StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+        return guidMatches.Count == 1 ? guidMatches[0] : null;
+    }
+
+    public static bool IsForBusiness(
+        PortalStoreSyncSettings settings,
+        LicensedBusinessConnection business) =>
+        ReferenceEquals(FindForBusiness([settings], business), settings);
+
+    public static void BindToBusiness(
+        PortalStoreSyncSettings settings,
+        LicensedBusinessConnection business)
+    {
+        settings.BusinessId = business.BusinessId;
+        settings.BusinessName = business.BusinessName;
+        settings.StoreGuid = business.StoreGuid;
+        settings.DatabaseName = business.DatabaseName;
+    }
+
+    public static bool IsConnected(PortalStoreSyncSettings settings)
+    {
+        var businesses = LicensedBusinessService.Load();
+        var business = FindLicensedBusiness(settings, businesses);
+        return business is not null &&
+               StoreDirectoryPreferencesStore.IsConnected(business, businesses);
+    }
+
+    private static PortalSyncSettingsDocument Normalize(PortalSyncSettingsDocument document)
+    {
+        document.Stores ??= [];
+        if (document.Version < 2)
+        {
+            foreach (var settings in document.Stores)
+            {
+                settings.CashSalesSummaryEnabled = settings.Enabled;
+                settings.ZReportsEnabled = settings.Enabled;
+                settings.CashSalesDailyHour = settings.DailyHour;
+                settings.CashSalesDailyMinute = settings.DailyMinute;
+                settings.ZReportsDailyHour = settings.DailyHour;
+                settings.ZReportsDailyMinute = settings.DailyMinute;
+                settings.LastCashSummaryAttemptUtc = settings.LastAttemptUtc;
+                settings.LastCashSummarySuccessUtc = settings.LastSuccessUtc;
+                settings.LastZReportAttemptUtc = settings.LastAttemptUtc;
+                settings.LastZReportSuccessUtc = settings.LastSuccessUtc;
+                settings.LastCashSummaryStatus = settings.LastStatus;
+                settings.LastZReportStatus = settings.LastStatus;
+            }
+        }
+
+        if (document.Version < 3)
+        {
+            var businesses = LicensedBusinessService.Load();
+            foreach (var settings in document.Stores)
+            {
+                var business = FindLicensedBusiness(settings, businesses);
+                if (business is not null)
+                    BindToBusiness(settings, business);
+            }
+        }
+
+        foreach (var settings in document.Stores)
+        {
+            settings.CashSalesDailyHour = Math.Clamp(settings.CashSalesDailyHour, 0, 23);
+            settings.CashSalesDailyMinute = Math.Clamp(settings.CashSalesDailyMinute, 0, 59);
+            settings.ZReportsDailyHour = Math.Clamp(settings.ZReportsDailyHour, 0, 23);
+            settings.ZReportsDailyMinute = Math.Clamp(settings.ZReportsDailyMinute, 0, 59);
+
+            // Keep the original fields populated so older installed versions can
+            // still read the protected document while clients roll forward.
+            settings.Enabled = settings.CashSalesSummaryEnabled || settings.ZReportsEnabled;
+            settings.DailyHour = settings.CashSalesDailyHour;
+            settings.DailyMinute = settings.CashSalesDailyMinute;
+            settings.LastAttemptUtc = Latest(
+                settings.LastCashSummaryAttemptUtc,
+                settings.LastZReportAttemptUtc);
+            settings.LastSuccessUtc = Latest(
+                settings.LastCashSummarySuccessUtc,
+                settings.LastZReportSuccessUtc);
+            settings.LastStatus = string.Join(" | ", new[]
+            {
+                $"Cash & Sales: {settings.LastCashSummaryStatus}",
+                $"Z Reports: {settings.LastZReportStatus}"
+            });
+        }
+
+        document.Version = 3;
+        return document;
+    }
+
+    private static DateTime? Latest(DateTime? left, DateTime? right)
+    {
+        if (!left.HasValue)
+            return right;
+        if (!right.HasValue)
+            return left;
+        return left.Value >= right.Value ? left : right;
     }
 
     private static string ResolveAutomationDirectory(

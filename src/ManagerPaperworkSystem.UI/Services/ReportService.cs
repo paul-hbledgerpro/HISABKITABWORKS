@@ -76,11 +76,12 @@ public sealed class ReportService : IReportService
 
         using var db = CreateDb();
         var entries = await db.ShiftLogs.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
 
-        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
         SelectedOptionReportPdf.GenerateShiftLog(storeName, storeAddress, from, to, eff, outputPdfPath);
     }
 
@@ -107,11 +108,12 @@ public sealed class ReportService : IReportService
         var entries = await db.CashOnHand.AsNoTracking()
             .Include(x => x.Vendor)
             .Include(x => x.Purpose)
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
 
-        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
         SelectedOptionReportPdf.GenerateCashOnHand(storeName, storeAddress, from, to, eff, outputPdfPath);
     }
 
@@ -124,11 +126,12 @@ public sealed class ReportService : IReportService
         var entries = await db.CashOnHand.AsNoTracking()
             .Include(x => x.Vendor)
             .Include(x => x.Purpose)
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
 
-        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
         CashOnHandPdf.GenerateSummary(storeName, storeAddress, from, to, eff, outputPdfPath);
     }
 
@@ -148,11 +151,12 @@ public sealed class ReportService : IReportService
 
         using var db = CreateDb();
         var entries = await db.CheckPayouts.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
 
-        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
         SelectedOptionReportPdf.GenerateCheckPayouts(storeName, storeAddress, from, to, eff, outputPdfPath);
     }
 
@@ -163,11 +167,12 @@ public sealed class ReportService : IReportService
 
         using var db = CreateDb();
         var entries = await db.CheckPayouts.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
 
-        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
         CheckPayoutsPdf.GenerateSummary(storeName, storeAddress, from, to, eff, outputPdfPath);
     }
 
@@ -182,11 +187,12 @@ public sealed class ReportService : IReportService
 
         using var db = CreateDb();
         var entries = await db.ShiftLogs.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
 
-        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
         SelectedOptionReportPdf.GenerateSalesSummary(storeName, storeAddress, from, to, eff, outputPdfPath);
     }
 
@@ -200,20 +206,27 @@ public sealed class ReportService : IReportService
 
         using var db = CreateDb();
 
-        var shiftLogs = await db.ShiftLogs.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+        // P&L revenue comes from the consolidated Cash & Sales Summary. Shift
+        // Cash Drop contains register-level Z reports for over/short review and
+        // must not duplicate business sales in the operating statement.
+        var salesSummaries = await db.PosSalesSummaries.AsNoTracking()
+            .Where(x =>
+                x.StoreId == storeId &&
+                x.ReportTo >= from &&
+                x.ReportFrom <= to)
             .ToListAsync(ct);
-        var effShifts = EffectiveRows(shiftLogs, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
 
         var cashEntries = await db.CashOnHand.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .ToListAsync(ct);
-        var effCash = EffectiveRows(cashEntries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var effCash = EffectiveRows(cashEntries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
 
         var checkEntries = await db.CheckPayouts.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .ToListAsync(ct);
-        var effChecks = EffectiveRows(checkEntries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var effChecks = EffectiveRows(checkEntries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
 
         var purchases = await db.PurchaseInvoices.AsNoTracking()
             .Where(x => x.StoreId == storeId && x.InvoiceDate >= from && x.InvoiceDate <= to)
@@ -221,17 +234,19 @@ public sealed class ReportService : IReportService
 
         var data = new ProfitLossData
         {
-            GrossSales = effShifts.Sum(x => x.NetSales),
-            SalesTax = effShifts.Sum(x => x.Tax),
+            GrossSales = salesSummaries.Sum(x => x.NetSales),
+            SalesTax = salesSummaries.Sum(x => x.Taxes),
             CashPayouts = effCash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount),
             CheckPayouts = effChecks.Sum(x => x.CheckAmount),
             Purchases = purchases.Sum(x => x.Total)
         };
 
-        data.Payroll = await db.PayrollEntries.AsNoTracking()
+        var payrollAmounts = await db.PayrollEntries.AsNoTracking()
             .Where(x => x.PayrollRun!.StoreId == storeId && x.PayrollRun.Status == PayrollRunStatus.Finalized &&
                         x.PayrollRun.PayDate >= from && x.PayrollRun.PayDate <= to)
-            .SumAsync(x => (decimal?)x.GrossPay, ct) ?? 0m;
+            .Select(x => x.GrossPay)
+            .ToListAsync(ct);
+        data.Payroll = payrollAmounts.Sum();
         var hasFinalizedPayroll = data.Payroll > 0;
 
         // Bank Statement Transactions
@@ -334,34 +349,39 @@ public sealed class ReportService : IReportService
 
         using var db = CreateDb();
         var shifts = await db.ShiftLogs.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ThenBy(x => x.ShiftNo)
             .ToListAsync(ct);
-        var effShifts = EffectiveRows(shifts, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var effShifts = EffectiveRows(shifts, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
 
         var cash = await db.CashOnHand.AsNoTracking()
             .Include(x => x.Vendor)
             .Include(x => x.Purpose)
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
-        var effCash = EffectiveRows(cash, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var effCash = EffectiveRows(cash, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
 
         var checks = await db.CheckPayouts.AsNoTracking()
-            .Where(x => x.StoreId == storeId && x.Date >= from && x.Date <= to)
+            .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
-        var effChecks = EffectiveRows(checks, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc);
+        var effChecks = EffectiveRows(checks, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
+            .Where(x => x.Date >= from && x.Date <= to).ToList();
 
         var purchases = await db.PurchaseInvoices.AsNoTracking()
             .Where(x => x.StoreId == storeId && x.InvoiceDate >= from && x.InvoiceDate <= to)
             .OrderBy(x => x.InvoiceDate)
             .ToListAsync(ct);
 
-        var payroll = await db.PayrollEntries.AsNoTracking()
+        var payrollAmounts = await db.PayrollEntries.AsNoTracking()
             .Where(x => x.PayrollRun!.StoreId == storeId && x.PayrollRun.Status == PayrollRunStatus.Finalized && x.PayrollRun.PayDate >= from && x.PayrollRun.PayDate <= to)
-            .SumAsync(x => (decimal?)x.GrossPay, ct) ?? 0m;
+            .Select(x => x.GrossPay)
+            .ToListAsync(ct);
+        var payroll = payrollAmounts.Sum();
 
         SelectedOptionReportPdf.GenerateAllReportsBundle(storeName, storeAddress, from, to, effShifts, effCash, effChecks, purchases, payroll, outputPdfPath);
     }

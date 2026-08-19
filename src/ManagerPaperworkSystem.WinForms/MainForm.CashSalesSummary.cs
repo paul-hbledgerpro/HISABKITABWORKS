@@ -60,11 +60,12 @@ internal sealed partial class MainForm
         import.Margin = new Padding(6);
         filters.Controls.Add(import, 5, 0);
 
-        var autoSync = WinTheme.Button("POS AUTO SYNC");
+        var autoSync = WinTheme.Button("CASH SALES AUTO SYNC");
         autoSync.Dock = DockStyle.Fill;
         autoSync.Margin = new Padding(6);
         autoSync.Enabled = _session.IsAdmin;
         filters.Controls.Add(autoSync, 6, 0);
+        RegisterDeveloperOnly(autoSync);
 
         var refresh = WinTheme.Button("REFRESH");
         refresh.Dock = DockStyle.Fill;
@@ -115,14 +116,16 @@ internal sealed partial class MainForm
         reconcileCard.Controls.Add(reconcile);
 
         var expectedCash = SectionTextBox("$0.00", readOnly: true, rightAlign: true);
-        var cashDrop = SectionTextBox("0.00", rightAlign: true);
+        var cashDrop = SectionTextBox("0.00", readOnly: true, rightAlign: true);
         var registerPayout = SectionTextBox("0.00", rightAlign: true);
         var payoutReason = SectionTextBox();
         var variance = SectionTextBox("$0.00", readOnly: true, rightAlign: true);
         var saveReconciliation = WinTheme.Button("SAVE / UPDATE", true);
         var resetReconciliation = WinTheme.Button("RESET");
+        registerPayout.Name = "DemoCashSalesRegisterPayout";
+        payoutReason.Name = "DemoCashSalesPayoutReason";
         AddReconciliationField(reconcile, "EXPECTED CASH", expectedCash, 0);
-        AddReconciliationField(reconcile, "CASH DROP", cashDrop, 1);
+        AddReconciliationField(reconcile, "SHIFT CASH DROP (AUTO)", cashDrop, 1);
         AddReconciliationField(reconcile, "REGISTER PAYOUT", registerPayout, 2);
         AddReconciliationField(reconcile, "PAYOUT REASON", payoutReason, 3);
         AddReconciliationField(reconcile, "OVER / SHORT", variance, 4);
@@ -170,7 +173,7 @@ internal sealed partial class MainForm
 
         var status = new Label
         {
-            Text = "Import the POS report, then enter the cash drop and any register payout to reconcile expected cash.",
+            Text = "Cash & Sales reports sync independently. Cash drop is the combined total entered against that day's Z-report batches in Shift Cash Drop.",
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Muted,
             Font = WinTheme.BodyFont(9),
@@ -254,9 +257,8 @@ internal sealed partial class MainForm
             saveReconciliation.Enabled = true;
             resetReconciliation.Enabled = true;
 
-            tenderGrid.DataSource = await db.PosSalesTenderLines.AsNoTracking()
+            var tenderLines = await db.PosSalesTenderLines.AsNoTracking()
                 .Where(line => line.PosSalesSummaryId == summaryId.Value)
-                .OrderByDescending(line => line.Amount)
                 .Select(line => new
                 {
                     Tender = line.TenderType,
@@ -264,6 +266,7 @@ internal sealed partial class MainForm
                     line.Amount
                 })
                 .ToListAsync();
+            tenderGrid.DataSource = tenderLines.OrderByDescending(line => line.Amount).ToList();
             FormatCurrencyColumns(tenderGrid, "Amount");
 
             hourlyGrid.DataSource = await db.PosSalesHourlyLines.AsNoTracking()
@@ -278,9 +281,8 @@ internal sealed partial class MainForm
                 .ToListAsync();
             FormatCurrencyColumns(hourlyGrid, "Amount");
 
-            departmentGrid.DataSource = await db.PosSalesDepartmentLines.AsNoTracking()
+            var departmentLines = await db.PosSalesDepartmentLines.AsNoTracking()
                 .Where(line => line.PosSalesSummaryId == summaryId.Value)
-                .OrderByDescending(line => line.Sales)
                 .Select(line => new
                 {
                     line.Department,
@@ -292,6 +294,7 @@ internal sealed partial class MainForm
                     SalesPercent = line.SalesPercent
                 })
                 .ToListAsync();
+            departmentGrid.DataSource = departmentLines.OrderByDescending(line => line.SalesAmount).ToList();
             FormatCurrencyColumns(departmentGrid, "SalesAmount", "Cost", "Profit");
             FormatPercentColumns(departmentGrid, "ProfitPercent", "SalesPercent");
 
@@ -313,7 +316,7 @@ internal sealed partial class MainForm
 
             status.Text = summary.IsReconciled
                 ? $"{summary.SourceSystem} report reconciled by {summary.ReconciledByName} on {summary.ReconciledUtc?.ToLocalTime():M/d/yyyy h:mm tt}."
-                : $"{summary.SourceSystem} report for {summary.ReportFrom:M/d/yyyy} - {summary.ReportTo:M/d/yyyy}. Enter the manager's cash drop and any register payout.";
+                : $"{summary.SourceSystem} report for {summary.ReportFrom:M/d/yyyy} - {summary.ReportTo:M/d/yyyy}. Enter each register batch cash drop in Shift Cash Drop; this total updates automatically.";
         }
 
         void SetPosSummaryCards(PosSalesSummary? _)
@@ -428,12 +431,8 @@ internal sealed partial class MainForm
                 .First(cell => cell.Visible);
             await LoadDetailAsync(id);
             tabs.SelectedIndex = 0;
-            cashDrop.Focus();
-            cashDrop.SelectAll();
-
             var reportDate = reportsGrid.Rows[eventArgs.RowIndex].Cells["To"].Value;
-            status.Text = $"Editing the cash reconciliation for {reportDate}. Enter the cash drop and click SAVE / UPDATE. " +
-                          "The linked Shift Cash Drop record will update automatically.";
+            status.Text = $"Viewing the cash reconciliation for {reportDate}. Cash drop is read from that date's Z-report rows in Shift Cash Drop.";
         };
 
         cashDrop.TextChanged += (_, _) => UpdateVariance(Money(expectedCash.Text));
@@ -448,11 +447,10 @@ internal sealed partial class MainForm
                 return;
             }
 
-            var dropAmount = Money(cashDrop.Text);
             var payoutAmount = Money(registerPayout.Text);
-            if (dropAmount < 0m || payoutAmount < 0m)
+            if (payoutAmount < 0m)
             {
-                MessageBox.Show(this, "Cash drop and register payout cannot be negative.", "Cash Reconciliation",
+                MessageBox.Show(this, "Register payout cannot be negative.", "Cash Reconciliation",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -470,33 +468,16 @@ internal sealed partial class MainForm
             if (summary is null)
                 return;
 
-            if (!summary.IsReconciled)
-            {
-                var manualEntries = await db.ShiftLogs.AsNoTracking()
-                    .CountAsync(item =>
-                        item.StoreId == _currentStoreId &&
-                        item.Date == summary.ReportTo &&
-                        item.PosSalesSummaryId == null);
-                if (manualEntries > 0 &&
-                    MessageBox.Show(this,
-                        $"There are already {manualEntries} manual Shift Cash Drop record(s) dated {summary.ReportTo:M/d/yyyy}.\n\n" +
-                        "Saving this POS summary as an accounting entry may count the same sales twice. Continue only if this report is not already represented by those shift records.",
-                        "Possible Duplicate Sales",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning) != DialogResult.Yes)
-                    return;
-            }
-
-            summary.CashDropReceived = dropAmount;
             summary.RegisterPayout = payoutAmount;
             summary.PayoutReason = payoutReason.Text.Trim();
-            summary.IsReconciled = true;
-            summary.ReconciledByUserId = _session.UserId;
-            summary.ReconciledByName = _session.DisplayName;
-            summary.ReconciledUtc = DateTime.UtcNow;
             await db.SaveChangesAsync();
+            await CashDropRollupService.SyncDateAsync(
+                db,
+                _currentStoreId,
+                summary.ReportTo,
+                _session.UserId,
+                _session.DisplayName);
 
-            await SyncPosSalesSummaryToShiftLogAsync(summary.Id);
             await RefreshAsync();
             status.Text = $"Cash summary reconciled. Expected {summary.CashSales:C2}; accounted for " +
                           $"{(summary.CashDropReceived + summary.RegisterPayout):C2}; variance {summary.CashVariance:C2}.";
@@ -636,11 +617,17 @@ internal sealed partial class MainForm
                 await using var saveDb = CreateDb();
                 saveDb.PosSalesSummaries.Add(entity);
                 await saveDb.SaveChangesAsync();
+                await CashDropRollupService.SyncDateAsync(
+                    saveDb,
+                    _currentStoreId,
+                    entity.ReportTo,
+                    _session.UserId,
+                    _session.DisplayName);
                 selectedSummaryId = entity.Id;
                 from.Value = entity.ReportFrom.ToDateTime(TimeOnly.MinValue);
                 to.Value = entity.ReportTo.ToDateTime(TimeOnly.MinValue);
                 await RefreshAsync();
-                status.Text = $"Imported {parsed.SourceFileName}. Enter the cash drop and any register payout, then click SAVE.";
+                status.Text = $"Imported {parsed.SourceFileName}. Cash drop was refreshed from matching Shift Cash Drop batches.";
             }
             catch (Exception exception)
             {
@@ -656,7 +643,17 @@ internal sealed partial class MainForm
 
         autoSync.Click += async (_, _) =>
         {
-            using var form = _services.GetRequiredService<PortalSyncSetupForm>();
+            if (DemoRuntime.IsEnabled)
+            {
+                ShowDemoIntegrationMessage("cash and sales summary portal synchronization");
+                return;
+            }
+            var currentBusiness = CurrentLicensedBusiness();
+            using var form = ActivatorUtilities.CreateInstance<PortalSyncSetupForm>(
+                _services,
+                PortalSyncReportKind.CashSalesSummary,
+                currentBusiness?.BusinessId ?? 0,
+                currentBusiness?.DatabaseName ?? "");
             form.ShowDialog(this);
             await RefreshAsync();
         };
@@ -730,80 +727,7 @@ internal sealed partial class MainForm
 
         _pendingModuleActivation = RefreshAsync;
         return ModuleShell("\uE9D2", "Cash & Sales Summary",
-            "Import POS sales, reconcile the manager's cash drop and register payouts, and track over or short variance.", root);
-    }
-
-    private async Task SyncPosSalesSummaryToShiftLogAsync(int summaryId)
-    {
-        await using var db = CreateDb();
-        var summary = await db.PosSalesSummaries
-            .FirstOrDefaultAsync(item => item.Id == summaryId && item.StoreId == _currentStoreId);
-        if (summary is null)
-            return;
-
-        var shift = await db.ShiftLogs
-            .FirstOrDefaultAsync(item =>
-                item.StoreId == _currentStoreId &&
-                item.PosSalesSummaryId == summary.Id);
-        var oldDate = shift?.Date;
-        var hasRegisterZReports = await db.ShiftLogs.AsNoTracking()
-            .AnyAsync(item =>
-                item.StoreId == _currentStoreId &&
-                item.Date == summary.ReportTo &&
-                item.PosReportKey != "");
-
-        if (hasRegisterZReports)
-        {
-            if (shift is not null)
-            {
-                db.ShiftLogs.Remove(shift);
-                await db.SaveChangesAsync();
-                await SyncShiftLogCashDropsToCashOnHandAsync(oldDate!.Value);
-            }
-            return;
-        }
-
-        if (!summary.IsReconciled)
-        {
-            if (shift is null)
-                return;
-            db.ShiftLogs.Remove(shift);
-            await db.SaveChangesAsync();
-            await SyncShiftLogCashDropsToCashOnHandAsync(oldDate!.Value);
-            return;
-        }
-
-        if (shift is null)
-        {
-            shift = new ShiftLogEntry
-            {
-                StoreId = _currentStoreId,
-                PosSalesSummaryId = summary.Id,
-                CreatedByUserId = summary.ReconciledByUserId ?? _session.UserId,
-                CreatedByName = string.IsNullOrWhiteSpace(summary.ReconciledByName)
-                    ? _session.DisplayName
-                    : summary.ReconciledByName
-            };
-            db.ShiftLogs.Add(shift);
-        }
-
-        shift.Date = summary.ReportTo;
-        shift.Employee = string.IsNullOrWhiteSpace(summary.ReconciledByName)
-            ? _session.DisplayName
-            : summary.ReconciledByName;
-        shift.ShiftNo = "POS Cash & Sales Summary";
-        shift.CashTotal = summary.CashSales;
-        shift.CardTotal = summary.CardSales;
-        shift.NetSales = summary.NetSales;
-        shift.Tax = summary.Taxes;
-        shift.CashDropReceived = summary.CashDropReceived;
-        shift.RegisterPayout = summary.RegisterPayout;
-        shift.PayoutReason = summary.PayoutReason;
-        await db.SaveChangesAsync();
-
-        if (oldDate.HasValue && oldDate.Value != shift.Date)
-            await SyncShiftLogCashDropsToCashOnHandAsync(oldDate.Value);
-        await SyncShiftLogCashDropsToCashOnHandAsync(shift.Date);
+            "Sync daily business sales independently and reconcile them with combined register cash drops from Shift Cash Drop.", root);
     }
 
     private static void AddReconciliationField(

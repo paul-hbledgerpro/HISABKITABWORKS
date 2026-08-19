@@ -17,7 +17,7 @@ internal sealed class LiveBankSyncClient : IDisposable
 
     public LiveBankSyncClient()
     {
-        var serviceUrl = ResolveServiceUrl();
+        var serviceUrl = DemoRuntime.IsEnabled ? "" : ResolveServiceUrl();
         IsConfigured = Uri.TryCreate(serviceUrl, UriKind.Absolute, out var baseUri)
                        && baseUri.Scheme == Uri.UriSchemeHttps;
         _http = new HttpClient

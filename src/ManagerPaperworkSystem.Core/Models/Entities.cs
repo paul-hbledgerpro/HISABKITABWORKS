@@ -83,6 +83,12 @@ public sealed class UserAccount : Entity
     [MaxLength(200)]
     public string SaltBase64 { get; set; } = "";
 
+    [MaxLength(200)]
+    public string PinHashBase64 { get; set; } = "";
+
+    [MaxLength(200)]
+    public string PinSaltBase64 { get; set; } = "";
+
     // Password reset (security question)
     [MaxLength(240)]
     public string SecurityQuestion { get; set; } = "";
@@ -101,6 +107,45 @@ public sealed class UserAccount : Entity
 
     [NotMapped]
     public string DisplayName => (FirstName + " " + LastName).Trim();
+
+    [NotMapped]
+    public bool HasPin =>
+        !string.IsNullOrWhiteSpace(PinHashBase64) &&
+        !string.IsNullOrWhiteSpace(PinSaltBase64);
+}
+
+/// <summary>
+/// Immutable, owner-visible history of user and background-system activity.
+/// Individual business records keep their own correction history; this table
+/// provides the cross-section timeline used by the Activity screen.
+/// </summary>
+public sealed class ActivityLogEntry : Entity
+{
+    public int? StoreId { get; set; }
+    public int UserId { get; set; }
+
+    [MaxLength(120)]
+    public string UserName { get; set; } = "";
+
+    [MaxLength(40)]
+    public string UserRole { get; set; } = "";
+
+    [MaxLength(80)]
+    public string Section { get; set; } = "";
+
+    [MaxLength(40)]
+    public string Action { get; set; } = "";
+
+    [MaxLength(100)]
+    public string EntityType { get; set; } = "";
+
+    public int EntityId { get; set; }
+
+    [MaxLength(800)]
+    public string Description { get; set; } = "";
+
+    public bool IsSystem { get; set; }
+    public DateTime OccurredUtc { get; set; } = DateTime.UtcNow;
 }
 
 // ==========================
@@ -606,6 +651,12 @@ public sealed class PriceAlert : Entity
 
     [MaxLength(200)]
     public string VendorName { get; set; } = "";
+
+    [MaxLength(200)]
+    public string OldVendorName { get; set; } = "";
+
+    [MaxLength(100)]
+    public string OldInvoiceNumber { get; set; } = "";
     
     [MaxLength(200)]
     public string OtherVendorName { get; set; } = ""; // For cross-vendor alerts

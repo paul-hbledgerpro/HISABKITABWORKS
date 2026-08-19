@@ -10,11 +10,18 @@ internal static class DeveloperAutoUpdateService
     private const string LatestReleaseApi =
         "https://api.github.com/repos/paul-hbledgerpro/HISABKITABWORKS/releases/latest";
 
-    public static bool InstallLatestIfAvailable(string applicationName, string assetPrefix)
+    public static string InstalledVersion => CurrentVersion();
+
+    public static bool InstallLatestIfAvailable(
+        string applicationName,
+        string updateAssetPrefix,
+        string setupAssetPrefix)
     {
         try
         {
-            var update = FindUpdateAsync(assetPrefix).GetAwaiter().GetResult();
+            var update = FindUpdateAsync(updateAssetPrefix, setupAssetPrefix)
+                .GetAwaiter()
+                .GetResult();
             if (update is null)
                 return false;
 
@@ -22,14 +29,25 @@ internal static class DeveloperAutoUpdateService
             var installedUpdater = Path.Combine(updaterDirectory, "Upgrade.exe");
             if (!File.Exists(installedUpdater))
             {
-                MessageBox.Show(
-                    $"{applicationName} {update.Value.Version} is available, but this installation " +
-                    "does not yet contain the automatic updater.\n\nInstall the latest setup package once; " +
-                    "future releases will then update automatically.",
-                    "Software Update",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-                return false;
+                if (string.IsNullOrWhiteSpace(update.Value.SetupDownloadUrl))
+                {
+                    MessageBox.Show(
+                        $"{applicationName} {update.Value.Version} is available, but this old installation " +
+                        "does not contain the automatic updater and the setup package was not found.",
+                        "Software Update",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return false;
+                }
+
+                var setupPath = DownloadSetupAsync(
+                        update.Value.SetupDownloadUrl,
+                        applicationName,
+                        update.Value.Version)
+                    .GetAwaiter()
+                    .GetResult();
+                StartSetupInstaller(setupPath);
+                return true;
             }
 
             var workingDirectory = PrepareUpdaterWorkingCopy(updaterDirectory, applicationName);
@@ -42,7 +60,7 @@ internal static class DeveloperAutoUpdateService
                 Verb = "runas"
             };
             startInfo.ArgumentList.Add("--download-url");
-            startInfo.ArgumentList.Add(update.Value.DownloadUrl);
+            startInfo.ArgumentList.Add(update.Value.UpdateDownloadUrl);
             startInfo.ArgumentList.Add("--version");
             startInfo.ArgumentList.Add(update.Value.Version);
             startInfo.ArgumentList.Add("--app");
@@ -76,8 +94,9 @@ internal static class DeveloperAutoUpdateService
         }
     }
 
-    private static async Task<(string Version, string DownloadUrl)?> FindUpdateAsync(
-        string assetPrefix)
+    private static async Task<UpdateInfo?> FindUpdateAsync(
+        string updateAssetPrefix,
+        string setupAssetPrefix)
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
         client.DefaultRequestHeaders.UserAgent.Add(
@@ -100,19 +119,75 @@ internal static class DeveloperAutoUpdateService
 
         if (!root.TryGetProperty("assets", out var assets))
             return null;
+        string updateUrl = "";
+        string setupUrl = "";
         foreach (var asset in assets.EnumerateArray())
         {
             var name = asset.GetProperty("name").GetString() ?? "";
             var url = asset.GetProperty("browser_download_url").GetString() ?? "";
-            if (name.StartsWith(assetPrefix, StringComparison.OrdinalIgnoreCase) &&
+            if (name.StartsWith(updateAssetPrefix, StringComparison.OrdinalIgnoreCase) &&
                 name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(url))
             {
-                return (version, url);
+                updateUrl = url;
+            }
+            else if (name.StartsWith(setupAssetPrefix, StringComparison.OrdinalIgnoreCase) &&
+                     name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                     !string.IsNullOrWhiteSpace(url))
+            {
+                setupUrl = url;
             }
         }
 
-        return null;
+        return string.IsNullOrWhiteSpace(updateUrl)
+            ? null
+            : new UpdateInfo(version, updateUrl, setupUrl);
+    }
+
+    private static async Task<string> DownloadSetupAsync(
+        string downloadUrl,
+        string applicationName,
+        string version)
+    {
+        var safeName = string.Concat(applicationName.Select(ch =>
+            char.IsLetterOrDigit(ch) ? ch : '_'));
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "HISAB_KITAB_SETUP",
+            safeName,
+            version);
+        Directory.CreateDirectory(directory);
+        var setupPath = Path.Combine(directory, $"{safeName}_Setup_{version}.exe");
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        client.DefaultRequestHeaders.UserAgent.Add(
+            new ProductInfoHeaderValue("HisabKitabWorksDeveloperTool", CurrentVersion()));
+        await using var source = await client.GetStreamAsync(downloadUrl);
+        await using var destination = new FileStream(
+            setupPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None);
+        await source.CopyToAsync(destination);
+        return setupPath;
+    }
+
+    private static void StartSetupInstaller(string setupPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = setupPath,
+            WorkingDirectory = Path.GetDirectoryName(setupPath)!,
+            UseShellExecute = true,
+            Verb = "runas"
+        };
+        startInfo.ArgumentList.Add("/VERYSILENT");
+        startInfo.ArgumentList.Add("/SUPPRESSMSGBOXES");
+        startInfo.ArgumentList.Add("/NORESTART");
+        startInfo.ArgumentList.Add("/CLOSEAPPLICATIONS");
+        startInfo.ArgumentList.Add("/RESTARTAPPLICATIONS");
+        _ = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The setup updater could not be started.");
     }
 
     private static string PrepareUpdaterWorkingCopy(string sourceDirectory, string applicationName)
@@ -167,4 +242,9 @@ internal static class DeveloperAutoUpdateService
 
     private static string NormalizeVersion(string? value)
         => (value ?? "0.0.0").Trim().TrimStart('v', 'V').Split('-', '+')[0];
+
+    private readonly record struct UpdateInfo(
+        string Version,
+        string UpdateDownloadUrl,
+        string SetupDownloadUrl);
 }

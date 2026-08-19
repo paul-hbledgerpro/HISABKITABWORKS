@@ -69,7 +69,8 @@ internal static class Program
         }
         if (HisabKitabWorks.DeveloperUpdates.DeveloperAutoUpdateService.InstallLatestIfAvailable(
                 "HISAB KITAB WORKS License Generator",
-                "HISAB_KITAB_License_Generator_Update_win-x64"))
+                "HISAB_KITAB_License_Generator_Update_win-x64",
+                "HISAB_KITAB_WORKS_License_Generator_Setup_"))
             return 0;
         Application.Run(new MainForm());
         return 0;

@@ -14,14 +14,14 @@ namespace ManagerPaperworkSystem.UI.Views;
 /// </summary>
 public partial class LicenseKeyEntryWindow : Window
 {
-    // ── Same credentials as LicenseActivationWindow ──
-    private const string DB_SERVER   = "hbstoreledger-server.database.windows.net";
+    // Legacy WPF application is also restricted to the free local SQL instance.
+    private const string DB_SERVER   = @".\SQLEXPRESS";
     private const string DB_NAME     = "HBLedgerPro_License";
     private const string DB_USER     = "HBLedgerAdmin";
     private const string DB_PASSWORD = "YOUR_PASSWORD_HERE"; // ← Same password as your other windows
 
     private static string LicenseConnStr =>
-        $"Server={DB_SERVER};Database={DB_NAME};User Id={DB_USER};Password={DB_PASSWORD};TrustServerCertificate=True;Encrypt=True;";
+        $"Server={DB_SERVER};Database={DB_NAME};User Id={DB_USER};Password={DB_PASSWORD};TrustServerCertificate=True;Encrypt=False;";
 
     private static readonly string AppDataFolder = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

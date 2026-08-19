@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "hisab-kitab-invoice-inbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "INVOICE_DB",
+      "database_name": "hisab-kitab-invoice-metadata",
+      "database_id": "f8cf99f7-aca8-46f1-8226-ea67b8ad5461",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "INVOICE_FILES",
+      "bucket_name": "hisab-kitab-invoice-files"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

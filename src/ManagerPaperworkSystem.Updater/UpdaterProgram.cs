@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -70,7 +71,6 @@ internal static class Program
     {
         try
         {
-            var installDir = Path.GetDirectoryName(appExe)!;
             var logPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Hisab Kitab", "Logs", "update_log.txt");
@@ -109,13 +109,23 @@ internal static class Program
             }
             Thread.Sleep(500);
 
-            // Apply update
-            ApplyZipUpdate(zipPath, installDir, Log);
+            // Apply the update in place when the current account can write there.
+            // Older Program Files installations are migrated to a per-user app
+            // directory so standard/local Windows users can update without UAC.
+            var destination = ResolveUpdateDestination(appExe, Log);
+            ApplyZipUpdate(zipPath, destination.InstallDirectory, Log);
+            if (destination.Migrated)
+                CreateUserShortcuts(destination.AppExecutablePath, Log);
 
             // Relaunch
             Log("Relaunching application...");
             Thread.Sleep(500);
-            Process.Start(new ProcessStartInfo { FileName = appExe, UseShellExecute = true, WorkingDirectory = installDir });
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = destination.AppExecutablePath,
+                UseShellExecute = true,
+                WorkingDirectory = destination.InstallDirectory
+            });
             Log("Update complete.");
         }
         catch (Exception ex)
@@ -200,6 +210,126 @@ internal static class Program
         }
     }
 
+    internal static UpdateDestination ResolveUpdateDestination(
+        string appExe,
+        Action<string>? log = null)
+    {
+        var currentDirectory = Path.GetDirectoryName(appExe)
+            ?? throw new InvalidOperationException("The HISAB KITAB installation directory could not be determined.");
+        if (CanWriteToDirectory(currentDirectory))
+            return new UpdateDestination(currentDirectory, appExe, Migrated: false);
+
+        var applicationName = GetApplicationName(appExe);
+        var perUserDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs",
+            applicationName);
+        Directory.CreateDirectory(perUserDirectory);
+        if (!CanWriteToDirectory(perUserDirectory))
+            throw new UnauthorizedAccessException(
+                "The current Windows account cannot write to the existing installation or its per-user application folder.");
+
+        var perUserAppExe = Path.Combine(perUserDirectory, Path.GetFileName(appExe));
+        log?.Invoke(
+            $"The existing installation is not writable by this Windows account. " +
+            $"Migrating the update to {perUserDirectory}.");
+        return new UpdateDestination(perUserDirectory, perUserAppExe, Migrated: true);
+    }
+
+    internal static void CreateUserShortcuts(string appExe, Action<string>? log = null)
+    {
+        try
+        {
+            var applicationName = GetApplicationName(appExe);
+            var shellType = Type.GetTypeFromProgID("WScript.Shell")
+                ?? throw new InvalidOperationException("Windows shortcut support is unavailable.");
+            dynamic shell = Activator.CreateInstance(shellType)
+                ?? throw new InvalidOperationException("Windows shortcut support could not be started.");
+            try
+            {
+                var shortcutPaths = new[]
+                {
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                        $"{applicationName}.lnk"),
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                        applicationName,
+                        $"{applicationName}.lnk")
+                };
+
+                foreach (var shortcutPath in shortcutPaths)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(shortcutPath)!);
+                    dynamic shortcut = shell.CreateShortcut(shortcutPath);
+                    try
+                    {
+                        shortcut.TargetPath = appExe;
+                        shortcut.WorkingDirectory = Path.GetDirectoryName(appExe)!;
+                        shortcut.IconLocation = $"{appExe},0";
+                        shortcut.Description = applicationName;
+                        shortcut.Save();
+                    }
+                    finally
+                    {
+                        if (Marshal.IsComObject(shortcut))
+                            Marshal.FinalReleaseComObject(shortcut);
+                    }
+                }
+            }
+            finally
+            {
+                if (Marshal.IsComObject(shell))
+                    Marshal.FinalReleaseComObject(shell);
+            }
+
+            log?.Invoke("Updated the current user's HISAB KITAB shortcuts.");
+        }
+        catch (Exception exception)
+        {
+            // The update itself is still usable and is relaunched immediately.
+            log?.Invoke($"Could not update user shortcuts: {exception.Message}");
+        }
+    }
+
+    private static string GetApplicationName(string appExe)
+    {
+        var executableName = Path.GetFileNameWithoutExtension(appExe).Trim();
+        return executableName.Equals("HISAB KITAB", StringComparison.OrdinalIgnoreCase)
+            ? "HISAB KITAB WORKS"
+            : executableName;
+    }
+
+    private static bool CanWriteToDirectory(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probePath = Path.Combine(
+                directory,
+                $".hisab-kitab-update-{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            using (new FileStream(
+                       probePath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       bufferSize: 1,
+                       FileOptions.DeleteOnClose))
+            {
+            }
+
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
     private static void CopyWithRetry(string source, string destination)
     {
         const int maximumAttempts = 6;
@@ -229,3 +359,8 @@ internal static class Program
         return null;
     }
 }
+
+internal sealed record UpdateDestination(
+    string InstallDirectory,
+    string AppExecutablePath,
+    bool Migrated);

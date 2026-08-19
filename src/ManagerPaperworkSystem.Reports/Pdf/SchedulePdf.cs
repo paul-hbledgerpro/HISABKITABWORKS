@@ -7,9 +7,12 @@ namespace ManagerPaperworkSystem.Reports.Pdf;
 
 public static class SchedulePdf
 {
+    private const int EmployeesPerPage = 9;
     private const string Ink = "#111111";
     private const string Grid = "#444444";
     private const string Header = "#F2F2F2";
+    private const string OffBackground = "#FFD6D6";
+    private const string OffText = "#B71C1C";
 
     public static void Generate(
         string storeName,
@@ -36,64 +39,70 @@ public static class SchedulePdf
                     .OrderBy(x => x.FirstName)
                     .ThenBy(x => x.LastName)
                     .ToList();
+                var employeePages = weekEmployees.Count == 0
+                    ? new[] { Array.Empty<Employee>() }
+                    : weekEmployees.Chunk(EmployeesPerPage).Select(chunk => chunk.ToArray()).ToArray();
 
-                document.Page(page =>
+                for (var pageIndex = 0; pageIndex < employeePages.Length; pageIndex++)
                 {
-                    page.Size(PageSizes.Letter.Landscape());
-                    page.Margin(16);
-                    page.DefaultTextStyle(x => x.FontFamily("Arial").FontSize(8).FontColor(Ink));
-                    page.Content().Column(column =>
+                    var pageEmployees = employeePages[pageIndex];
+                    var currentPage = pageIndex + 1;
+                    document.Page(page =>
                     {
-                        column.Item().Border(1.5f).BorderColor(Grid).PaddingVertical(5)
-                            .AlignCenter().Text(storeName.ToUpperInvariant()).Bold().FontSize(18);
-                        column.Item().BorderHorizontal(1.5f).BorderColor(Grid).PaddingVertical(4)
-                            .AlignCenter().Text($"{week.From:M/d/yy} - {week.To:M/d/yy}").Bold().FontSize(22);
-                        column.Item().Table(table =>
+                        page.Size(PageSizes.Letter.Landscape());
+                        page.Margin(16);
+                        page.DefaultTextStyle(x => x.FontFamily("Arial").FontSize(8).FontColor(Ink));
+                        page.Content().Column(column =>
                         {
-                            table.ColumnsDefinition(columns =>
+                            column.Item().Border(1.5f).BorderColor(Grid).PaddingVertical(5)
+                                .AlignCenter().Text(storeName.ToUpperInvariant()).Bold().FontSize(18);
+                            column.Item().BorderHorizontal(1.5f).BorderColor(Grid).PaddingVertical(4)
+                                .AlignCenter().Text($"{week.From:M/d/yy} - {week.To:M/d/yy}").Bold().FontSize(22);
+                            column.Item().Table(table =>
                             {
-                                columns.ConstantColumn(92);
-                                foreach (var _ in dates)
-                                    columns.RelativeColumn();
-                            });
-
-                            HeaderCell(table, "");
-                            foreach (var date in dates)
-                                HeaderCell(table, date.ToString("dddd").ToUpperInvariant());
-
-                            HeaderCell(table, "");
-                            foreach (var date in dates)
-                                HeaderCell(table, date.ToString("M/d/yyyy"));
-
-                            foreach (var employee in weekEmployees)
-                            {
-                                NameCell(table, DisplayName(employee));
-                                foreach (var date in dates)
+                                table.ColumnsDefinition(columns =>
                                 {
-                                    var daily = weekShifts
-                                        .Where(x => x.EmployeeId == employee.Id && x.ShiftDate == date)
-                                        .OrderBy(x => x.StartTime)
-                                        .Select(ShiftText)
-                                        .ToList();
-                                    ShiftCell(table, daily.Count == 0 ? "OFF" : string.Join("\n", daily), daily.Count == 0);
-                                }
-                            }
+                                    columns.ConstantColumn(92);
+                                    foreach (var _ in dates)
+                                        columns.RelativeColumn();
+                                });
 
-                            if (weekEmployees.Count == 0)
-                            {
-                                NameCell(table, "NO SHIFTS");
-                                foreach (var _ in dates)
-                                    ShiftCell(table, "OFF", true);
-                            }
+                                HeaderCell(table, "");
+                                foreach (var date in dates)
+                                    HeaderCell(table, date.ToString("dddd").ToUpperInvariant());
+
+                                HeaderCell(table, "");
+                                foreach (var date in dates)
+                                    HeaderCell(table, date.ToString("M/d/yyyy"));
+
+                                foreach (var employee in pageEmployees)
+                                {
+                                    NameCell(table, DisplayName(employee));
+                                    foreach (var date in dates)
+                                    {
+                                        var daily = weekShifts
+                                            .Where(x => x.EmployeeId == employee.Id && x.ShiftDate == date)
+                                            .OrderBy(x => x.StartTime)
+                                            .Select(ShiftText)
+                                            .ToList();
+                                        ShiftCell(table, daily.Count == 0 ? "OFF" : string.Join("\n", daily), daily.Count == 0);
+                                    }
+                                }
+
+                                if (pageEmployees.Length == 0)
+                                {
+                                    NameCell(table, "NO EMPLOYEES");
+                                    foreach (var _ in dates)
+                                        ShiftCell(table, "OFF", true);
+                                }
+                            });
                         });
+                        page.Footer().DefaultTextStyle(x => x.FontSize(7).FontColor(Colors.Grey.Darken1))
+                            .AlignRight().Text(
+                                $"Weekly schedule  |  Page {currentPage} of {employeePages.Length}  |  " +
+                                DateTime.Now.ToString("M/d/yyyy h:mm tt"));
                     });
-                    page.Footer().DefaultTextStyle(x => x.FontSize(7).FontColor(Colors.Grey.Darken1))
-                        .AlignRight().Text(text =>
-                    {
-                        text.Span("Published schedule  |  ");
-                        text.Span(DateTime.Now.ToString("M/d/yyyy h:mm tt"));
-                    });
-                });
+                }
             }
         }).GeneratePdf(outputPath);
     }
@@ -133,8 +142,11 @@ public static class SchedulePdf
 
     private static void ShiftCell(TableDescriptor table, string value, bool off = false)
     {
-        var text = table.Cell().Border(1).BorderColor(Grid).MinHeight(42).PaddingHorizontal(2)
-            .AlignCenter().AlignMiddle().Text(value).SemiBold().FontSize(8);
-        if (off) text.FontColor(Colors.Grey.Darken1);
+        var cell = table.Cell().Border(1).BorderColor(Grid).MinHeight(42).PaddingHorizontal(2);
+        if (off)
+            cell = cell.Background(OffBackground);
+        var text = cell.AlignCenter().AlignMiddle().Text(value).SemiBold().FontSize(8);
+        if (off)
+            text.FontColor(OffText).Bold();
     }
 }

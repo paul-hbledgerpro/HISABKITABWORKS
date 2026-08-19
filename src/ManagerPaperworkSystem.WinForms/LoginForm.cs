@@ -260,10 +260,10 @@ internal sealed class LoginForm : Form
         identityInputHost.Controls.Add(_usernameShell);
         content.Controls.Add(identityInputHost, 0, 3);
 
-        _passwordLabel = FormLabel("Password");
+        _passwordLabel = FormLabel("Password or 4-Digit PIN");
         content.Controls.Add(_passwordLabel, 0, 5);
         StyleLoginBox(_password);
-        SetPlaceholder(_password, "Enter password", true);
+        SetPlaceholder(_password, "Enter password or 4-digit PIN", true);
         _passwordShell = InputShell("\uE72E", _password);
         var eye = new Button
         {
@@ -499,7 +499,17 @@ internal sealed class LoginForm : Form
         _storePicker.DisplayMember = nameof(LoginStoreOption.StoreName);
         _storePicker.DataSource = stores;
         if (_storePicker.Items.Count > 0)
-            _storePicker.SelectedIndex = 0;
+        {
+            var businesses = LicensedBusinessService.Load();
+            var preferred = StoreDirectoryPreferencesStore.GetDefaultBusiness(businesses);
+            var preferredIndex = preferred is null
+                ? -1
+                : stores.FindIndex(store =>
+                    StoreDirectoryPreferencesStore.NamesMatch(
+                        store.StoreName,
+                        preferred.BusinessName));
+            _storePicker.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
+        }
 
         _usernameLabel!.Visible = false;
         _usernameShell!.Visible = false;
@@ -561,10 +571,10 @@ internal sealed class LoginForm : Form
     {
         _error.Text = "";
         var username = CurrentUsername();
-        var password = CurrentPassword();
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        var credential = CurrentCredential();
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(credential))
         {
-            _error.Text = "Username and password are required.";
+            _error.Text = "Username and password or PIN are required.";
             return;
         }
 
@@ -607,10 +617,10 @@ internal sealed class LoginForm : Form
 
             _error.ForeColor = WinTheme.Red;
             _matchedStores.Clear();
-            var validatedUser = await ValidateDefaultCredentialsAsync(username, password);
+            var validatedUser = await ValidateDefaultCredentialsAsync(username, credential);
             if (validatedUser is null)
             {
-                _error.Text = "Invalid username or password.";
+                _error.Text = "Invalid username, password, or PIN.";
                 return;
             }
 
@@ -644,10 +654,10 @@ internal sealed class LoginForm : Form
         return username == "Enter username" ? "" : username;
     }
 
-    private string CurrentPassword()
+    private string CurrentCredential()
     {
-        var password = _password.Text;
-        return password == "Enter password" ? "" : password;
+        var credential = _password.Text;
+        return credential == "Enter password or 4-digit PIN" ? "" : credential;
     }
 
     private async Task<List<LoginStoreOption>> BuildStoreChoicesAsync()
@@ -699,10 +709,12 @@ internal sealed class LoginForm : Form
                 });
             }
 
+            var businesses = LicensedBusinessService.Load();
             return choices
                 .GroupBy(x => x.StoreId)
                 .Select(g => g.OrderByDescending(x => !string.IsNullOrWhiteSpace(x.ConnectionString)).First())
-                .OrderBy(x => x.StoreName)
+                .OrderBy(x => StoreDirectoryPreferencesStore.OrderOf(x.StoreName, businesses))
+                .ThenBy(x => x.StoreName)
                 .ToList();
         });
     }
@@ -775,10 +787,12 @@ internal sealed class LoginForm : Form
         var selectedStoreId = _storePicker.SelectedItem is LoginStoreOption current ? current.StoreId : null;
         _storePicker.DataSource = null;
         _storePicker.DisplayMember = nameof(LoginStoreOption.StoreName);
+        var businesses = LicensedBusinessService.Load();
         _storePicker.DataSource = _availableStores
             .GroupBy(x => x.StoreId)
             .Select(g => g.OrderByDescending(x => !string.IsNullOrWhiteSpace(x.ConnectionString)).First())
             .OrderBy(x => x.StoreId is null ? 0 : 1)
+            .ThenBy(x => StoreDirectoryPreferencesStore.OrderOf(x.StoreName, businesses))
             .ThenBy(x => x.StoreName)
             .ToList();
         if (selectedStoreId is int id)
@@ -795,7 +809,7 @@ internal sealed class LoginForm : Form
         _storePicker.SelectedIndex = 0;
     }
 
-    private async Task<UserAccount?> ValidateDefaultCredentialsAsync(string username, string password)
+    private async Task<UserAccount?> ValidateDefaultCredentialsAsync(string username, string credential)
     {
         return await Task.Run(async () =>
         {
@@ -810,7 +824,7 @@ internal sealed class LoginForm : Form
                 if (user is null)
                     return null;
 
-                return PasswordHasher.VerifyPassword(password, user.PasswordHashBase64, user.SaltBase64)
+                return UserCredentialVerifier.Verify(user, credential)
                     ? user
                     : null;
             }
@@ -882,14 +896,14 @@ internal sealed class LoginForm : Form
         });
     }
 
-    private async Task CheckDefaultDatabaseAsync(string username, string password)
+    private async Task CheckDefaultDatabaseAsync(string username, string credential)
     {
         try
         {
             using var db = _dbFactory.CreateDbContext();
             var normalized = username.ToLowerInvariant();
             var user = await db.Users.FirstOrDefaultAsync(u => u.IsActive && u.Username.ToLower() == normalized);
-            if (user is null || !PasswordHasher.VerifyPassword(password, user.PasswordHashBase64, user.SaltBase64))
+            if (user is null || !UserCredentialVerifier.Verify(user, credential))
                 return;
 
             var connectedStores = AppBootstrap.LoadStoreConnections();
@@ -914,7 +928,7 @@ internal sealed class LoginForm : Form
         }
     }
 
-    private async Task CheckRemoteStoreDatabasesAsync(string username, string password)
+    private async Task CheckRemoteStoreDatabasesAsync(string username, string credential)
     {
         var normalized = username.ToLowerInvariant();
         foreach (var kvp in AppBootstrap.LoadStoreConnections())
@@ -931,7 +945,7 @@ internal sealed class LoginForm : Form
                 using var db = new AppDbContext(options);
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(7));
                 var user = await db.Users.FirstOrDefaultAsync(u => u.IsActive && u.Username.ToLower() == normalized, timeout.Token);
-                if (user is null || !PasswordHasher.VerifyPassword(password, user.PasswordHashBase64, user.SaltBase64))
+                if (user is null || !UserCredentialVerifier.Verify(user, credential))
                     continue;
 
                 var store = await db.Stores.AsNoTracking().FirstOrDefaultAsync(timeout.Token);
@@ -1037,7 +1051,6 @@ internal sealed class LoginForm : Form
 
             var settings = settingsService.GetSettingsAsync().GetAwaiter().GetResult();
             settings.LastStoreId = store.StoreId;
-            settings.DefaultStoreId = store.StoreId;
             settings.StoreName = store.StoreName;
             settings.StoreAddress = store.StoreAddress;
             settingsService.SaveSettingsAsync(settings).GetAwaiter().GetResult();

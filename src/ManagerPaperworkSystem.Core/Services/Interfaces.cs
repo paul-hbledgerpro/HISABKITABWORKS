@@ -19,12 +19,13 @@ public interface ISettingsService
 public interface IAuthService
 {
     Task<bool> HasAnyUsersAsync(CancellationToken ct = default);
-    Task<UserAccount> CreateUserAsync(string firstName, string lastName, UserRole role, string username, string password, string securityQuestion, string securityAnswer, string email = "", CancellationToken ct = default);
+    Task<UserAccount> CreateUserAsync(string firstName, string lastName, UserRole role, string username, string password, string securityQuestion, string securityAnswer, string email = "", string pin = "", CancellationToken ct = default);
     Task<UserAccount?> AuthenticateAsync(string username, string password, CancellationToken ct = default);
     
     Task<UserAccount?> GetUserByUsernameAsync(string username, CancellationToken ct = default);
     Task<bool> VerifyAdminCredentialsAsync(string username, string password, CancellationToken ct = default);
     Task ChangePasswordAsync(int userId, string newPassword, CancellationToken ct = default);
+    Task SetUserPinAsync(int userId, string pin, CancellationToken ct = default);
     Task<string?> GetSecurityQuestionAsync(string username, CancellationToken ct = default);
     Task ResetPasswordWithSecurityAnswerAsync(string username, string securityAnswer, string newPassword, CancellationToken ct = default);
     Task<IReadOnlyList<UserAccount>> GetUsersAsync(CancellationToken ct = default);

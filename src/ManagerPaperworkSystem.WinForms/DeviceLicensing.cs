@@ -103,6 +103,7 @@ internal static class DeviceLicenseService
     private const string InstalledLicenseFileName = "device-license.hblicense";
     private const string ClockStateFileName = "device-license-state.dat";
     private const string ProtectedConnectionFileName = "connection_settings.protected";
+    private const string LicenseStateMutexName = @"Local\HISAB_KITAB_DeviceLicenseState_V2";
     private static readonly byte[] ProtectionEntropy = Encoding.UTF8.GetBytes("HISAB-KITAB-WORKS-DEVICE-LICENSE-V2");
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 
@@ -218,8 +219,27 @@ internal static class DeviceLicenseService
         if (!File.Exists(InstalledLicensePath))
             return new(DeviceLicenseStatus.Missing, "This PC does not have a version-2 device license.");
 
+        using var stateMutex = new Mutex(false, LicenseStateMutexName);
+        var mutexHeld = false;
         try
         {
+            try
+            {
+                mutexHeld = stateMutex.WaitOne(TimeSpan.FromSeconds(30));
+            }
+            catch (AbandonedMutexException)
+            {
+                // The abandoned owner is gone, so this process now owns the mutex.
+                mutexHeld = true;
+            }
+
+            if (!mutexHeld)
+            {
+                return new(
+                    DeviceLicenseStatus.Invalid,
+                    "Another HISAB KITAB process is validating this PC license. Please try again.");
+            }
+
             var validation = ValidateLicenseFile(InstalledLicensePath, allowExpired: true, updateClockState);
             LicenseRuntime.CurrentLicense = validation.Payload;
             LicenseRuntime.IsReadOnly = validation.Status == DeviceLicenseStatus.Expired;
@@ -232,6 +252,11 @@ internal static class DeviceLicenseService
             LicenseRuntime.CurrentLicense = null;
             LicenseRuntime.IsReadOnly = false;
             return new(DeviceLicenseStatus.Invalid, ex.Message);
+        }
+        finally
+        {
+            if (mutexHeld)
+                stateMutex.ReleaseMutex();
         }
     }
 
@@ -474,8 +499,49 @@ internal static class DeviceLicenseService
             return null;
         var protectedBytes = File.ReadAllBytes(ProtectedConnectionPath);
         var clear = ProtectedData.Unprotect(protectedBytes, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        return JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+        try
+        {
+            var stored = JsonSerializer.Deserialize<DatabaseConnectionSettings>(clear, JsonOptions);
+            if (stored is null)
+                return null;
+
+            LocalSqlServerPolicy.MarkMigrationPendingIfRemote(stored);
+            var local = LocalSqlServerPolicy.Normalize(stored);
+            if (!ConnectionSettingsEqual(stored, local))
+                SaveProtectedConnection(local);
+            return local;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
     }
+
+    internal static void SaveProtectedConnection(DatabaseConnectionSettings settings)
+    {
+        settings = LocalSqlServerPolicy.Normalize(settings);
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
+        try
+        {
+            var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(ProtectedConnectionPath, protectedBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(clear);
+        }
+    }
+
+    private static bool ConnectionSettingsEqual(
+        DatabaseConnectionSettings left,
+        DatabaseConnectionSettings right)
+        => string.Equals(left.DatabaseType, right.DatabaseType, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Server, right.Server, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Database, right.Database, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(left.Username, right.Username, StringComparison.Ordinal) &&
+           string.Equals(left.Password, right.Password, StringComparison.Ordinal) &&
+           string.Equals(left.ConnectionString, right.ConnectionString, StringComparison.Ordinal);
 
     private static DeviceIdentityRecord CreateIdentity()
     {
@@ -569,10 +635,7 @@ internal static class DeviceLicenseService
             payload.EncryptedConnection,
             payload.ConnectionNonce,
             payload.ConnectionTag);
-        var clear = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
-        var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        File.WriteAllBytes(ProtectedConnectionPath, protectedBytes);
-        CryptographicOperations.ZeroMemory(clear);
+        SaveProtectedConnection(settings);
     }
 
     internal static DatabaseConnectionSettings DecryptConnectionPayload(
@@ -658,7 +721,25 @@ internal static class DeviceLicenseService
         };
         var clear = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
         var protectedBytes = ProtectedData.Protect(clear, ProtectionEntropy, DataProtectionScope.LocalMachine);
-        File.WriteAllBytes(Path.Combine(AppBootstrap.AppDataPath, ClockStateFileName), protectedBytes);
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var statePath = Path.Combine(AppBootstrap.AppDataPath, ClockStateFileName);
+        var temporaryPath = $"{statePath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(temporaryPath, protectedBytes);
+            File.Move(temporaryPath, statePath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // A later validation can safely replace a leftover temporary file.
+            }
+        }
     }
 }
 
@@ -756,6 +837,9 @@ internal sealed class LicensedBusinessPayloadV1
     public string StoreGuid { get; set; } = "";
     public string DatabaseName { get; set; } = "";
     public string PayrollState { get; set; } = "";
+    public string InvoiceInboxApiUrl { get; set; } = "";
+    public string InvoiceInboxAddress { get; set; } = "";
+    public string InvoiceInboxApiToken { get; set; } = "";
     public bool IsPrimary { get; set; }
     public string EncryptedConnectionKey { get; set; } = "";
     public string EncryptedConnection { get; set; } = "";

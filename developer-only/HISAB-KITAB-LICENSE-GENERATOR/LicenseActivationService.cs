@@ -16,6 +16,8 @@ internal sealed class LicenseActivationService
 
     public LicenseActivationService(string server, string username, string password)
     {
+        if (string.IsNullOrWhiteSpace(server))
+            throw new ArgumentException("Enter the shared licensing SQL Server.", nameof(server));
         _server = server.Trim();
         _username = username.Trim();
         _password = password;
@@ -25,23 +27,49 @@ internal sealed class LicenseActivationService
 
     public IReadOnlyList<string> ListBusinessDatabases()
     {
-        using var connection = new SqlConnection(ConnectionString("master"));
-        connection.Open();
-        using var command = new SqlCommand(@"
+        var databases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        using (var connection = new SqlConnection(LicensingConnectionString))
+        {
+            connection.Open();
+            using var command = new SqlCommand(@"
+SELECT DatabaseName
+FROM dbo.CustomerBusinesses
+WHERE IsActive=1
+UNION ALL
+SELECT AssignedDatabases
+FROM dbo.Licenses
+WHERE IsActive=1", connection);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                AddDatabaseNames(databases, reader.IsDBNull(0) ? null : reader.GetString(0));
+        }
+
+        try
+        {
+            using var master = new SqlConnection(ConnectionString("master"));
+            master.Open();
+            using var command = new SqlCommand(@"
 SELECT name
 FROM sys.databases
-WHERE database_id > 4 AND state_desc='ONLINE' AND name<>@licensingDatabase
-ORDER BY name", connection);
-        command.Parameters.AddWithValue("@licensingDatabase", LicensingDatabase);
-        using var reader = command.ExecuteReader();
-        var databases = new List<string>();
-        while (reader.Read())
-            databases.Add(reader.GetString(0));
-        return databases;
+WHERE state_desc='ONLINE'
+  AND name LIKE 'HBStoreLedger[_]%'
+ORDER BY name", master);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                databases.Add(reader.GetString(0));
+        }
+        catch (SqlException)
+        {
+            // Keep the licensing metadata list when master database enumeration is restricted.
+        }
+
+        return databases.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     public void TestAndPrepareDatabase()
     {
+        LocalSqlServerPolicy.EnsureDatabaseExists(_server, LicensingDatabase, _username, _password);
         using var connection = new SqlConnection(LicensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(SchemaSql, connection) { CommandTimeout = 120 };
@@ -83,11 +111,16 @@ ORDER BY name", connection);
         var subscription = addingBusiness
             ? FindSubscriptionByKey(parentSubscriptionKey)
             : FindSubscription(storeGuid);
+        if (addingBusiness && subscription is null && protectedRequest is not null)
+        {
+            subscription = FindActiveSuccessorSubscription(parentSubscriptionKey)
+                           ?? FindUniqueActiveSubscriptionByDevice(protectedRequest);
+        }
         var createdStore = false;
         var addedBusiness = false;
         if (addingBusiness && subscription is null)
             throw new InvalidOperationException(
-                "The existing client subscription in this protected request was not found or is inactive. Generate the request again from the licensed PC.");
+                "The existing client subscription in this protected request was not found or is inactive, and the signed PC identity did not uniquely match an active subscription. Renew the licensed PC first, then generate the request again.");
 
         if (subscription is null)
         {
@@ -120,14 +153,12 @@ ORDER BY name", connection);
 
             EnsureBusinessCanBelongToCustomer(
                 subscription.CustomerId, storeGuid, databaseName, allowBusinessTransfer);
-            EnsurePhysicalDatabase(databaseName);
             UpsertAdditionalBusiness(subscription.CustomerId, storeGuid, databaseName, businessName);
             addedBusiness = !alreadyApproved;
         }
         else
         {
             SaveCustomerActivationMetadata(subscription.CustomerId, storeGuid, storeZip);
-            EnsurePhysicalDatabase(databaseName);
         }
 
         var devices = LoadDevices(subscription.LicenseId);
@@ -266,6 +297,62 @@ ORDER BY l.Id DESC", connection);
         return reader.Read()
             ? ReadSubscription(reader)
             : null;
+    }
+
+    private ClientSubscription? FindActiveSuccessorSubscription(string previousSubscriptionKey)
+    {
+        using var connection = new SqlConnection(LicensingConnectionString);
+        connection.Open();
+        using var command = new SqlCommand(@"
+SELECT TOP 2 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState,
+       l.MonthlyReportEmail, l.MonthlyReportDay
+FROM dbo.Licenses previous
+INNER JOIN dbo.Licenses l ON l.CustomerId=previous.CustomerId AND l.IsActive=1
+INNER JOIN dbo.Customers c ON c.Id=l.CustomerId
+WHERE previous.LicenseKey=@previousSubscriptionKey
+ORDER BY l.Id DESC", connection);
+        command.Parameters.AddWithValue("@previousSubscriptionKey", previousSubscriptionKey);
+        using var reader = command.ExecuteReader();
+        return ReadUniqueSubscription(
+            reader,
+            "The previous subscription key maps to multiple active subscriptions. Select the client in Manage Businesses and renew the PC before adding another store.");
+    }
+
+    private ClientSubscription? FindUniqueActiveSubscriptionByDevice(DeviceLicenseRequestV2 request)
+    {
+        using var connection = new SqlConnection(LicensingConnectionString);
+        connection.Open();
+        using var command = new SqlCommand(@"
+SELECT TOP 2 c.Id, l.Id, c.BusinessName, l.LicenseKey, l.AssignedDatabases,
+       l.MaxStores, l.MaxUsers, l.MaxDevices, l.ExpiresDate, l.EnabledServices, l.PayrollState,
+       l.MonthlyReportEmail, l.MonthlyReportDay
+FROM dbo.LicenseDevices d
+INNER JOIN dbo.Licenses l ON l.Id=d.LicenseId AND l.IsActive=1
+INNER JOIN dbo.Customers c ON c.Id=l.CustomerId
+WHERE d.Status='Active'
+  AND d.DeviceId=@deviceId
+  AND d.DevicePublicKey=@devicePublicKey
+ORDER BY l.Id DESC", connection);
+        command.Parameters.AddWithValue("@deviceId", request.DeviceId);
+        command.Parameters.AddWithValue("@devicePublicKey", request.DevicePublicKey);
+        using var reader = command.ExecuteReader();
+        return ReadUniqueSubscription(
+            reader,
+            "This signed PC is registered to multiple active subscriptions, so the old subscription key cannot be recovered safely. Renew the intended subscription before adding another store.");
+    }
+
+    private static ClientSubscription? ReadUniqueSubscription(
+        SqlDataReader reader,
+        string ambiguousMessage)
+    {
+        if (!reader.Read())
+            return null;
+
+        var subscription = ReadSubscription(reader);
+        if (reader.Read())
+            throw new InvalidOperationException(ambiguousMessage);
+        return subscription;
     }
 
     private ClientSubscription CreateSubscription(
@@ -514,22 +601,6 @@ END", connection);
         command.ExecuteNonQuery();
     }
 
-    private void EnsurePhysicalDatabase(string storeGuid)
-    {
-        using var connection = new SqlConnection(ConnectionString("master"));
-        connection.Open();
-        using (var exists = new SqlCommand("SELECT COUNT(*) FROM sys.databases WHERE name=@name", connection))
-        {
-            exists.Parameters.AddWithValue("@name", storeGuid);
-            if (Convert.ToInt32(exists.ExecuteScalar()) > 0)
-                return;
-        }
-
-        var quoted = storeGuid.Replace("]", "]]", StringComparison.Ordinal);
-        using var create = new SqlCommand($"CREATE DATABASE [{quoted}]", connection) { CommandTimeout = 120 };
-        create.ExecuteNonQuery();
-    }
-
     private static DeviceLicenseRequestV2 RequestFromRegisteredPc(
         ClientSubscription subscription,
         IReadOnlyList<RegisteredLicensePc> devices,
@@ -586,6 +657,10 @@ END", connection);
         var licensedBusinesses = businesses.Select(business =>
         {
             var encrypted = EncryptConnection(business.DatabaseName, request.DevicePublicKey);
+            var invoiceInbox = InvoiceInboxLicenseProvisioningLoader.Load(
+                LicensingConnectionString,
+                subscription.CustomerId,
+                business.StoreGuid);
             return new LicensedBusinessPayloadV1
             {
                 BusinessId = business.Id,
@@ -594,6 +669,9 @@ END", connection);
                 StoreGuid = business.StoreGuid,
                 DatabaseName = business.DatabaseName,
                 PayrollState = assignedPayrollState,
+                InvoiceInboxApiUrl = invoiceInbox?.ApiBaseUrl ?? "",
+                InvoiceInboxAddress = invoiceInbox?.InvoiceAddress ?? "",
+                InvoiceInboxApiToken = invoiceInbox?.StoreApiToken ?? "",
                 IsPrimary = business.IsPrimary,
                 EncryptedConnectionKey = encrypted.EncryptedKey,
                 EncryptedConnection = encrypted.Cipher,
@@ -642,28 +720,43 @@ END", connection);
         using var connection = new SqlConnection(LicensingConnectionString);
         connection.Open();
         using var command = new SqlCommand(@"
-SELECT Id, BusinessName, StoreAddress, DatabaseName, StoreGuid, IsPrimary
+SELECT Id, ISNULL(BusinessName,''), ISNULL(StoreAddress,''), ISNULL(DatabaseName,''),
+       ISNULL(StoreGuid,''), ISNULL(IsPrimary,CAST(0 AS bit))
 FROM dbo.CustomerBusinesses
 WHERE CustomerId=@customerId AND IsActive=1
 ORDER BY IsPrimary DESC, BusinessName", connection);
         command.Parameters.AddWithValue("@customerId", customerId);
         using var reader = command.ExecuteReader();
         var businesses = new List<CustomerBusiness>();
-        while (reader.Read())
-            businesses.Add(new CustomerBusiness(
-                reader.GetInt32(0), reader.GetString(1), reader.IsDBNull(2) ? "" : reader.GetString(2),
-                reader.GetString(3), reader.IsDBNull(4) ? reader.GetString(3) : reader.GetString(4), reader.GetBoolean(5)));
-        return businesses;
+    while (reader.Read())
+    {
+        var databaseName = reader.GetString(3);
+        var storeGuid = reader.GetString(4);
+        businesses.Add(new CustomerBusiness(
+            reader.GetInt32(0), reader.GetString(1), reader.GetString(2), databaseName,
+            string.IsNullOrWhiteSpace(storeGuid) ? databaseName : storeGuid, reader.GetBoolean(5)));
     }
+    return businesses;
+}
+
+private static void AddDatabaseNames(ISet<string> result, string? value)
+{
+    foreach (var name in (value ?? "").Split(
+                 new[] { ',', ';', '|' },
+                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        result.Add(name);
+    }
+}
 
     private EncryptedConnection EncryptConnection(string databaseName, string devicePublicKey)
     {
         var connectionPayload = new DeviceConnectionPayload
         {
-            Server = _server,
+            Server = LocalSqlServerPolicy.ClientStoreInstance,
             Database = databaseName,
-            Username = _username,
-            Password = _password
+            Username = string.Empty,
+            Password = string.Empty
         };
         var clearConnection = JsonSerializer.SerializeToUtf8Bytes(connectionPayload, _json);
         var aesKey = RandomNumberGenerator.GetBytes(32);
@@ -847,16 +940,7 @@ VALUES
     }
 
     private string ConnectionString(string database)
-        => new SqlConnectionStringBuilder
-        {
-            DataSource = _server,
-            InitialCatalog = database,
-            UserID = _username,
-            Password = _password,
-            Encrypt = true,
-            TrustServerCertificate = true,
-            ConnectTimeout = 30
-        }.ConnectionString;
+        => LocalSqlServerPolicy.BuildConnectionString(_server, database, _username, _password);
 
     private static ClientSubscription ReadSubscription(SqlDataReader reader)
         => new(
@@ -887,6 +971,43 @@ VALUES
     }
 
     private const string SchemaSql = @"
+IF OBJECT_ID(N'dbo.Customers', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Customers
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Customers PRIMARY KEY,
+        BusinessName NVARCHAR(200) NOT NULL,
+        OwnerName NVARCHAR(200) NOT NULL CONSTRAINT DF_Customers_OwnerName DEFAULT(N''),
+        Email NVARCHAR(320) NOT NULL CONSTRAINT DF_Customers_Email DEFAULT(N''),
+        Phone NVARCHAR(50) NOT NULL CONSTRAINT DF_Customers_Phone DEFAULT(N''),
+        Notes NVARCHAR(MAX) NULL,
+        StoreGuid NVARCHAR(128) NULL,
+        StoreZip NVARCHAR(20) NULL
+    );
+END;
+
+IF OBJECT_ID(N'dbo.Licenses', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Licenses
+    (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Licenses PRIMARY KEY,
+        CustomerId INT NOT NULL,
+        LicenseKey NVARCHAR(MAX) NOT NULL,
+        MaxStores INT NOT NULL CONSTRAINT DF_Licenses_MaxStores DEFAULT(1),
+        MaxUsers INT NOT NULL CONSTRAINT DF_Licenses_MaxUsers DEFAULT(1),
+        MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1),
+        MonthlyFee DECIMAL(18,2) NOT NULL CONSTRAINT DF_Licenses_MonthlyFee DEFAULT(0),
+        IsActive BIT NOT NULL CONSTRAINT DF_Licenses_IsActive DEFAULT(1),
+        ActivatedDate DATETIME2 NOT NULL CONSTRAINT DF_Licenses_ActivatedDate DEFAULT(SYSUTCDATETIME()),
+        ExpiresDate DATETIME2 NOT NULL,
+        AssignedDatabases NVARCHAR(MAX) NULL,
+        EnabledServices NVARCHAR(200) NOT NULL CONSTRAINT DF_Licenses_EnabledServices DEFAULT(N'Accounting'),
+        PayrollState NVARCHAR(2) NOT NULL CONSTRAINT DF_Licenses_PayrollState DEFAULT(N''),
+        MonthlyReportEmail NVARCHAR(254) NOT NULL CONSTRAINT DF_Licenses_MonthlyReportEmail DEFAULT(N''),
+        MonthlyReportDay TINYINT NOT NULL CONSTRAINT DF_Licenses_MonthlyReportDay DEFAULT(3)
+    );
+END;
+
 IF COL_LENGTH('dbo.Licenses', 'MaxDevices') IS NULL
     ALTER TABLE dbo.Licenses ADD MaxDevices INT NOT NULL CONSTRAINT DF_Licenses_MaxDevices DEFAULT(1);
 IF COL_LENGTH('dbo.Licenses', 'EnabledServices') IS NULL

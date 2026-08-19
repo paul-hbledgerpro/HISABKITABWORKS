@@ -290,8 +290,7 @@ public partial class SetupWizardWindow : Window
                 await createCmd.ExecuteNonQueryAsync();
             }
 
-            // ── STEP 4: Wait for Azure SQL to provision the new database ──
-            // Azure SQL can take 5-20 seconds after CREATE DATABASE
+            // ── STEP 4: Wait for the local SQL database to become ready ──
             txtConnectionStatus.Text = "Waiting for database to become ready...";
 
             SqlConnection? newDbConn = null;
@@ -313,14 +312,14 @@ public partial class SetupWizardWindow : Window
                     {
                         txtConnectionStatus.Text = "\u2717 Database created but not yet accessible";
                         txtConnectionStatus.Foreground = System.Windows.Media.Brushes.Orange;
-                        lblError.Text = "Database was created on the server, but Azure is still provisioning it. Wait 30 seconds and click 'Create Database' again — it will detect the existing database and create the tables.";
+                        lblError.Text = "The local database was created but is not ready yet. Wait 30 seconds and click 'Create Database' again.";
                         btnCreateDb.IsEnabled = true;
                         return;
                     }
                 }
             }
 
-            // ── STEP 5: Grant permissions (Azure SQL requires explicit user creation) ──
+            // ── STEP 5: Grant permissions when SQL authentication is used ──
             txtConnectionStatus.Text = "Setting up permissions...";
             try
             {

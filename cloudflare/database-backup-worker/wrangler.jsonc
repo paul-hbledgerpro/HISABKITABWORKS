@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "hisab-kitab-database-backups",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [
+    {
+      "binding": "BACKUPS",
+      "bucket_name": "hisab-kitab-sql-backups"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "REQUEST_NONCES",
+      "id": "b5eca6fbcf904cfcb3b165e8bf4be441"
+    }
+  ],
+  "vars": {
+    "RETENTION_COUNT": "30"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05
+    }
+  }
+}

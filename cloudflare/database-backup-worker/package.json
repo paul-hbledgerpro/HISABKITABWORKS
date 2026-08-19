@@ -1,0 +1,15 @@
+{
+  "name": "hisab-kitab-database-backup-worker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "check": "wrangler types --check && tsc --noEmit",
+    "deploy": "wrangler deploy --minify"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.114.0"
+  }
+}

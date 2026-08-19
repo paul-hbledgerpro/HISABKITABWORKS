@@ -62,7 +62,7 @@
         <TextBlock Text="SQL SERVER" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,0,0,4"/>
         <TextBox x:Name="txtSqlServer" Height="36" Padding="10,6" FontSize="14" FontFamily="Consolas"
                  Background="#FF13131a" Foreground="#FFf0ece0" BorderBrush="#FF222230"
-                 Text="hbstoreledger-server.database.windows.net"/>
+                 Text=".\SQLEXPRESS"/>
 
         <TextBlock Text="USERNAME" FontSize="10" FontWeight="Bold" Foreground="#FF8a8a9a" Margin="0,14,0,4"/>
         <TextBox x:Name="txtSqlUser" Height="36" Padding="10,6" FontSize="14"

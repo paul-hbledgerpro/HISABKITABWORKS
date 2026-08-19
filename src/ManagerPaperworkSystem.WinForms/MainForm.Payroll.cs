@@ -20,7 +20,16 @@ internal sealed partial class MainForm
         MetricCard(metrics, 0, 0, "ACTIVE EMPLOYEES", employees.Count(x => x.IsActive).ToString(), WinTheme.Green, "Current store");
         MetricCard(metrics, 1, 0, "DRAFT PAYROLLS", runs.Count(x => x.Status == PayrollRunStatus.Draft).ToString(), WinTheme.Copper, "Awaiting approval");
         MetricCard(metrics, 2, 0, "LAST PAY DATE", runs.FirstOrDefault(x => x.Status == PayrollRunStatus.Finalized)?.PayDate.ToString("MM/dd/yyyy") ?? "—", WinTheme.Blue, "Finalized payroll");
-        MetricCard(metrics, 3, 0, "YEAR-TO-DATE GROSS", db.PayrollEntries.AsNoTracking().Where(x => x.PayrollRun!.StoreId == _currentStoreId && x.PayrollRun.TaxYear == DateTime.Today.Year && x.PayrollRun.Status == PayrollRunStatus.Finalized).Sum(x => (decimal?)x.GrossPay).GetValueOrDefault().ToString("C2"), WinTheme.Green, "Finalized entries");
+        // Aggregate after materializing so the isolated SQLite demo database and
+        // the production SQL Server database render the same payroll dashboard.
+        var yearToDateGross = db.PayrollEntries.AsNoTracking()
+            .Where(x => x.PayrollRun!.StoreId == _currentStoreId &&
+                        x.PayrollRun.TaxYear == DateTime.Today.Year &&
+                        x.PayrollRun.Status == PayrollRunStatus.Finalized)
+            .Select(x => x.GrossPay)
+            .ToList()
+            .Sum();
+        MetricCard(metrics, 3, 0, "YEAR-TO-DATE GROSS", yearToDateGross.ToString("C2"), WinTheme.Green, "Finalized entries");
         body.Controls.Add(metrics, 0, 0);
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, BackColor = WinTheme.Panel, Padding = new Padding(16, 16, 8, 8), WrapContents = false };
@@ -65,16 +74,31 @@ internal sealed partial class MainForm
         var from = DateOnly.FromDateTime(DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek));
         var to = from.AddDays(13);
         var employees = db.Employees.AsNoTracking().Where(x => x.StoreId == _currentStoreId && x.IsActive).ToDictionary(x => x.Id, x => x.FullName);
-        var shifts = db.ScheduleShifts.AsNoTracking().Where(x => x.StoreId == _currentStoreId && x.ShiftDate >= from && x.ShiftDate <= to).OrderBy(x => x.ShiftDate).ThenBy(x => x.StartTime).ToList();
+        // SQLite stores TimeSpan values as text and cannot order them in SQL.
+        // Materialize the small two-week window before applying the sort.
+        var shifts = db.ScheduleShifts.AsNoTracking()
+            .Where(x => x.StoreId == _currentStoreId && x.ShiftDate >= from && x.ShiftDate <= to)
+            .ToList()
+            .OrderBy(x => x.ShiftDate)
+            .ThenBy(x => x.StartTime)
+            .ToList();
 
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = WinTheme.Bg };
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, Padding = new Padding(16), WrapContents = false };
-        AddPayrollAction(actions, "ADD SCHEDULE", () => { using var form = new ScheduleBuilderForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
-        AddPayrollAction(actions, "MANAGE SCHEDULE", () => { using var form = new ScheduleManagerForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
-        AddPayrollAction(actions, "SMS SETUP", () => { using var form = new ScheduleSmsSettingsForm(CreateDb); form.ShowDialog(this); }, false);
-        AddPayrollAction(actions, "TEXT DELIVERY LOG", () => { using var form = new ScheduleNotificationLogForm(CreateDb, _currentStoreId); form.ShowDialog(this); }, false);
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Panel,
+            Padding = new Padding(16),
+            WrapContents = false,
+            AutoScroll = true
+        };
+        AddPayrollAction(actions, "WEEKLY PLANNER", () => { using var form = new WeeklySchedulePlannerForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
+        AddPayrollAction(actions, "EMPLOYEE SCHEDULE", () => { using var form = new ScheduleBuilderForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); ShowModule("Scheduling"); }, true);
+        AddPayrollAction(actions, "MANAGE SCHEDULE", () => { using var form = new ScheduleManagerForm(CreateDb, _currentStoreId, _session.DisplayName, _developerSettingsUnlocked); form.ShowDialog(this); ShowModule("Scheduling"); }, false);
+        RegisterDeveloperOnly(AddPayrollAction(actions, "SMS SETUP", () => { using var form = new ScheduleSmsSettingsForm(CreateDb); form.ShowDialog(this); }, false));
+        RegisterDeveloperOnly(AddPayrollAction(actions, "TEXT DELIVERY LOG", () => { using var form = new ScheduleNotificationLogForm(CreateDb, _currentStoreId); form.ShowDialog(this); }, false));
         if (LicenseRuntime.HasService("Payroll"))
             AddPayrollAction(actions, "RUN PAYROLL", () => { using var form = new PayrollRunForm(CreateDb, _currentStoreId, _session.DisplayName); form.ShowDialog(this); }, false);
         actions.Controls.Add(new Label { Text = $"Showing {from:MMM d} - {to:MMM d, yyyy}", AutoSize = true, ForeColor = WinTheme.Muted, Padding = new Padding(24, 11, 0, 0), Font = WinTheme.BodyFont(10) });
@@ -97,7 +121,7 @@ internal sealed partial class MainForm
         return ModuleShell("\uE787", "Scheduling", "Build employee schedules now; approved hours flow into Payroll for final admin review.", body);
     }
 
-    private static void AddPayrollAction(FlowLayoutPanel host, string text, Action action, bool primary)
+    private static Button AddPayrollAction(FlowLayoutPanel host, string text, Action action, bool primary)
     {
         var button = WinTheme.Button(text, primary);
         button.Width = 190;
@@ -105,5 +129,6 @@ internal sealed partial class MainForm
         button.Margin = new Padding(0, 0, 10, 0);
         button.Click += (_, _) => action();
         host.Controls.Add(button);
+        return button;
     }
 }
