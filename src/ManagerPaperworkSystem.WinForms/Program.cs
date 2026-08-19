@@ -1,4 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 
 namespace ManagerPaperworkSystem.WinForms;
 
@@ -38,6 +41,16 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        // Releases before 1.0.158 always launched Upgrade.exe with an
+        // administrator credential. When a standard user supplied a different
+        // administrator account, the legacy updater then relaunched HISAB KITAB
+        // inside that administrator's profile. The normal user's device license
+        // is intentionally not stored in that unrelated profile, so startup
+        // incorrectly opened activation. Hand the post-update launch back to
+        // the signed-in desktop user before any license UI can be displayed.
+        if (TryReturnLegacyUpdaterLaunchToDesktopUser(args))
+            return;
 
         if (args.Any(value => value.Equals("--demo-prepare", StringComparison.OrdinalIgnoreCase)))
         {
@@ -198,6 +211,69 @@ internal static class Program
                 "HISAB KITAB",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
+        }
+    }
+
+    private static bool TryReturnLegacyUpdaterLaunchToDesktopUser(string[] args)
+    {
+        if (args.Length != 0 || File.Exists(DeviceLicenseService.InstalledLicensePath))
+            return false;
+
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            if (!principal.IsInRole(WindowsBuiltInRole.Administrator))
+                return false;
+
+            var legacyUpdaterIsRunning = Process.GetProcesses()
+                .Any(process =>
+                {
+                    try
+                    {
+                        return process.ProcessName.Equals("Upgrade", StringComparison.OrdinalIgnoreCase) ||
+                               process.ProcessName.Equals("Update", StringComparison.OrdinalIgnoreCase);
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                });
+            if (!legacyUpdaterIsRunning)
+                return false;
+
+            var shellType = Type.GetTypeFromProgID("Shell.Application")
+                ?? throw new InvalidOperationException("The Windows desktop shell is unavailable.");
+            dynamic shell = Activator.CreateInstance(shellType)
+                ?? throw new InvalidOperationException("The Windows desktop shell could not be started.");
+            try
+            {
+                shell.ShellExecute(
+                    Application.ExecutablePath,
+                    "",
+                    Path.GetDirectoryName(Application.ExecutablePath) ?? AppContext.BaseDirectory,
+                    "open",
+                    1);
+            }
+            finally
+            {
+                if (Marshal.IsComObject(shell))
+                    Marshal.FinalReleaseComObject(shell);
+            }
+
+            return true;
+        }
+        catch
+        {
+            MessageBox.Show(
+                "The update was installed successfully, but the older updater opened HISAB KITAB " +
+                "with a different Windows administrator account.\n\n" +
+                "Close this message and open HISAB KITAB again from your normal Windows account. " +
+                "Your existing license remains there and does not need to be activated again.",
+                "Update Installed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return true;
         }
     }
 
