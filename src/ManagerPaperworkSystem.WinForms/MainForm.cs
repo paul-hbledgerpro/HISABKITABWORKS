@@ -6090,38 +6090,51 @@ internal sealed partial class MainForm : Form
             if (!string.IsNullOrWhiteSpace(find))
                 query = query.Where(x => x.UserName.Contains(find) || x.Action.Contains(find) || x.Description.Contains(find) || x.EntityType.Contains(find));
             var rows = query.OrderByDescending(x => x.OccurredUtc).ThenByDescending(x => x.Id).Take(2000).ToList();
-            var latestShiftCorrectionIds = db.ShiftLogs.AsNoTracking()
+            var shiftCorrections = db.ShiftLogs.AsNoTracking()
                 .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue)
                 .Select(x => new { x.Id, x.CorrectsId, x.CreatedUtc })
-                .ToList()
+                .ToList();
+            var latestShiftCorrectionIds = shiftCorrections
                 .GroupBy(x => x.CorrectsId!.Value)
                 .Select(group => group.OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id).First().Id)
                 .ToHashSet();
-            var latestCashCorrectionIds = db.CashOnHand.AsNoTracking()
+            var correctedShiftIds = shiftCorrections.Select(x => x.CorrectsId!.Value).ToHashSet();
+            var cashCorrections = db.CashOnHand.AsNoTracking()
                 .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue)
                 .Select(x => new { x.Id, x.CorrectsId, x.CreatedUtc })
-                .ToList()
+                .ToList();
+            var latestCashCorrectionIds = cashCorrections
                 .GroupBy(x => x.CorrectsId!.Value)
                 .Select(group => group.OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id).First().Id)
                 .ToHashSet();
-            var latestCheckCorrectionIds = db.CheckPayouts.AsNoTracking()
+            var correctedCashIds = cashCorrections.Select(x => x.CorrectsId!.Value).ToHashSet();
+            var checkCorrections = db.CheckPayouts.AsNoTracking()
                 .Where(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue)
                 .Select(x => new { x.Id, x.CorrectsId, x.CreatedUtc })
-                .ToList()
+                .ToList();
+            var latestCheckCorrectionIds = checkCorrections
                 .GroupBy(x => x.CorrectsId!.Value)
                 .Select(group => group.OrderByDescending(x => x.CreatedUtc).ThenByDescending(x => x.Id).First().Id)
                 .ToHashSet();
+            var correctedCheckIds = checkCorrections.Select(x => x.CorrectsId!.Value).ToHashSet();
 
             grid.DataSource = rows.Select(x =>
             {
                 var localTime = DateTime.SpecifyKind(x.OccurredUtc, DateTimeKind.Utc).ToLocalTime();
-                var managerCorrection =
-                    string.Equals(x.UserRole, nameof(UserRole.Manager), StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(x.Action, "Correction", StringComparison.OrdinalIgnoreCase);
-                var canUndo = managerCorrection &&
+                var ownerOrManager = !x.IsSystem &&
+                    (string.Equals(x.UserRole, nameof(UserRole.Manager), StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(x.UserRole, nameof(UserRole.OwnerAdmin), StringComparison.OrdinalIgnoreCase));
+                var effectiveCorrection =
+                    (string.Equals(x.Action, "Correction", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(x.Action, "Undo", StringComparison.OrdinalIgnoreCase)) &&
                     ((x.EntityType == nameof(ShiftLogEntry) && latestShiftCorrectionIds.Contains(x.EntityId)) ||
                      (x.EntityType == nameof(CashOnHandEntry) && latestCashCorrectionIds.Contains(x.EntityId)) ||
                      (x.EntityType == nameof(CheckPayout) && latestCheckCorrectionIds.Contains(x.EntityId)));
+                var effectiveCreatedEntry = string.Equals(x.Action, "Created", StringComparison.OrdinalIgnoreCase) &&
+                    ((x.EntityType == nameof(ShiftLogEntry) && !correctedShiftIds.Contains(x.EntityId)) ||
+                     (x.EntityType == nameof(CashOnHandEntry) && !correctedCashIds.Contains(x.EntityId)) ||
+                     (x.EntityType == nameof(CheckPayout) && !correctedCheckIds.Contains(x.EntityId)));
+                var canUndo = ownerOrManager && (effectiveCorrection || effectiveCreatedEntry);
                 return new
                 {
                     x.Id,
@@ -6139,28 +6152,34 @@ internal sealed partial class MainForm : Form
             HideId(grid);
             footer.Text = rows.Count == 2000
                 ? "Showing the newest 2,000 matching activities. Narrow the date range to see older activity."
-                : $"{rows.Count:N0} activity record(s). Undo creates a new owner correction and never erases history.";
+                : $"{rows.Count:N0} activity record(s). Every reversible owner/manager entry has Undo; undo creates a new audited correction and never erases history.";
         }
 
-        async Task UndoManagerCorrectionAsync(int activityId)
+        async Task UndoActivityAsync(int activityId)
         {
             await using var db = CreateDb();
             var activity = await db.ActivityLogs.AsNoTracking()
                 .FirstOrDefaultAsync(x => x.Id == activityId && (x.StoreId == null || x.StoreId == _currentStoreId));
             if (activity is null)
                 return;
-            if (!string.Equals(activity.UserRole, nameof(UserRole.Manager), StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(activity.Action, "Correction", StringComparison.OrdinalIgnoreCase))
+            var ownerOrManager = !activity.IsSystem &&
+                (string.Equals(activity.UserRole, nameof(UserRole.Manager), StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(activity.UserRole, nameof(UserRole.OwnerAdmin), StringComparison.OrdinalIgnoreCase));
+            var isCreatedEntry = string.Equals(activity.Action, "Created", StringComparison.OrdinalIgnoreCase);
+            var isCorrection =
+                string.Equals(activity.Action, "Correction", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(activity.Action, "Undo", StringComparison.OrdinalIgnoreCase);
+            if (!ownerOrManager || (!isCreatedEntry && !isCorrection))
             {
-                MessageBox.Show(this, "Only a manager correction that is still effective can be undone.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "This item is informational or cannot be safely reversed. Undo is available for effective owner/manager entries in Shift Cash Drop, Cash On Hand, and Check Payout.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             var occurredLocal = DateTime.SpecifyKind(activity.OccurredUtc, DateTimeKind.Utc).ToLocalTime();
             if (MessageBox.Show(
                     this,
-                    $"Undo this correction by {activity.UserName} from {occurredLocal:M/d/yyyy h:mm:ss tt}?\n\n" +
-                    $"{activity.Description}\n\nA new owner correction will restore the previous values. Nothing will be deleted.",
+                    $"Undo this {activity.Action.ToLowerInvariant()} by {activity.UserName} from {occurredLocal:M/d/yyyy h:mm:ss tt}?\n\n" +
+                    $"{activity.Description}\n\nA new owner correction will reverse the effective values. Nothing will be deleted.",
                     "Confirm Audited Undo",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question) != DialogResult.Yes)
@@ -6170,10 +6189,46 @@ internal sealed partial class MainForm : Form
 
             DateOnly? firstAffectedDate = null;
             DateOnly? secondAffectedDate = null;
-            var undoReason = $"Owner/Admin undo of manager correction #{activity.EntityId} entered by {activity.UserName} on {occurredLocal:M/d/yyyy h:mm:ss tt}.";
+            var undoReason = $"Owner/Admin undo of {activity.Action.ToLowerInvariant()} #{activity.EntityId} entered by {activity.UserName} on {occurredLocal:M/d/yyyy h:mm:ss tt}.";
 
             if (activity.EntityType == nameof(ShiftLogEntry))
             {
+                if (isCreatedEntry)
+                {
+                    var original = await db.ShiftLogs.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && !x.IsCorrection);
+                    var alreadyCorrected = original is not null && await db.ShiftLogs.AsNoTracking()
+                        .AnyAsync(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == original.Id);
+                    if (original is null || alreadyCorrected)
+                    {
+                        MessageBox.Show(this, "That Shift Cash Drop entry is no longer effective and cannot be undone again.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        RefreshActivity();
+                        return;
+                    }
+                    db.ShiftLogs.Add(new ShiftLogEntry
+                    {
+                        StoreId = _currentStoreId,
+                        Date = original.Date,
+                        Employee = original.Employee,
+                        ShiftNo = original.ShiftNo,
+                        CashTotal = 0,
+                        CardTotal = 0,
+                        NetSales = 0,
+                        Tax = 0,
+                        CashDropReceived = 0,
+                        RegisterPayout = 0,
+                        PayoutReason = "",
+                        IsCorrection = true,
+                        CorrectsId = original.Id,
+                        CorrectionReason = undoReason,
+                        CreatedByUserId = _session.UserId,
+                        CreatedByName = _session.DisplayName,
+                        CreatedUtc = DateTime.UtcNow
+                    });
+                    firstAffectedDate = original.Date;
+                }
+                else
+                {
                 var correction = await db.ShiftLogs.AsNoTracking()
                     .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue);
                 if (correction is null)
@@ -6224,9 +6279,43 @@ internal sealed partial class MainForm : Form
                 });
                 firstAffectedDate = correction.Date;
                 secondAffectedDate = previous.Date;
+                }
             }
             else if (activity.EntityType == nameof(CashOnHandEntry))
             {
+                if (isCreatedEntry)
+                {
+                    var original = await db.CashOnHand.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && !x.IsCorrection);
+                    var alreadyCorrected = original is not null && await db.CashOnHand.AsNoTracking()
+                        .AnyAsync(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == original.Id);
+                    if (original is null || alreadyCorrected)
+                    {
+                        MessageBox.Show(this, "That Cash On Hand entry is no longer effective and cannot be undone again.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        RefreshActivity();
+                        return;
+                    }
+                    db.CashOnHand.Add(new CashOnHandEntry
+                    {
+                        StoreId = _currentStoreId,
+                        Date = original.Date,
+                        CashAdded = 0,
+                        Reference = original.Reference,
+                        IsPayout = original.IsPayout,
+                        PayoutAmount = 0,
+                        VendorId = original.VendorId,
+                        PurposeId = original.PurposeId,
+                        Description = original.Description,
+                        IsCorrection = true,
+                        CorrectsId = original.Id,
+                        CorrectionReason = undoReason,
+                        CreatedByUserId = _session.UserId,
+                        CreatedByName = _session.DisplayName,
+                        CreatedUtc = DateTime.UtcNow
+                    });
+                }
+                else
+                {
                 var correction = await db.CashOnHand.AsNoTracking()
                     .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue);
                 if (correction is null)
@@ -6273,9 +6362,41 @@ internal sealed partial class MainForm : Form
                     CreatedByName = _session.DisplayName,
                     CreatedUtc = DateTime.UtcNow
                 });
+                }
             }
             else if (activity.EntityType == nameof(CheckPayout))
             {
+                if (isCreatedEntry)
+                {
+                    var original = await db.CheckPayouts.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && !x.IsCorrection);
+                    var alreadyCorrected = original is not null && await db.CheckPayouts.AsNoTracking()
+                        .AnyAsync(x => x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId == original.Id);
+                    if (original is null || alreadyCorrected)
+                    {
+                        MessageBox.Show(this, "That Check Payout entry is no longer effective and cannot be undone again.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        RefreshActivity();
+                        return;
+                    }
+                    db.CheckPayouts.Add(new CheckPayout
+                    {
+                        StoreId = _currentStoreId,
+                        Date = original.Date,
+                        VendorName = original.VendorName,
+                        Description = original.Description,
+                        CheckAmount = 0,
+                        CheckNumber = original.CheckNumber,
+                        Cleared = original.Cleared,
+                        IsCorrection = true,
+                        CorrectsId = original.Id,
+                        CorrectionReason = undoReason,
+                        CreatedByUserId = _session.UserId,
+                        CreatedByName = _session.DisplayName,
+                        CreatedUtc = DateTime.UtcNow
+                    });
+                }
+                else
+                {
                 var correction = await db.CheckPayouts.AsNoTracking()
                     .FirstOrDefaultAsync(x => x.Id == activity.EntityId && x.StoreId == _currentStoreId && x.IsCorrection && x.CorrectsId.HasValue);
                 if (correction is null)
@@ -6320,6 +6441,7 @@ internal sealed partial class MainForm : Form
                     CreatedByName = _session.DisplayName,
                     CreatedUtc = DateTime.UtcNow
                 });
+                }
             }
             else
             {
@@ -6333,7 +6455,7 @@ internal sealed partial class MainForm : Form
             if (secondAffectedDate.HasValue && secondAffectedDate != firstAffectedDate)
                 await SyncShiftLogAccountingAsync(secondAffectedDate.Value);
             RefreshActivity();
-            MessageBox.Show(this, "The manager correction was undone with a new owner correction. The full history remains visible.", "Undo Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "The activity was undone with a new owner correction. The full history remains visible.", "Undo Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         refresh.Click += (_, _) => RefreshActivity();
@@ -6351,7 +6473,7 @@ internal sealed partial class MainForm : Form
                 MessageBox.Show(this, "This activity is informational or has already been superseded. There is nothing currently effective to undo.", "Undo Activity", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            await UndoManagerCorrectionAsync(activityId);
+            await UndoActivityAsync(activityId);
         };
         _pendingModuleActivation = () =>
         {
