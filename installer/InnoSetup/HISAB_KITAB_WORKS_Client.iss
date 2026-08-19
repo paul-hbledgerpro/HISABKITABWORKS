@@ -1,6 +1,6 @@
 #define MyAppName "HISAB KITAB WORKS"
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.157"
+#define MyAppVersion "1.0.158"
 #endif
 #define MyAppPublisher "Hisab Kitab Works"
 #define MyAppExeName "HISAB KITAB.exe"
@@ -13,7 +13,7 @@ AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppComments=Customer accounting, reports, payroll, and scheduling application
-DefaultDirName={autopf}\HISAB KITAB WORKS
+DefaultDirName={localappdata}\Programs\HISAB KITAB WORKS
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
@@ -22,7 +22,7 @@ SetupIconFile=..\..\src\ManagerPaperworkSystem.UI\Assets\HisabKitab.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
@@ -49,7 +49,7 @@ Source: "{#MySourceDir}\*"; DestDir: "{app}"; Excludes: "\cs\*,\de\*,\es\*,\fr\*
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Check for Updates"; Filename: "{app}\Upgrade.exe"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent unchecked

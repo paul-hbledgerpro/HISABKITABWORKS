@@ -2298,7 +2298,8 @@ internal sealed partial class MainForm : Form
             var fields = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 11, ColumnCount = 2, BackColor = WinTheme.Panel };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 11; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / 11f));
+            for (var i = 0; i < 10; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 8.5f));
+            fields.RowStyles.Add(new RowStyle(SizeType.Percent, 15f));
             form.Controls.Add(fields);
             shell.Controls.Add(form, 0, 1);
 
@@ -2308,7 +2309,7 @@ internal sealed partial class MainForm : Form
                 {
                     Text = labelText,
                     Dock = DockStyle.Fill,
-                    ForeColor = Color.White,
+                    ForeColor = WinTheme.Text,
                     Font = WinTheme.BoldFont(10),
                     TextAlign = ContentAlignment.MiddleLeft
                 }, 0, row);
@@ -2329,6 +2330,8 @@ internal sealed partial class MainForm : Form
             var correctionPayout = SectionTextBox(entry.RegisterPayout.ToString("0.00", CultureInfo.CurrentCulture), rightAlign: true);
             var correctionPayoutReason = SectionTextBox(entry.PayoutReason);
             var correctionAuditReason = SectionTextBox();
+            correctionAuditReason.Multiline = true;
+            correctionAuditReason.ScrollBars = ScrollBars.Vertical;
 
             AddCorrectionField(0, "Date", correctionDate);
             AddCorrectionField(1, "Shift", correctionShift);
@@ -2340,12 +2343,28 @@ internal sealed partial class MainForm : Form
             AddCorrectionField(7, "Cash Drop", correctionDrop);
             AddCorrectionField(8, "Register Payout", correctionPayout);
             AddCorrectionField(9, "Payout Reason", correctionPayoutReason);
-            AddCorrectionField(10, "Correction Reason *", correctionAuditReason);
+            AddCorrectionField(10, "Reason for Change *", correctionAuditReason);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 10, 0, 0) };
             var save = WinTheme.Button("Save Correction", true);
             save.Width = 180;
-            save.DialogResult = DialogResult.OK;
+            save.Click += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(correctionAuditReason.Text))
+                {
+                    MessageBox.Show(
+                        dialog,
+                        "Enter why this correction is being made before saving.",
+                        "Reason for Change Required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    correctionAuditReason.Focus();
+                    return;
+                }
+
+                dialog.DialogResult = DialogResult.OK;
+                dialog.Close();
+            };
             var cancel = WinTheme.Button("Cancel");
             cancel.Width = 120;
             cancel.DialogResult = DialogResult.Cancel;
@@ -2357,12 +2376,6 @@ internal sealed partial class MainForm : Form
 
             if (dialog.ShowDialog(this) != DialogResult.OK)
                 return;
-
-            if (string.IsNullOrWhiteSpace(correctionAuditReason.Text))
-            {
-                MessageBox.Show(this, "Enter why this correction is being made.", "Correction Reason Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
 
             var oldDate = entry.Date;
             var correctionEntry = new ShiftLogEntry
@@ -2890,13 +2903,14 @@ internal sealed partial class MainForm : Form
             var fields = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 8, ColumnCount = 2, BackColor = WinTheme.Panel };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 165));
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 8; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 12.5f));
+            for (var i = 0; i < 7; i++) fields.RowStyles.Add(new RowStyle(SizeType.Percent, 11.5f));
+            fields.RowStyles.Add(new RowStyle(SizeType.Percent, 19.5f));
             panel.Controls.Add(fields);
             shell.Controls.Add(panel, 0, 1);
 
             void AddField(int row, string labelText, Control input)
             {
-                fields.Controls.Add(new Label { Text = labelText, Dock = DockStyle.Fill, ForeColor = Color.White, Font = WinTheme.BoldFont(10), TextAlign = ContentAlignment.MiddleLeft }, 0, row);
+                fields.Controls.Add(new Label { Text = labelText, Dock = DockStyle.Fill, ForeColor = WinTheme.Text, Font = WinTheme.BoldFont(10), TextAlign = ContentAlignment.MiddleLeft }, 0, row);
                 input.Dock = DockStyle.Fill;
                 input.Margin = new Padding(0, 6, 0, 6);
                 fields.Controls.Add(input, 1, row);
@@ -2922,6 +2936,8 @@ internal sealed partial class MainForm : Form
             correctionPurpose.SelectedValue = current.PurposeId ?? 0;
             var correctionDesc = SectionTextBox(current.Description);
             var auditReason = SectionTextBox();
+            auditReason.Multiline = true;
+            auditReason.ScrollBars = ScrollBars.Vertical;
             AddField(0, "Date", correctionDate);
             AddField(1, "Cash Added", correctionCash);
             AddField(2, "Is Payout", correctionIsPayout);
@@ -2929,12 +2945,28 @@ internal sealed partial class MainForm : Form
             AddField(4, "Vendor", correctionVendor);
             AddField(5, "Purpose", correctionPurpose);
             AddField(6, "Description", correctionDesc);
-            AddField(7, "Correction Reason", auditReason);
+            AddField(7, "Reason for Change *", auditReason);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 10, 0, 0) };
             var save = WinTheme.Button("Save Correction", true);
             save.Width = 180;
-            save.DialogResult = DialogResult.OK;
+            save.Click += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(auditReason.Text))
+                {
+                    MessageBox.Show(
+                        dialog,
+                        "Enter why this correction is being made before saving.",
+                        "Reason for Change Required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    auditReason.Focus();
+                    return;
+                }
+
+                dialog.DialogResult = DialogResult.OK;
+                dialog.Close();
+            };
             var cancel = WinTheme.Button("Cancel");
             cancel.Width = 120;
             cancel.DialogResult = DialogResult.Cancel;
@@ -2947,11 +2979,6 @@ internal sealed partial class MainForm : Form
             if (dialog.ShowDialog(this) != DialogResult.OK)
                 return;
             var reason = auditReason.Text.Trim();
-            if (string.IsNullOrWhiteSpace(reason))
-            {
-                MessageBox.Show(this, "Enter a correction reason so the owner can review why this change was made.", "Cash On Hand", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
             using var saveDb = CreateDb();
             saveDb.CashOnHand.Add(new CashOnHandEntry
             {

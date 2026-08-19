@@ -549,10 +549,6 @@ public class UpdateManagerForm : Form
             _lblProgress.Text = "Download complete. Installing update...";
 
             // Apply update
-            var installDir = !string.IsNullOrWhiteSpace(_appExe)
-                ? Path.GetDirectoryName(_appExe)!
-                : AppContext.BaseDirectory;
-
             void Log(string msg)
             {
                 try
@@ -566,7 +562,13 @@ public class UpdateManagerForm : Form
                 catch { }
             }
 
-            Program.ApplyZipUpdate(downloadPath, installDir, Log);
+            var sourceAppExe = !string.IsNullOrWhiteSpace(_appExe)
+                ? _appExe
+                : Path.Combine(AppContext.BaseDirectory, "HISAB KITAB.exe");
+            var destination = Program.ResolveUpdateDestination(sourceAppExe, Log);
+            Program.ApplyZipUpdate(downloadPath, destination.InstallDirectory, Log);
+            if (destination.Migrated)
+                Program.CreateUserShortcuts(destination.AppExecutablePath, Log);
 
             _lblProgress.Text = "Update applied successfully!";
             _lblStatus.ForeColor = GreenColor;
@@ -577,13 +579,13 @@ public class UpdateManagerForm : Form
                 $"Update to v{_latestVersion} installed successfully!\n\nLaunch HISAB KITAB now?",
                 "Update Complete", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
 
-            if (result == DialogResult.Yes && !string.IsNullOrWhiteSpace(_appExe) && File.Exists(_appExe))
+            if (result == DialogResult.Yes && File.Exists(destination.AppExecutablePath))
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = _appExe,
+                    FileName = destination.AppExecutablePath,
                     UseShellExecute = true,
-                    WorkingDirectory = Path.GetDirectoryName(_appExe)!
+                    WorkingDirectory = destination.InstallDirectory
                 });
             }
 
@@ -637,11 +639,13 @@ public class UpdateManagerForm : Form
             CloseMainApp();
             Thread.Sleep(2000);
 
-            var installDir = !string.IsNullOrWhiteSpace(_appExe)
-                ? Path.GetDirectoryName(_appExe)!
-                : AppContext.BaseDirectory;
-
-            Program.ApplyZipUpdate(filePath, installDir);
+            var sourceAppExe = !string.IsNullOrWhiteSpace(_appExe)
+                ? _appExe
+                : Path.Combine(AppContext.BaseDirectory, "HISAB KITAB.exe");
+            var destination = Program.ResolveUpdateDestination(sourceAppExe);
+            Program.ApplyZipUpdate(filePath, destination.InstallDirectory);
+            if (destination.Migrated)
+                Program.CreateUserShortcuts(destination.AppExecutablePath);
 
             _lblStatus.ForeColor = GreenColor;
             _lblStatus.Text = "✓ Local update applied successfully!";
@@ -649,13 +653,13 @@ public class UpdateManagerForm : Form
             var result = MessageBox.Show("Update applied!\n\nLaunch HISAB KITAB now?",
                 "Update Complete", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
 
-            if (result == DialogResult.Yes && !string.IsNullOrWhiteSpace(_appExe) && File.Exists(_appExe))
+            if (result == DialogResult.Yes && File.Exists(destination.AppExecutablePath))
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = _appExe,
+                    FileName = destination.AppExecutablePath,
                     UseShellExecute = true,
-                    WorkingDirectory = Path.GetDirectoryName(_appExe)!
+                    WorkingDirectory = destination.InstallDirectory
                 });
             }
 

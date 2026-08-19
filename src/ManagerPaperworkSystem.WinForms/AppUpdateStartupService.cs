@@ -211,8 +211,10 @@ internal static class AppUpdateStartupService
         {
             FileName = updaterPath,
             WorkingDirectory = updaterWorkingDirectory,
-            UseShellExecute = true,
-            Verb = "runas"
+            // Keep the updater in the same Windows account as HISAB KITAB.
+            // Elevating with another administrator account changes LOCALAPPDATA,
+            // which can make an already licensed installation appear unlicensed.
+            UseShellExecute = true
         };
         startInfo.ArgumentList.Add("--download-url");
         startInfo.ArgumentList.Add(update.DownloadUrl);
