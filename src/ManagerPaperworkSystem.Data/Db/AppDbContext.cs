@@ -305,6 +305,7 @@ public sealed class AppDbContext : DbContext
 
     private static bool IsSensitiveProperty(string name) =>
         name.Contains("Password", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("PinHash", StringComparison.OrdinalIgnoreCase) ||
         name.Contains("Salt", StringComparison.OrdinalIgnoreCase) ||
         name.Contains("Secret", StringComparison.OrdinalIgnoreCase) ||
         name.Contains("Token", StringComparison.OrdinalIgnoreCase) ||

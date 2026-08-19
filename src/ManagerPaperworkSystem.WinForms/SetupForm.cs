@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
+using ManagerPaperworkSystem.Core.Utils;
 using ManagerPaperworkSystem.Data.Db;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,6 +20,7 @@ internal sealed class SetupForm : Form
     private readonly TextBox _email = WinTheme.TextBox();
     private readonly TextBox _username = WinTheme.TextBox();
     private readonly TextBox _password = WinTheme.TextBox();
+    private readonly TextBox _pin = WinTheme.TextBox();
     private readonly ComboBox _securityQuestion = WinTheme.ComboBox();
     private readonly TextBox _securityAnswer = WinTheme.TextBox();
     private readonly Label _status = WinTheme.Label("");
@@ -65,6 +67,13 @@ internal sealed class SetupForm : Form
         });
         _securityQuestion.SelectedIndex = 0;
         _password.UseSystemPasswordChar = true;
+        _pin.UseSystemPasswordChar = true;
+        _pin.MaxLength = UserCredentialVerifier.PinLength;
+        _pin.KeyPress += (_, e) =>
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                e.Handled = true;
+        };
 
         var store = FieldCard("Store Information");
         AddField(store, "Store Name *", _storeName, 0);
@@ -78,8 +87,9 @@ internal sealed class SetupForm : Form
         AddField(admin, "Email", _email, 2);
         AddField(admin, "Username *", _username, 3);
         AddField(admin, "Password *", _password, 4);
-        AddField(admin, "Security Question *", _securityQuestion, 5);
-        AddField(admin, "Security Answer *", _securityAnswer, 6);
+        AddField(admin, "4-Digit PIN *", _pin, 5);
+        AddField(admin, "Security Question *", _securityQuestion, 6);
+        AddField(admin, "Security Answer *", _securityAnswer, 7);
         root.Controls.Add(admin, 0, 2);
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
@@ -148,9 +158,10 @@ internal sealed class SetupForm : Form
             string.IsNullOrWhiteSpace(_lastName.Text) ||
             string.IsNullOrWhiteSpace(_username.Text) ||
             string.IsNullOrWhiteSpace(_password.Text) ||
+            !UserCredentialVerifier.IsValidPin(_pin.Text) ||
             string.IsNullOrWhiteSpace(_securityAnswer.Text))
         {
-            _status.Text = "Please fill all required fields.";
+            _status.Text = "Fill all required fields and enter a 4-digit PIN.";
             return;
         }
 
@@ -186,7 +197,8 @@ internal sealed class SetupForm : Form
                     _password.Text,
                     _securityQuestion.Text,
                     _securityAnswer.Text,
-                    _email.Text.Trim());
+                    _email.Text.Trim(),
+                    _pin.Text);
             }
 
             TryDeletePendingStoreInfo();

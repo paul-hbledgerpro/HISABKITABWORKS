@@ -83,6 +83,12 @@ public sealed class UserAccount : Entity
     [MaxLength(200)]
     public string SaltBase64 { get; set; } = "";
 
+    [MaxLength(200)]
+    public string PinHashBase64 { get; set; } = "";
+
+    [MaxLength(200)]
+    public string PinSaltBase64 { get; set; } = "";
+
     // Password reset (security question)
     [MaxLength(240)]
     public string SecurityQuestion { get; set; } = "";
@@ -101,6 +107,11 @@ public sealed class UserAccount : Entity
 
     [NotMapped]
     public string DisplayName => (FirstName + " " + LastName).Trim();
+
+    [NotMapped]
+    public bool HasPin =>
+        !string.IsNullOrWhiteSpace(PinHashBase64) &&
+        !string.IsNullOrWhiteSpace(PinSaltBase64);
 }
 
 /// <summary>

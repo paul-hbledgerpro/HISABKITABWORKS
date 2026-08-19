@@ -67,15 +67,22 @@ public static class DbInitializer
         await conn.OpenAsync(ct);
         try
         {
-            // Migration: Add Email column to UserAccounts if missing
+            // User account migrations. PINs are stored as independent salted hashes;
+            // existing users remain valid and show PIN Not Set until an owner assigns one.
             using var cmd = conn.CreateCommand();
             cmd.CommandText = @"
                 IF OBJECT_ID(N'[dbo].[UserAccounts]', N'U') IS NOT NULL
-                AND COL_LENGTH(N'[dbo].[UserAccounts]', N'Email') IS NULL
                 BEGIN
-                    ALTER TABLE [dbo].[UserAccounts] ADD [Email] NVARCHAR(200) NOT NULL DEFAULT '';
-                    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_UserAccounts_Email' AND object_id = OBJECT_ID(N'[dbo].[UserAccounts]'))
-                        CREATE INDEX IX_UserAccounts_Email ON [dbo].[UserAccounts]([Email]) WHERE [Email] <> '';
+                    IF COL_LENGTH(N'[dbo].[UserAccounts]', N'Email') IS NULL
+                    BEGIN
+                        ALTER TABLE [dbo].[UserAccounts] ADD [Email] NVARCHAR(200) NOT NULL DEFAULT '';
+                        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_UserAccounts_Email' AND object_id = OBJECT_ID(N'[dbo].[UserAccounts]'))
+                            CREATE INDEX IX_UserAccounts_Email ON [dbo].[UserAccounts]([Email]) WHERE [Email] <> '';
+                    END
+                    IF COL_LENGTH(N'[dbo].[UserAccounts]', N'PinHashBase64') IS NULL
+                        ALTER TABLE [dbo].[UserAccounts] ADD [PinHashBase64] NVARCHAR(200) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[UserAccounts]', N'PinSaltBase64') IS NULL
+                        ALTER TABLE [dbo].[UserAccounts] ADD [PinSaltBase64] NVARCHAR(200) NOT NULL DEFAULT '';
                 END";
             await cmd.ExecuteNonQueryAsync(ct);
 
@@ -214,6 +221,9 @@ public static class DbInitializer
         await conn.OpenAsync(ct);
         try
         {
+            await EnsureSqliteColumnAsync(conn, "UserAccounts", "PinHashBase64", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "UserAccounts", "PinSaltBase64", "TEXT NOT NULL DEFAULT ''", ct);
+
             using var tableCmd = conn.CreateCommand();
             tableCmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ShiftLogs'";
             if (Convert.ToInt32(await tableCmd.ExecuteScalarAsync(ct) ?? 0) == 0)

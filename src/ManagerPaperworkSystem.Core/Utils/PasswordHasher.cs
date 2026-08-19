@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using ManagerPaperworkSystem.Core.Models;
 
 namespace ManagerPaperworkSystem.Core.Utils;
 
@@ -50,5 +51,33 @@ public static class PasswordHasher
         );
 
         return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
+    }
+}
+
+public static class UserCredentialVerifier
+{
+    public const int PinLength = 4;
+
+    public static bool IsValidPin(string? pin) =>
+        pin is { Length: PinLength } && pin.All(char.IsDigit);
+
+    public static bool Verify(UserAccount user, string? credential)
+    {
+        if (string.IsNullOrEmpty(credential))
+            return false;
+
+        if (PasswordHasher.VerifyPassword(
+                credential,
+                user.PasswordHashBase64,
+                user.SaltBase64))
+        {
+            return true;
+        }
+
+        return IsValidPin(credential) &&
+               PasswordHasher.VerifyPassword(
+                   credential,
+                   user.PinHashBase64,
+                   user.PinSaltBase64);
     }
 }

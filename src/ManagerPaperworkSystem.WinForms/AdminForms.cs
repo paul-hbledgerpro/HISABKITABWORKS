@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Core.Services;
+using ManagerPaperworkSystem.Core.Utils;
 using ManagerPaperworkSystem.Data.Db;
 using Microsoft.EntityFrameworkCore;
 
@@ -359,7 +360,11 @@ internal sealed class UserAccountsForm : Form
         var toggle = WinTheme.Button("Activate / Deactivate");
         toggle.Width = 190;
         toggle.Click += async (_, _) => await ToggleSelectedAsync();
+        var setPin = WinTheme.Button("Set / Reset PIN", true);
+        setPin.Width = 160;
+        setPin.Click += (_, _) => SetSelectedPin();
         actions.Controls.Add(add);
+        actions.Controls.Add(setPin);
         actions.Controls.Add(toggle);
         root.Controls.Add(actions, 0, 0);
         root.Controls.Add(_grid, 0, 1);
@@ -370,7 +375,18 @@ internal sealed class UserAccountsForm : Form
     {
         var users = await _auth.GetUsersAsync();
         _grid.DataSource = users.OrderBy(x => x.Username)
-            .Select(x => new { x.Id, Name = x.DisplayName, x.Username, x.Email, x.Role, x.IsActive, x.CreatedUtc, x.LastLoginUtc })
+            .Select(x => new
+            {
+                x.Id,
+                Name = x.DisplayName,
+                x.Username,
+                x.Email,
+                x.Role,
+                Pin = x.HasPin ? "Configured" : "Not Set",
+                x.IsActive,
+                x.CreatedUtc,
+                x.LastLoginUtc
+            })
             .ToList();
         if (_grid.Columns.Contains("Id"))
             _grid.Columns["Id"]!.Visible = false;
@@ -386,6 +402,132 @@ internal sealed class UserAccountsForm : Form
         await _auth.SetUserActiveAsync(id, !active);
         RefreshGrid();
     }
+
+    private void SetSelectedPin()
+    {
+        if (_grid.CurrentRow is null || !_grid.Columns.Contains("Id"))
+        {
+            MessageBox.Show(this, "Select a user first.", "User PIN", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (!int.TryParse(_grid.CurrentRow.Cells["Id"].Value?.ToString(), out var id))
+            return;
+
+        var username = _grid.CurrentRow.Cells["Username"].Value?.ToString() ?? "user";
+        using var form = new SetUserPinForm(_auth, id, username);
+        if (form.ShowDialog(this) == DialogResult.OK)
+            RefreshGrid();
+    }
+}
+
+internal sealed class SetUserPinForm : Form
+{
+    private readonly IAuthService _auth;
+    private readonly int _userId;
+    private readonly TextBox _pin = WinTheme.TextBox();
+    private readonly TextBox _confirm = WinTheme.TextBox();
+    private readonly Label _status = WinTheme.Label("");
+
+    public SetUserPinForm(IAuthService auth, int userId, string username)
+    {
+        _auth = auth;
+        _userId = userId;
+        WinTheme.Apply(this);
+        Text = $"Set PIN for {username} - HISAB KITAB";
+        Size = new Size(540, 330);
+        MinimumSize = new Size(500, 300);
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ConfigurePinBox(_pin);
+        ConfigurePinBox(_confirm);
+        Controls.Add(Build(username));
+    }
+
+    private Control Build(string username)
+    {
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = WinTheme.Bg,
+            Padding = new Padding(24),
+            ColumnCount = 2,
+            RowCount = 5
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+
+        var heading = WinTheme.Label($"Assign a 4-digit login PIN to {username}.", true);
+        heading.ForeColor = WinTheme.Copper;
+        root.Controls.Add(heading, 0, 0);
+        root.SetColumnSpan(heading, 2);
+        AddField(root, "New PIN", _pin, 1);
+        AddField(root, "Confirm PIN", _confirm, 2);
+        _status.ForeColor = WinTheme.Red;
+        root.Controls.Add(_status, 0, 3);
+        root.SetColumnSpan(_status, 2);
+
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
+        var save = WinTheme.Button("Save PIN", true);
+        save.Width = 130;
+        save.Click += async (_, _) => await SaveAsync();
+        var cancel = WinTheme.Button("Cancel");
+        cancel.Width = 100;
+        cancel.Click += (_, _) => Close();
+        actions.Controls.Add(save);
+        actions.Controls.Add(cancel);
+        root.Controls.Add(actions, 0, 4);
+        root.SetColumnSpan(actions, 2);
+        return root;
+    }
+
+    private static void AddField(TableLayoutPanel root, string label, Control field, int row)
+    {
+        root.Controls.Add(WinTheme.Label(label, true), 0, row);
+        field.Dock = DockStyle.Fill;
+        root.Controls.Add(field, 1, row);
+    }
+
+    private static void ConfigurePinBox(TextBox box)
+    {
+        box.UseSystemPasswordChar = true;
+        box.MaxLength = UserCredentialVerifier.PinLength;
+        box.KeyPress += (_, e) =>
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                e.Handled = true;
+        };
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!UserCredentialVerifier.IsValidPin(_pin.Text))
+        {
+            _status.Text = "Enter exactly four digits.";
+            return;
+        }
+        if (!string.Equals(_pin.Text, _confirm.Text, StringComparison.Ordinal))
+        {
+            _status.Text = "The PIN entries do not match.";
+            return;
+        }
+
+        try
+        {
+            await _auth.SetUserPinAsync(_userId, _pin.Text);
+            MessageBox.Show(this, "The login PIN was saved securely.", "User PIN", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            DialogResult = DialogResult.OK;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = AppBootstrap.RedactSensitiveText(ex.Message);
+        }
+    }
 }
 
 internal sealed class CreateAccountForm : Form
@@ -396,6 +538,7 @@ internal sealed class CreateAccountForm : Form
     private readonly TextBox _email = WinTheme.TextBox();
     private readonly TextBox _username = WinTheme.TextBox();
     private readonly TextBox _password = WinTheme.TextBox();
+    private readonly TextBox _pin = WinTheme.TextBox();
     private readonly ComboBox _role = WinTheme.ComboBox();
     private readonly ComboBox _question = WinTheme.ComboBox();
     private readonly TextBox _answer = WinTheme.TextBox();
@@ -406,16 +549,24 @@ internal sealed class CreateAccountForm : Form
         _auth = auth;
         WinTheme.Apply(this);
         Text = "Create User - HISAB KITAB";
-        Size = new Size(680, 620);
+        Size = new Size(680, 680);
+        MinimumSize = new Size(620, 620);
         Controls.Add(Build());
     }
 
     private Control Build()
     {
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Bg, Padding = new Padding(22), RowCount = 10, ColumnCount = 2 };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WinTheme.Bg, Padding = new Padding(22), RowCount = 11, ColumnCount = 2 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _password.UseSystemPasswordChar = true;
+        _pin.UseSystemPasswordChar = true;
+        _pin.MaxLength = UserCredentialVerifier.PinLength;
+        _pin.KeyPress += (_, e) =>
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                e.Handled = true;
+        };
         _role.Items.AddRange(Enum.GetNames<UserRole>());
         _role.SelectedItem = UserRole.Manager.ToString();
         _question.Items.AddRange(new object[]
@@ -433,9 +584,10 @@ internal sealed class CreateAccountForm : Form
         Add(root, "Role *", _role, 3);
         Add(root, "Username *", _username, 4);
         Add(root, "Password *", _password, 5);
-        Add(root, "Security Question *", _question, 6);
-        Add(root, "Security Answer *", _answer, 7);
-        root.Controls.Add(_status, 0, 8);
+        Add(root, "4-Digit PIN *", _pin, 6);
+        Add(root, "Security Question *", _question, 7);
+        Add(root, "Security Answer *", _answer, 8);
+        root.Controls.Add(_status, 0, 9);
         root.SetColumnSpan(_status, 2);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         var save = WinTheme.Button("Create User", true);
@@ -446,7 +598,7 @@ internal sealed class CreateAccountForm : Form
         cancel.Click += (_, _) => Close();
         actions.Controls.Add(save);
         actions.Controls.Add(cancel);
-        root.Controls.Add(actions, 0, 9);
+        root.Controls.Add(actions, 0, 10);
         root.SetColumnSpan(actions, 2);
         return root;
     }
@@ -464,7 +616,9 @@ internal sealed class CreateAccountForm : Form
         try
         {
             var role = Enum.TryParse<UserRole>(_role.Text, out var r) ? r : UserRole.Manager;
-            await _auth.CreateUserAsync(_first.Text, _last.Text, role, _username.Text, _password.Text, _question.Text, _answer.Text, _email.Text);
+            if (!UserCredentialVerifier.IsValidPin(_pin.Text))
+                throw new InvalidOperationException("PIN must contain exactly 4 digits.");
+            await _auth.CreateUserAsync(_first.Text, _last.Text, role, _username.Text, _password.Text, _question.Text, _answer.Text, _email.Text, _pin.Text);
             DialogResult = DialogResult.OK;
         }
         catch (Exception ex)

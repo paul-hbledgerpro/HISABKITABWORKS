@@ -102,6 +102,8 @@ public static class DatabaseSchemaService
                     [Email] NVARCHAR(200) NOT NULL DEFAULT '',
                     [PasswordHashBase64] NVARCHAR(500) NOT NULL DEFAULT '',
                     [SaltBase64] NVARCHAR(500) NOT NULL DEFAULT '',
+                    [PinHashBase64] NVARCHAR(200) NOT NULL DEFAULT '',
+                    [PinSaltBase64] NVARCHAR(200) NOT NULL DEFAULT '',
                     [DisplayName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [Role] INT NOT NULL DEFAULT 0,
                     [IsActive] BIT NOT NULL DEFAULT 1,
@@ -109,7 +111,15 @@ public static class DatabaseSchemaService
                     [SecurityAnswerHash] NVARCHAR(500) NULL,
                     [LastLoginUtc] DATETIME2 NULL,
                     [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-                )");
+                );
+
+                IF OBJECT_ID(N'[dbo].[UserAccounts]', N'U') IS NOT NULL
+                BEGIN
+                    IF COL_LENGTH(N'[dbo].[UserAccounts]', N'PinHashBase64') IS NULL
+                        ALTER TABLE [dbo].[UserAccounts] ADD [PinHashBase64] NVARCHAR(200) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[UserAccounts]', N'PinSaltBase64') IS NULL
+                        ALTER TABLE [dbo].[UserAccounts] ADD [PinSaltBase64] NVARCHAR(200) NOT NULL DEFAULT '';
+                END");
 
             await ExecuteSafe(conn, @"
                 IF OBJECT_ID(N'[dbo].[ActivityLogs]', N'U') IS NULL
