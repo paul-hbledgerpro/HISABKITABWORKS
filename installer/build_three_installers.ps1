@@ -1,7 +1,8 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "1.0.161"
+    [string]$Version = "1.0.162",
+    [string]$AgentMsiPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +22,11 @@ $clientProject = Join-Path $root "src\ManagerPaperworkSystem.WinForms\ManagerPap
 $updaterProject = Join-Path $root "src\ManagerPaperworkSystem.Updater\ManagerPaperworkSystem.Updater.csproj"
 $licenseProject = Join-Path $root "developer-only\HISAB-KITAB-LICENSE-GENERATOR\HisabKitabWorks.LicenseGenerator.WinForms.csproj"
 $accountProject = Join-Path $root "developer-only\HISAB-KITAB-CLIENT-ACCOUNT-MANAGER\HisabKitabWorks.ClientAccountManager.WinForms.csproj"
+$expectedAgentMsiSha256 = "D16711E9AA457EEF817ADB19576737EF3C06CB0A6C46C3FF6234C0C7B14DC8FA"
+if ([string]::IsNullOrWhiteSpace($AgentMsiPath)) {
+    $AgentMsiPath = Join-Path $installerDir "agent\Centriq-Agent-1.4.9-x64.msi"
+}
+$AgentMsiPath = [IO.Path]::GetFullPath($AgentMsiPath)
 
 function Reset-BuildDirectory([string]$Path) {
     $fullPath = [IO.Path]::GetFullPath($Path)
@@ -95,6 +101,17 @@ Copy-Item -LiteralPath (Join-Path $updaterPublish "Upgrade.exe") `
     -Destination (Join-Path $clientPublish "Upgrade.exe") -Force
 Set-Content -LiteralPath (Join-Path $clientPublish "version.txt") -Value $Version -Encoding Ascii
 
+if (-not (Test-Path -LiteralPath $AgentMsiPath)) {
+    throw "The Centriq Agent MSI is required for client releases: $AgentMsiPath"
+}
+$agentMsiHash = (Get-FileHash -LiteralPath $AgentMsiPath -Algorithm SHA256).Hash
+if ($agentMsiHash -ne $expectedAgentMsiSha256) {
+    throw "The Centriq Agent MSI failed integrity verification. Expected $expectedAgentMsiSha256, found $agentMsiHash."
+}
+$clientAgentDirectory = Join-Path $clientPublish "Centriq"
+New-Item -ItemType Directory -Force -Path $clientAgentDirectory | Out-Null
+Copy-Item -LiteralPath $AgentMsiPath -Destination (Join-Path $clientAgentDirectory "Centriq-Agent-x64.msi") -Force
+
 Publish-DesktopApp $licenseProject $licensePublish "HISAB KITAB WORKS License Generator.exe"
 Publish-DesktopApp $accountProject $accountPublish "HISAB KITAB WORKS Client Account Manager.exe"
 foreach ($developerPublish in @($licensePublish, $accountPublish)) {
@@ -150,7 +167,7 @@ function New-ClientUpdatePackage([string]$Version) {
         })
     }
 
-    foreach ($directoryName in @("Assets", "TaxRules")) {
+    foreach ($directoryName in @("Assets", "TaxRules", "Centriq")) {
         $directory = Join-Path $clientPublish $directoryName
         if (-not (Test-Path -LiteralPath $directory)) {
             continue

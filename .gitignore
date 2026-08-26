@@ -21,6 +21,7 @@ TestResults/
 # Generated application and installer packages
 installer/publish/
 installer/release/
+installer/agent/
 installer/InnoSetup/[Oo]utput*/
 installer/InnoSetup/installer_output/
 installer/InnoSetup/app/

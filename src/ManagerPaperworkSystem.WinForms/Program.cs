@@ -42,6 +42,9 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
+        if (CentriqAgentBootstrapService.TryHandleElevatedCommand(args))
+            return;
+
         // Releases before 1.0.158 always launched Upgrade.exe with an
         // administrator credential. When a standard user supplied a different
         // administrator account, the legacy updater then relaunched HISAB KITAB
@@ -175,6 +178,8 @@ internal static class Program
 
                 if (!StartupFlow.EnsureLicenseReady())
                     return;
+
+                CentriqAgentBootstrapService.TryEnsureForLicensedDevice();
 
                 using var services = AppBootstrap.BuildServices();
                 ProgramServices.Set(services);

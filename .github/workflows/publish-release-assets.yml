@@ -50,6 +50,17 @@ jobs:
             [Convert]::FromBase64String($env:GMAIL_OAUTH_CLIENT_JSON_B64)
           )
 
+      - name: Download the verified Centriq Device Agent
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path installer/agent | Out-Null
+          gh release download centriq-agent-v1.4.9 `
+            --repo ${{ github.repository }} `
+            --pattern Centriq-Agent-1.4.9-x64.msi `
+            --dir installer/agent
+
       - name: Build installers and automatic-update packages
         shell: pwsh
         run: ./installer/build_three_installers.ps1 -Version '${{ inputs.version }}'
