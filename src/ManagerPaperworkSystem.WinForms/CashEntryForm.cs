@@ -29,6 +29,7 @@ internal sealed class CashEntryForm : Form
         {
             Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 1, RowCount = 3
         };
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
