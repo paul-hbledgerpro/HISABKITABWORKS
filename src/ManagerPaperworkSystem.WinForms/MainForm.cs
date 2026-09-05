@@ -48,6 +48,7 @@ internal sealed partial class MainForm : Form
         new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Windows.Forms.Timer _monthlyDeliveryTimer = new() { Interval = 60 * 60 * 1000 };
     private readonly System.Windows.Forms.Timer _invoiceEmailSyncTimer = new() { Interval = 4 * 60 * 60 * 1000 };
+    private readonly System.Windows.Forms.Timer _portalSyncRecoveryTimer = new() { Interval = 5 * 60 * 1000 };
     private readonly int _loginStoreConnectionId;
     private int _currentConnectionStoreId;
     private int _currentStoreId;
@@ -115,7 +116,7 @@ internal sealed partial class MainForm : Form
             }
             _ = BeginMonthlyReportDeliveryAsync();
             _ = BeginMonthlyBankStatementDeliveryAsync();
-            _ = BeginDuePosPortalSyncAsync();
+            _ = BeginDuePosPortalSyncAsync(refreshWindowsTasks: true);
             try
             {
                 DatabaseCloudBackupService.EnsureDailyTask();
@@ -140,14 +141,18 @@ internal sealed partial class MainForm : Form
             _ = BeginDueInvoiceEmailSyncAsync();
             _monthlyDeliveryTimer.Start();
             _invoiceEmailSyncTimer.Start();
+            _portalSyncRecoveryTimer.Start();
         };
         _invoiceEmailSyncTimer.Tick += async (_, _) => await BeginDueInvoiceEmailSyncAsync();
+        _portalSyncRecoveryTimer.Tick += async (_, _) => await BeginDuePosPortalSyncAsync();
         FormClosed += (_, _) =>
         {
             _monthlyDeliveryTimer.Stop();
             _monthlyDeliveryTimer.Dispose();
             _invoiceEmailSyncTimer.Stop();
             _invoiceEmailSyncTimer.Dispose();
+            _portalSyncRecoveryTimer.Stop();
+            _portalSyncRecoveryTimer.Dispose();
             ActivityAuditContext.Clear();
         };
     }
@@ -286,13 +291,14 @@ internal sealed partial class MainForm : Form
         }
     }
 
-    private async Task BeginDuePosPortalSyncAsync()
+    private async Task BeginDuePosPortalSyncAsync(bool refreshWindowsTasks = false)
     {
         try
         {
             // Refresh task settings after an application update so existing
             // clients gain missed-start, wake, battery, and retry behavior.
-            PortalSyncService.EnsureConfiguredDailyTasks();
+            if (refreshWindowsTasks)
+                PortalSyncService.EnsureConfiguredDailyTasks();
         }
         catch
         {
@@ -308,7 +314,7 @@ internal sealed partial class MainForm : Form
         }
         catch
         {
-            // The scheduled task and the next app startup retry automatically.
+            // The recovery timer, scheduled task and next startup retry automatically.
         }
     }
 

@@ -228,12 +228,11 @@ internal sealed class PortalSyncSetupForm : Form
                 "3. Complete any AdventPOS verification and select the correct store.  " +
                 "4. Close Chrome and use TEST / SYNC NOW.\n\n" +
                 (_reportKind == PortalSyncReportKind.CashSalesSummary
-                    ? "This schedule fetches only Cash & Sales Summary reports. It resumes with the calendar day after " +
-                      "the latest summary already imported. Cash drop is supplied separately from matching Z-report " +
-                      "rows in Shift Cash Drop."
-                    : "This schedule fetches only Close-Out Z Reports. It resumes with the next AdventPOS batch after " +
-                      "the highest numeric Shift/Batch already present in Shift Cash Drop.") +
-                " If the PC is off, HISAB KITAB catches up automatically the next time Windows can run the task.\n\n" +
+                    ? "Cash & Sales recovery imports new days and checks the last 30 days for gaps. " +
+                      "Cash drop comes from the matching Z reports."
+                    : "Z Report recovery checks missing AdventPOS batches, including late register reports.") +
+                " Missed imports retry while HISAB KITAB is open. After a shutdown, recovery resumes when " +
+                "the app or Windows task next runs. Configure sync once in each Windows account you use.\n\n" +
                 "DEVELOPER HISTORICAL BACKFILL\n" +
                 "Choose a past date range and click BACKFILL PAST REPORTS. This imports only the selected store and " +
                 "does not move its normal daily sync cursor backward.",

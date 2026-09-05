@@ -318,7 +318,6 @@ internal static class PortalSyncService
 
             foreach (var settings in configuredStores)
             {
-                var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
                 var reportKinds = onlyReportKind.HasValue
                     ? new[] { onlyReportKind.Value }
                     : Enum.GetValues<PortalSyncReportKind>();
@@ -326,9 +325,15 @@ internal static class PortalSyncService
                 {
                     if (!settings.IsEnabled(reportKind) && !historicalBackfill)
                         continue;
-                    if (!force &&
-                        DateTime.Now.TimeOfDay < settings.GetRunTime(reportKind).ToTimeSpan())
+                    var nowUtc = DateTime.UtcNow;
+                    var lastAttempt = reportKind == PortalSyncReportKind.CashSalesSummary
+                        ? settings.LastCashSummaryAttemptUtc
+                        : settings.LastZReportAttemptUtc;
+                    if (!force && !historicalBackfill &&
+                        !PortalSyncRecoveryPolicy.RetryIsDue(lastAttempt, nowUtc))
                         continue;
+                    var dueThrough = PortalSyncRecoveryPolicy.DueThrough(
+                        DateTime.Now, settings.GetRunTime(reportKind), force);
 
                     List<DateOnly> pendingDates;
                     if (historicalBackfill)
@@ -347,11 +352,12 @@ internal static class PortalSyncService
                         pendingDates = reportKind == PortalSyncReportKind.CashSalesSummary
                             ? await GetPendingCashSummaryDatesAsync(
                                 settings,
-                                yesterday,
+                                dueThrough,
                                 cancellationToken)
-                            : !force && settings.LastZReportDate >= yesterday
+                            : !force && !PortalSyncRecoveryPolicy.ShouldCheckZBatches(
+                                settings.LastZReportDate, settings.LastZReportSuccessUtc, dueThrough, nowUtc)
                                 ? []
-                                : [yesterday];
+                                : [dueThrough];
                     }
                     if (!force &&
                         pendingDates.Count == 0)
@@ -363,8 +369,21 @@ internal static class PortalSyncService
                             settings.BusinessName,
                             true,
                             false,
-                            $"{reportName} sync is current through {yesterday:M/d/yyyy}.");
-                        UpdateRunStatus(settings, reportKind, skipped, yesterday);
+                            $"{reportName} sync is current through {dueThrough:M/d/yyyy}.");
+                        // A skipped check is not a successful portal visit. Refreshing
+                        // LastZReportSuccessUtc here would postpone late-batch checks forever.
+                        if (reportKind == PortalSyncReportKind.CashSalesSummary)
+                        {
+                            settings.LastCashSummaryStatus = skipped.Message;
+                            settings.LastCashSummaryAttemptUtc = nowUtc;
+                        }
+                        else
+                        {
+                            settings.LastZReportStatus = skipped.Message;
+                            settings.LastZReportAttemptUtc = nowUtc;
+                        }
+                        settings.LastAttemptUtc = nowUtc;
+                        settings.LastStatus = skipped.Message;
                         results.Add(skipped);
                         PortalSyncSettingsStore.Save(document);
                         WriteLog(skipped);
@@ -374,7 +393,7 @@ internal static class PortalSyncService
                     // A manual Cash & Sales run verifies yesterday even when the
                     // stored date cursor is already current.
                     if (force && pendingDates.Count == 0)
-                        pendingDates.Add(yesterday);
+                        pendingDates.Add(dueThrough);
 
                     foreach (var targetDate in pendingDates)
                     {
@@ -681,21 +700,26 @@ internal static class PortalSyncService
                      ?? throw new InvalidOperationException("Google Chrome is not installed.");
         var profile = PortalSyncSettingsStore.ProfileDirectory(settings.Id);
         var downloadDirectory = PortalSyncSettingsStore.DownloadDirectory(settings.Id);
-        var targetStatus = reportKind == PortalSyncReportKind.CashSalesSummary
-            ? await GetTargetStatusAsync(settings, targetDate, cancellationToken)
-            : new PortalTargetStatus(false, 0);
-        // The database is the accounting source of truth. A missing internal feed copy
-        // must never cause the same store/date to be imported a second time.
-        var needsCashSummary =
-            reportKind == PortalSyncReportKind.CashSalesSummary &&
-            !targetStatus.CashSummaryPresent;
-
         await using var db = CreateStoreDatabase(settings);
         await EnsureTargetDatabaseReadyAsync(db, settings.BusinessName);
         var dataStoreId = await ResolveDataStoreIdAsync(
             db,
             settings.BusinessName,
             cancellationToken);
+        await using var storeLease = await PortalSyncDatabaseLease.TryAcquireAsync(
+            db, dataStoreId, cancellationToken);
+        if (!storeLease.Acquired)
+            return new PortalSyncRunResult(settings.BusinessName, false, false,
+                "Another Windows session is syncing this store. Recovery will retry automatically.");
+
+        // Check coverage after taking the shared database lock. Profile-local
+        // file locks alone cannot prevent two Windows users importing together.
+        var targetStatus = reportKind == PortalSyncReportKind.CashSalesSummary
+            ? await GetTargetStatusAsync(settings, targetDate, cancellationToken)
+            : new PortalTargetStatus(false, 0);
+        var needsCashSummary =
+            reportKind == PortalSyncReportKind.CashSalesSummary &&
+            !targetStatus.CashSummaryPresent;
         var latestImportedZBatch = reportKind == PortalSyncReportKind.ZReports
             ? await GetLatestImportedZBatchAsync(
                 db,
@@ -925,7 +949,6 @@ internal static class PortalSyncService
                         }
 
                         var actualDate = report.ReportDate!.Value;
-                        var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
                         if (historicalZBackfill)
                         {
                             if (actualDate > historicalEndDate!.Value)
@@ -935,7 +958,7 @@ internal static class PortalSyncService
                         }
                         else
                         {
-                            if (actualDate > yesterday)
+                            if (actualDate > targetDate)
                                 continue;
                             if (!hadImportedZBatches && actualDate != targetDate)
                                 continue;
@@ -2238,31 +2261,13 @@ internal static class PortalSyncService
                 settings.BusinessName,
                 cancellationToken);
 
-            var reportDates = await db.PosSalesSummaries
+            var reportRanges = await db.PosSalesSummaries
                 .AsNoTracking()
                 .Where(item => item.StoreId == dataStoreId)
-                .Select(item => item.ReportTo)
+                .Select(item => new { item.ReportFrom, item.ReportTo })
                 .ToListAsync(cancellationToken);
-            var latestCashSummaryDate = reportDates.Count == 0
-                ? (DateOnly?)null
-                : reportDates.Max();
-
-            // Cash & Sales Summary has its own date cursor. Pull the next
-            // calendar day after the latest stored report and continue in
-            // chronological order through yesterday.
-            if (!latestCashSummaryDate.HasValue)
-                return [yesterday];
-            if (latestCashSummaryDate.Value >= yesterday)
-                return [];
-
-            var pending = new List<DateOnly>();
-            for (var date = latestCashSummaryDate.Value.AddDays(1);
-                 date <= yesterday;
-                 date = date.AddDays(1))
-            {
-                pending.Add(date);
-            }
-            return pending;
+            return PortalSyncRecoveryPolicy.PendingCashDates(
+                reportRanges.Select(range => (range.ReportFrom, range.ReportTo)), yesterday);
         }
         catch
         {
