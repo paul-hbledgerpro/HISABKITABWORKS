@@ -128,17 +128,30 @@ internal sealed partial class MainForm
             {
                 ShowModule("Cash On Hand");
                 await Task.Delay(2200);
-                if (DemoNamed<TextBox>("DemoCashOnHandCashAdded") is { } cashAdded)
-                    await DemoTypeAsync(cashAdded, "850.00");
-                if (DemoNamed<TextBox>("DemoCashOnHandDescription") is { } cashDescription)
-                    await DemoTypeAsync(cashDescription, "Daily safe deposit");
-                foreach (var combo in new[] { DemoNamed<ComboBox>("DemoCashOnHandVendor"), DemoNamed<ComboBox>("DemoCashOnHandPurpose") }.Where(combo => combo is not null && combo.Items.Count > 0))
+                // The new entry form runs a modal message loop. Queue the demo
+                // typing on that loop so the recording can operate the dialog.
+                using var entryTimer = new System.Windows.Forms.Timer { Interval = 200 };
+                entryTimer.Tick += async (_, _) =>
                 {
-                    await DemoMoveCursorAsync(combo!);
-                    combo!.SelectedIndex = Math.Min(1, combo.Items.Count - 1);
-                    await Task.Delay(900);
-                }
-                await DemoClickAsync("ADD");
+                    var entryForm = Application.OpenForms.OfType<CashEntryForm>().FirstOrDefault();
+                    if (entryForm is null) return;
+                    entryTimer.Stop();
+                    try
+                    {
+                        if (DemoNamed<TextBox>("CashEntryAmount", entryForm) is { } cashAdded)
+                            await DemoTypeAsync(cashAdded, "850.00");
+                        if (DemoNamed<TextBox>("CashEntryNote", entryForm) is { } cashDescription)
+                            await DemoTypeAsync(cashDescription, "Daily safe deposit");
+                        await DemoClickAsync("SAVE CASH", entryForm);
+                    }
+                    catch
+                    {
+                        entryForm.Close();
+                    }
+                };
+                entryTimer.Start();
+                await DemoClickAsync("ADD CASH");
+                entryTimer.Stop();
                 await Task.Delay(3000);
                 var grid = DemoControls<DataGridView>().FirstOrDefault(item => item.Rows.Count > 0);
                 if (grid is not null) await DemoSelectFirstRowAsync(grid);

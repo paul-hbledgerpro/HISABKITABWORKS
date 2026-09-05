@@ -2614,7 +2614,7 @@ internal sealed partial class MainForm : Form
     private Control BuildCashOnHand()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, BackColor = WinTheme.Bg, Padding = new Padding(2) };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -2623,46 +2623,23 @@ internal sealed partial class MainForm : Form
         var fields = WinTheme.BorderedPanel(10);
         fields.Dock = DockStyle.Fill;
         fields.Margin = new Padding(4, 6, 4, 6);
-        var form = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 3, BackColor = WinTheme.Panel };
-        form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 23));
-        form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 19));
-        form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
-        form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24));
-        form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16));
-        for (var i = 0; i < 3; i++) form.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33f));
-        fields.Controls.Add(form);
+        fields.Controls.Add(new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = "Choose ADD CASH for money coming in or RECORD PAYOUT for cash paid out.\nTo change an existing record, select it below and choose Add Correction.",
+            ForeColor = WinTheme.Text,
+            Font = WinTheme.BodyFont(11),
+            TextAlign = ContentAlignment.MiddleLeft
+        });
         root.Controls.Add(fields, 0, 0);
 
-        var date = WinTheme.DatePicker();
-        var payout = SectionTextBox("$0.00", rightAlign: true);
-        var desc = SectionTextBox();
-        var cash = SectionTextBox(rightAlign: true);
-        var vendor = WinTheme.ComboBox();
         var carryForward = SectionTextBox("$0.00", rightAlign: true);
-        var isPayout = SectionCombo("No", "Yes");
-        var purpose = WinTheme.ComboBox();
-        cash.Name = "DemoCashOnHandCashAdded";
-        payout.Name = "DemoCashOnHandPayoutAmount";
-        desc.Name = "DemoCashOnHandDescription";
-        carryForward.Name = "DemoCashOnHandCarryForward";
-        vendor.Name = "DemoCashOnHandVendor";
-        purpose.Name = "DemoCashOnHandPurpose";
-        AddMockField(form, "Date", date, 0, 0, 110);
-        AddMockField(form, "Cash Added", cash, 0, 1, 110);
-        AddMockField(form, "Purpose", purpose, 0, 2, 110);
-        AddMockField(form, "Is Payout", isPayout, 1, 0, 108);
-        AddMockField(form, "Payout Amount", payout, 1, 1, 128);
-        AddMockField(form, "Vendor", vendor, 2, 0, 80);
-        AddMockField(form, "Description", desc, 2, 1, 112);
-        form.SetColumnSpan(form.GetControlFromPosition(2, 1)!, 2);
-        AddMockField(form, "Carry Forward", carryForward, 4, 1, 128);
 
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 6) };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = true, BackColor = WinTheme.Bg, Padding = new Padding(0, 6, 0, 6) };
         root.Controls.Add(actions, 0, 1);
         var stats = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false, BackColor = WinTheme.Bg, Padding = new Padding(2, 9, 2, 9) };
         root.Controls.Add(stats, 0, 2);
         var grid = WinTheme.Grid();
-        var suppressCashSelectionLoad = false;
         root.Controls.Add(grid, 0, 3);
         root.Controls.Add(BuildGridFooter("Cash on hand records for selected store"), 0, 4);
         Label currentBalance = null!;
@@ -2672,27 +2649,6 @@ internal sealed partial class MainForm : Form
         Label closingBalance = null!;
         int? ComboId(ComboBox combo)
             => combo.SelectedValue is int id ? id : null;
-
-        async Task loadLookupsAsync()
-        {
-            using var db = CreateDb();
-            var vendors = await db.Vendors.AsNoTracking()
-                .Where(x => x.StoreId == _currentStoreId)
-                .OrderBy(x => x.Name)
-                .ToListAsync();
-            var purposes = await db.Purposes.AsNoTracking()
-                .Where(x => x.StoreId == _currentStoreId)
-                .OrderBy(x => x.Name)
-                .ToListAsync();
-            vendor.DataSource = vendors;
-            vendor.DisplayMember = nameof(Vendor.Name);
-            vendor.ValueMember = nameof(Vendor.Id);
-            vendor.SelectedIndex = vendors.Count > 0 ? 0 : -1;
-            purpose.DataSource = purposes;
-            purpose.DisplayMember = nameof(Purpose.Name);
-            purpose.ValueMember = nameof(Purpose.Id);
-            purpose.SelectedIndex = purposes.Count > 0 ? 0 : -1;
-        }
 
         async Task refreshAsync()
         {
@@ -2747,25 +2703,8 @@ internal sealed partial class MainForm : Form
 
         void clearCashOnHandFields()
         {
-            suppressCashSelectionLoad = true;
-            try
-            {
-                grid.CurrentCell = null;
-                grid.ClearSelection();
-                date.Value = DateTime.Today;
-                cash.Clear();
-                isPayout.SelectedIndex = 0;
-                payout.Clear();
-                vendor.SelectedIndex = -1;
-                purpose.SelectedIndex = -1;
-                desc.Clear();
-                carryForward.Clear();
-            }
-            finally
-            {
-                suppressCashSelectionLoad = false;
-            }
-            cash.Focus();
+            grid.CurrentCell = null;
+            grid.ClearSelection();
         }
 
         async Task setCarryForwardAsync()
@@ -2804,58 +2743,51 @@ internal sealed partial class MainForm : Form
             await refreshAsync();
         }
 
-        void loadSelectedIntoForm()
+        var addCash = MockActionButton("", "Add Cash", true, 155);
+        var recordPayout = MockActionButton("", "Record Payout", true, 185);
+        async Task EnterCashAsync(bool isPayout)
         {
-            if (suppressCashSelectionLoad)
-                return;
-            var id = SelectedId(grid);
-            if (id is null) return;
-            using var db = CreateDb();
-            var entry = db.CashOnHand.AsNoTracking().FirstOrDefault(x => x.Id == id.Value && x.StoreId == _currentStoreId);
-            if (entry is null) return;
-            date.Value = entry.Date.ToDateTime(TimeOnly.MinValue);
-            cash.Text = entry.CashAdded.ToString("0.00", CultureInfo.CurrentCulture);
-            isPayout.SelectedIndex = entry.IsPayout ? 1 : 0;
-            payout.Text = entry.PayoutAmount.ToString("0.00", CultureInfo.CurrentCulture);
-            if (entry.VendorId.HasValue) vendor.SelectedValue = entry.VendorId.Value;
-            if (entry.PurposeId.HasValue) purpose.SelectedValue = entry.PurposeId.Value;
-            desc.Text = entry.Description;
-        }
-        grid.SelectionChanged += (_, _) => loadSelectedIntoForm();
-
-        var dashboard = MockActionButton("", "Go to Dashboard", width: 175);
-        dashboard.Click += (_, _) => ShowModule("Dashboard");
-        actions.Controls.Add(dashboard);
-        var add = MockActionButton("", "Add", true, 145);
-        add.Click += async (_, _) =>
-        {
-            add.Enabled = false;
+            addCash.Enabled = recordPayout.Enabled = false;
             try
             {
+                var storeId = _currentStoreId;
                 using var db = CreateDb();
-                db.CashOnHand.Add(new CashOnHandEntry
+                var vendors = isPayout
+                    ? await db.Vendors.AsNoTracking().Where(x => x.StoreId == storeId).OrderBy(x => x.Name).ToListAsync()
+                    : new List<Vendor>();
+                var purposes = isPayout
+                    ? await db.Purposes.AsNoTracking().Where(x => x.StoreId == storeId).OrderBy(x => x.Name).ToListAsync()
+                    : new List<Purpose>();
+                if (_currentStoreId != storeId)
+                    return;
+                using var dialog = new CashEntryForm(isPayout, vendors, purposes, async entry =>
                 {
-                    StoreId = _currentStoreId,
-                    Date = DateOnly.FromDateTime(date.Value),
-                    CashAdded = Money(cash.Text),
-                    IsPayout = isPayout.SelectedIndex == 1,
-                    PayoutAmount = Money(payout.Text),
-                    VendorId = ComboId(vendor),
-                    PurposeId = ComboId(purpose),
-                    Description = desc.Text.Trim(),
-                    CreatedByUserId = _session.UserId,
-                    CreatedByName = _session.DisplayName
+                    using var saveDb = CreateDb();
+                    entry.StoreId = storeId;
+                    entry.CreatedByUserId = _session.UserId;
+                    entry.CreatedByName = _session.DisplayName;
+                    saveDb.CashOnHand.Add(entry);
+                    await saveDb.SaveChangesAsync();
                 });
-                await db.SaveChangesAsync();
-                await refreshAsync();
-                clearCashOnHandFields();
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    await refreshAsync();
+                    clearCashOnHandFields();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "Cash On Hand", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally
             {
-                add.Enabled = true;
+                addCash.Enabled = recordPayout.Enabled = true;
             }
-        };
-        actions.Controls.Add(add);
+        }
+        addCash.Click += async (_, _) => await EnterCashAsync(false);
+        recordPayout.Click += async (_, _) => await EnterCashAsync(true);
+        actions.Controls.Add(addCash);
+        actions.Controls.Add(recordPayout);
         var correction = MockActionButton("", "Add Correction", width: 190);
         correction.Click += async (_, _) =>
         {
@@ -3008,7 +2940,24 @@ internal sealed partial class MainForm : Form
         delete.Click += async (_, _) => await DeleteSelectedAsync<CashOnHandEntry>(grid, refresh);
         actions.Controls.Add(delete);
         var setCarry = MockActionButton("", "Set Carry Forward", width: 215);
-        setCarry.Click += async (_, _) => await setCarryForwardAsync();
+        setCarry.Click += async (_, _) =>
+        {
+            using var dialog = new Form { Text = "Set Carry Forward", ClientSize = new Size(420, 160), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
+            WinTheme.Apply(dialog);
+            dialog.StartPosition = FormStartPosition.CenterParent;
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 3, ColumnCount = 1 };
+            layout.Controls.Add(new Label { Text = "Opening cash for the start of this month", AutoSize = true });
+            carryForward.Dock = DockStyle.Top;
+            layout.Controls.Add(carryForward);
+            var saveCarry = WinTheme.Button("Set Carry Forward", true);
+            saveCarry.AutoSize = true;
+            saveCarry.DialogResult = DialogResult.OK;
+            layout.Controls.Add(saveCarry);
+            dialog.Controls.Add(layout);
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+                await setCarryForwardAsync();
+            layout.Controls.Remove(carryForward);
+        };
         actions.Controls.Add(setCarry);
         openingBalance = MockSummaryValue(stats, "Opening Balance", WinTheme.Copper, 210);
         todayAdded = MockSummaryValue(stats, "Cash Added Today", WinTheme.Green, 210);
@@ -3024,7 +2973,6 @@ internal sealed partial class MainForm : Form
             cashOnHandInitialized = true;
             try
             {
-                await loadLookupsAsync();
                 await refreshAsync();
                 clearCashOnHandFields();
             }
