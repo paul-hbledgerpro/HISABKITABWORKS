@@ -2760,14 +2760,13 @@ internal sealed partial class MainForm : Form
                     : new List<Purpose>();
                 if (_currentStoreId != storeId)
                     return;
-                using var dialog = new CashEntryForm(isPayout, vendors, purposes, async entry =>
+                using var dialog = new CashEntryForm(isPayout, vendors, purposes, async (entry, vendorName) =>
                 {
                     using var saveDb = CreateDb();
                     entry.StoreId = storeId;
                     entry.CreatedByUserId = _session.UserId;
                     entry.CreatedByName = _session.DisplayName;
-                    saveDb.CashOnHand.Add(entry);
-                    await saveDb.SaveChangesAsync();
+                    await CashEntryService.SaveAsync(saveDb, entry, vendorName);
                 });
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
