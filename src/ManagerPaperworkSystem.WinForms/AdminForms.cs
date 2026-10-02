@@ -274,23 +274,24 @@ internal sealed class StoreManagerForm : Form
 
     private static void DisablePortalSync(LicensedBusinessConnection business)
     {
-        var document = PortalSyncSettingsStore.Load();
-        var changed = false;
-        foreach (var settings in document.Stores.Where(settings =>
-                     PortalSyncSettingsStore.IsForBusiness(settings, business)))
+        var disabledIds = new List<Guid>();
+        PortalSyncSettingsStore.Update(document =>
         {
-            settings.Enabled = false;
-            settings.CashSalesSummaryEnabled = false;
-            settings.ZReportsEnabled = false;
-            settings.LastStatus = "Store disconnected from this PC login.";
-            settings.LastCashSummaryStatus = settings.LastStatus;
-            settings.LastZReportStatus = settings.LastStatus;
+            foreach (var settings in document.Stores.Where(settings =>
+                         PortalSyncSettingsStore.IsForBusiness(settings, business)))
+            {
+                settings.Enabled = false;
+                settings.CashSalesSummaryEnabled = false;
+                settings.ZReportsEnabled = false;
+                settings.LastStatus = "Store disconnected from this PC login.";
+                settings.LastCashSummaryStatus = settings.LastStatus;
+                settings.LastZReportStatus = settings.LastStatus;
+                disabledIds.Add(settings.Id);
+            }
+        });
+        foreach (var id in disabledIds)
             foreach (var reportKind in Enum.GetValues<PortalSyncReportKind>())
-                PortalSyncService.RemoveDailyTask(settings.Id, reportKind);
-            changed = true;
-        }
-        if (changed)
-            PortalSyncSettingsStore.Save(document);
+                PortalSyncService.RemoveDailyTask(id, reportKind);
     }
 
     private void ImportUpdatedLicense()

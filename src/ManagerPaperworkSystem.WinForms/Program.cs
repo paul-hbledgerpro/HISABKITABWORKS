@@ -398,10 +398,10 @@ internal static class Program
                 Environment.ExitCode = 1;
                 return;
             }
-            using var services = AppBootstrap.BuildServices();
-            AppBootstrap.InitializeDatabaseAsync(services).GetAwaiter().GetResult();
-            LicensedBusinessService.SynchronizeAsync(services).GetAwaiter().GetResult();
-            var paths = services.GetRequiredService<ManagerPaperworkSystem.Core.Services.IAppPaths>();
+            // PortalSyncService resolves and initializes the explicitly licensed
+            // target database. Initializing the default store and rewriting all
+            // store mappings here races other sync processes before their lock.
+            var paths = new ManagerPaperworkSystem.Data.Services.AppPaths();
             var results = PortalSyncService.RunDueAsync(
                     paths,
                     force: historicalBackfill,

@@ -242,7 +242,8 @@ internal static class PortalSyncService
         TimeSpan? existingRunWaitTimeout = null,
         DateOnly? historicalStartDate = null,
         DateOnly? historicalEndDate = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<string>? progress = null)
     {
         var historicalBackfill = historicalStartDate.HasValue || historicalEndDate.HasValue;
         if (historicalBackfill)
@@ -262,7 +263,7 @@ internal static class PortalSyncService
             ? await RunGate.WaitAsync(waitTimeout, cancellationToken)
             : await RunGate.WaitAsync(0, cancellationToken);
         if (!gateAcquired)
-            return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
+            return [new PortalSyncRunResult("", false, false, "Another POS sync is still running. This request did not import reports; wait for it to finish and retry.")];
 
         FileStream? processLock = null;
         try
@@ -288,7 +289,7 @@ internal static class PortalSyncService
                 }
                 catch (IOException)
                 {
-                    return [new PortalSyncRunResult("", true, false, "A POS portal sync is already running.")];
+                    return [new PortalSyncRunResult("", false, false, "Another POS sync is still running. This request did not import reports; wait for it to finish and retry.")];
                 }
             }
 
@@ -316,13 +317,17 @@ internal static class PortalSyncService
                 return results;
             }
 
-            foreach (var settings in configuredStores)
+            foreach (var configuredStore in configuredStores)
             {
                 var reportKinds = onlyReportKind.HasValue
                     ? new[] { onlyReportKind.Value }
                     : Enum.GetValues<PortalSyncReportKind>();
                 foreach (var reportKind in reportKinds)
                 {
+                    var settings = PortalSyncSettingsStore.Load().Stores
+                        .SingleOrDefault(item => item.Id == configuredStore.Id);
+                    if (settings is null || !PortalSyncSettingsStore.IsConnected(settings))
+                        continue;
                     if (!settings.IsEnabled(reportKind) && !historicalBackfill)
                         continue;
                     var nowUtc = DateTime.UtcNow;
@@ -385,7 +390,7 @@ internal static class PortalSyncService
                         settings.LastAttemptUtc = nowUtc;
                         settings.LastStatus = skipped.Message;
                         results.Add(skipped);
-                        PortalSyncSettingsStore.Save(document);
+                        PortalSyncSettingsStore.SaveRunStatus(settings, reportKind);
                         WriteLog(skipped);
                         continue;
                     }
@@ -415,7 +420,8 @@ internal static class PortalSyncService
                                 visibleChrome,
                                 historicalStartDate,
                                 historicalEndDate,
-                                targetTimeout.Token);
+                                targetTimeout.Token,
+                                progress);
                         }
                         catch (OperationCanceledException)
                             when (!cancellationToken.IsCancellationRequested)
@@ -439,7 +445,7 @@ internal static class PortalSyncService
 
                         UpdateRunStatus(settings, reportKind, result, targetDate);
                         results.Add(result);
-                        PortalSyncSettingsStore.Save(document);
+                        PortalSyncSettingsStore.SaveRunStatus(settings, reportKind);
                         WriteLog(result);
 
                         // Do not retry later Cash & Sales dates while the first
@@ -646,7 +652,8 @@ internal static class PortalSyncService
         bool visibleChrome,
         DateOnly? historicalStartDate,
         DateOnly? historicalEndDate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<string>? progress)
     {
         Exception? lastError = null;
         var maximumAttempts = 3;
@@ -662,7 +669,8 @@ internal static class PortalSyncService
                     visibleChrome,
                     historicalStartDate,
                     historicalEndDate,
-                    cancellationToken);
+                    cancellationToken,
+                    progress);
             }
             catch (OperationCanceledException)
             {
@@ -675,6 +683,7 @@ internal static class PortalSyncService
                     maximumAttempts = 5;
                 if (attempt >= maximumAttempts)
                     break;
+                progress?.Report($"Attempt {attempt} failed: {AppBootstrap.RedactSensitiveText(exception.Message)} Retrying...");
                 await Task.Delay(
                     IsTemporaryPortalConnectionFailure(exception)
                         ? TimeSpan.FromSeconds(attempt * 30)
@@ -693,8 +702,10 @@ internal static class PortalSyncService
         bool visibleChrome,
         DateOnly? historicalStartDate,
         DateOnly? historicalEndDate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<string>? progress)
     {
+        progress?.Report($"Preparing {settings.BusinessName} {ReportDisplayName(reportKind)} for {targetDate:M/d/yyyy}...");
         using var auditScope = ActivityAuditContext.BeginSystem("Automatic POS Portal Sync");
         var chrome = FindGoogleChrome()
                      ?? throw new InvalidOperationException("Google Chrome is not installed.");
@@ -727,6 +738,7 @@ internal static class PortalSyncService
                 cancellationToken)
             : null;
         var zResult = new ZReportImportOutcome(0, 0, 0);
+        var existingHistoricalZReports = 0;
 
         Directory.CreateDirectory(profile);
         Directory.CreateDirectory(downloadDirectory);
@@ -770,6 +782,7 @@ internal static class PortalSyncService
             cancellationToken.ThrowIfCancellationRequested();
 
             await EnsureSignedInAsync(page, settings);
+            progress?.Report($"Verified portal store: {settings.PortalStoreName}. Checking reports...");
             if (needsCashSummary)
             {
                 try
@@ -797,6 +810,9 @@ internal static class PortalSyncService
                     var parsedSummary = await CashSalesSummaryPdfImporter.ImportAsync(
                         generated.PdfPath, cancellationToken);
                     CashSalesSummaryImportCoordinator.Validate(parsedSummary);
+                    if (parsedSummary.ReportFrom != targetDate || parsedSummary.ReportTo != targetDate)
+                        throw new InvalidOperationException(
+                            $"AdventPOS returned a different date range than {targetDate:M/d/yyyy}. No summary was imported.");
                     PortalStoreIsolationPolicy.ValidateSummaryStore(
                         parsedSummary.StoreName, settings.PortalStoreName);
                     cashSummaryPath = StoreCashSummaryFeedFile(
@@ -894,9 +910,12 @@ internal static class PortalSyncService
                                 .OrderByDescending(item => item.Number)
                                 .ToList();
 
+                    var checkedBatches = 0;
                     foreach (var candidate in candidateBatches)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        progress?.Report($"Checking Z batch {++checkedBatches} of {candidateBatches.Count}: {candidate.Batch}. " +
+                            $"Imported {zResult.Imported}; refreshed {zResult.Updated}.");
                         var batch = candidate.Batch;
                         var batchDownloadDirectory = Path.Combine(
                             zDownloadDirectory,
@@ -1027,9 +1046,18 @@ internal static class PortalSyncService
 
                     if (historicalZBackfill && zResult.Total == 0)
                     {
-                        throw new InvalidOperationException(
-                            $"No AdventPOS Close-Out batch had a Start Date from " +
-                            $"{historicalStartDate:M/d/yyyy} through {historicalEndDate:M/d/yyyy}.");
+                        var storedBatchesInRange = await db.ShiftLogs.AsNoTracking()
+                            .Where(item => item.StoreId == dataStoreId &&
+                                item.Date >= historicalStartDate!.Value && item.Date <= historicalEndDate!.Value &&
+                                item.PosReportKey != null && item.PosReportKey.StartsWith("ADVENTPOS-Z|"))
+                            .Select(item => item.ShiftNo).ToListAsync(cancellationToken);
+                        existingHistoricalZReports = storedBatchesInRange
+                            .Select(NumericBatchOrder).Where(importedZBatches.Contains).Distinct().Count();
+                        if (existingHistoricalZReports == 0)
+                            throw new InvalidOperationException(
+                                $"No missing AdventPOS Close-Out batch had a Start Date from " +
+                                $"{historicalStartDate:M/d/yyyy} through {historicalEndDate:M/d/yyyy}. " +
+                                "Check the report Start Date in AdventPOS.");
                     }
                     if (!historicalZBackfill &&
                         !latestImportedZBatch.HasValue &&
@@ -1157,6 +1185,8 @@ internal static class PortalSyncService
         var zReportDescription = zResult.Total > 0
             ? $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s) imported " +
               $"sequentially through batch {lastProcessedZBatch}"
+            : existingHistoricalZReports > 0
+                ? $"No new Z-report shifts imported; {existingHistoricalZReports} existing batch(es) match the selected date range"
             : latestImportedZBatch.HasValue
                 ? $"Shift Cash Drop already caught up after batch {latestImportedZBatch.Value}"
                 : "Shift Cash Drop cursor established";

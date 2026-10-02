@@ -8,6 +8,18 @@ public class PortalStoreIsolationTests
     private const string Elgin = "GALAXY SMOKE SHOP (ELGIN, IL)";
 
     [Fact]
+    public void ClientPortalNamesWithPostalCodesSelectOnlyGalaxyElgin()
+    {
+        string[] names = ["ELGIN SMOKE SHOP (ELGIN, IL - 60120)",
+            "Galaxy Smoke Shop (Carpentersville, IL - 60110)",
+            "GALAXY SMOKE SHOP (ELGIN, IL - 60123)"];
+        Assert.Equal(2, PortalStoreIsolationPolicy.SelectExactStore(names[2], names));
+        Assert.Throws<InvalidOperationException>(()=>PortalStoreIsolationPolicy.SelectExactStore(Elgin,names));
+        PortalStoreIsolationPolicy.ValidateSummaryStore("GALAXY SMOKE SHOP",names[2]);
+        Assert.Throws<InvalidOperationException>(()=>PortalStoreIsolationPolicy.ValidateSummaryStore("ELGIN SMOKE SHOP",names[2]));
+    }
+
+    [Fact]
     public void ExactLocationWinsOverOtherStoreAndOtherCity() => Assert.Equal(2,
         PortalStoreIsolationPolicy.SelectExactStore(Elgin,
             ["ELGIN SMOKE SHOP", "GALAXY SMOKE SHOP (CARPENTERSVILLE, IL)", Elgin]));

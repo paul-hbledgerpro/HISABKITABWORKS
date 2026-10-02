@@ -60,7 +60,7 @@ internal sealed class PortalSyncSetupForm : Form
         TextAlign = ContentAlignment.MiddleLeft,
         AutoEllipsis = true
     };
-    private readonly PortalSyncSettingsDocument _document;
+    private PortalSyncSettingsDocument _document;
     private readonly IReadOnlyList<LicensedBusinessConnection> _licensedBusinesses;
 
     public PortalSyncSetupForm(IAppPaths paths)
@@ -286,7 +286,7 @@ internal sealed class PortalSyncSetupForm : Form
             }
         };
         test.Click += async (_, _) => await RunSelectedSyncAsync(actions);
-        backfill.Click += (_, _) =>
+        backfill.Click += async (_, _) =>
         {
             var from = DateOnly.FromDateTime(_historicalFrom.Value);
             var through = DateOnly.FromDateTime(_historicalThrough.Value);
@@ -325,38 +325,15 @@ internal sealed class PortalSyncSetupForm : Form
                     this,
                     $"Backfill {ReportDisplayName} for the selected store from " +
                     $"{from:M/d/yyyy} through {through:M/d/yyyy}?\r\n\r\n" +
-                    "The process will continue in the background and preserve the normal daily sync cursor. " +
-                    "You can continue using HISAB KITAB after it starts.",
+                    "Keep this window open until the result appears. " +
+                    "The normal daily sync schedule will remain enabled.",
                     $"{ReportDisplayName} Historical Backfill",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question) != DialogResult.Yes)
             {
                 return;
             }
-            try
-            {
-                var selectedSettings = SaveSettings(showConfirmation: false);
-                var processId = PortalSyncService.StartHistoricalBackfill(
-                    selectedSettings.Id,
-                    _reportKind,
-                    from,
-                    through);
-                _status.Text =
-                    $"Background {ReportDisplayName} backfill started for " +
-                    $"{from:M/d/yyyy} - {through:M/d/yyyy}. Process {processId}. " +
-                    "Progress is saved automatically; reopen this setup to see the latest result.";
-                MessageBox.Show(
-                    this,
-                    _status.Text + "\r\n\r\nThis setup window will now close, but the import will continue.",
-                    $"{ReportDisplayName} Historical Backfill",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-                Close();
-            }
-            catch (Exception exception)
-            {
-                ShowError(exception);
-            }
+            await RunSelectedSyncAsync(actions, from, through);
         };
         close.Click += (_, _) => Close();
 
@@ -392,9 +369,16 @@ internal sealed class PortalSyncSetupForm : Form
                 waitForExistingRun: true,
                 historicalStartDate: historicalFrom,
                 historicalEndDate: historicalThrough,
-                cancellationToken: _syncCancellation.Token);
+                cancellationToken: _syncCancellation.Token,
+                progress: new Progress<string>(message =>
+                {
+                    if (_syncRunning && CanUpdateWindow())
+                        _status.Text = message;
+                }));
             if (!CanUpdateWindow())
                 return;
+            if (results.Count == 0)
+                throw new InvalidOperationException("No sync run started. Reopen setup and verify that this store is connected and enabled.");
 
             if (historicalFrom.HasValue)
             {
@@ -406,13 +390,8 @@ internal sealed class PortalSyncSetupForm : Form
                     $"Successful: {succeeded}; Failed: {failed}.";
                 MessageBox.Show(
                     this,
-                    failed == 0
-                        ? _status.Text
-                        : _status.Text + "\r\n\r\n" +
-                          string.Join("\r\n", results
-                              .Where(result => !result.Success)
-                              .Select(result => result.Message)
-                              .Take(8)),
+                    _status.Text + "\r\n\r\n" +
+                    string.Join("\r\n", results.Select(result => result.Message).Take(8)),
                     $"{ReportDisplayName} Historical Backfill",
                     MessageBoxButtons.OK,
                     failed == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
@@ -467,32 +446,36 @@ internal sealed class PortalSyncSetupForm : Form
             throw new InvalidOperationException(
                 "The AdventPOS store user name and password are required for unattended daily sign-in.");
 
-        var settings = FindSettings(business) ?? new PortalStoreSyncSettings();
-        PortalSyncSettingsStore.BindToBusiness(settings, business);
-        settings.PortalUrl = _portalUrl.Text.Trim();
-        settings.PortalStoreName = _portalStore.Text.Trim();
-        settings.PortalEmail = _email.Text.Trim();
-        settings.PortalPassword = _portalPassword.Text;
-        settings.StoreUserName = _storeUser.Text.Trim();
-        settings.StorePassword = _storePassword.Text;
-        if (_reportKind == PortalSyncReportKind.CashSalesSummary)
+        PortalStoreSyncSettings settings = null!;
+        PortalSyncSettingsStore.Update(document =>
         {
-            settings.CashSalesSummaryEnabled = _enabled.Checked;
-            settings.CashSalesDailyHour = _runTime.Value.Hour;
-            settings.CashSalesDailyMinute = _runTime.Value.Minute;
-        }
-        else
-        {
-            settings.ZReportsEnabled = _enabled.Checked;
-            settings.ZReportsDailyHour = _runTime.Value.Hour;
-            settings.ZReportsDailyMinute = _runTime.Value.Minute;
-        }
-        settings.Enabled = settings.CashSalesSummaryEnabled || settings.ZReportsEnabled;
-        settings.DailyHour = settings.CashSalesDailyHour;
-        settings.DailyMinute = settings.CashSalesDailyMinute;
-        if (!_document.Stores.Contains(settings))
-            _document.Stores.Add(settings);
-        PortalSyncSettingsStore.Save(_document);
+            settings = PortalSyncSettingsStore.FindForBusiness(document.Stores, business) ?? new PortalStoreSyncSettings();
+            PortalSyncSettingsStore.BindToBusiness(settings, business);
+            settings.PortalUrl = _portalUrl.Text.Trim();
+            settings.PortalStoreName = _portalStore.Text.Trim();
+            settings.PortalEmail = _email.Text.Trim();
+            settings.PortalPassword = _portalPassword.Text;
+            settings.StoreUserName = _storeUser.Text.Trim();
+            settings.StorePassword = _storePassword.Text;
+            if (_reportKind == PortalSyncReportKind.CashSalesSummary)
+            {
+                settings.CashSalesSummaryEnabled = _enabled.Checked;
+                settings.CashSalesDailyHour = _runTime.Value.Hour;
+                settings.CashSalesDailyMinute = _runTime.Value.Minute;
+            }
+            else
+            {
+                settings.ZReportsEnabled = _enabled.Checked;
+                settings.ZReportsDailyHour = _runTime.Value.Hour;
+                settings.ZReportsDailyMinute = _runTime.Value.Minute;
+            }
+            settings.Enabled = settings.CashSalesSummaryEnabled || settings.ZReportsEnabled;
+            settings.DailyHour = settings.CashSalesDailyHour;
+            settings.DailyMinute = settings.CashSalesDailyMinute;
+            if (!document.Stores.Contains(settings))
+                document.Stores.Add(settings);
+        });
+        _document = PortalSyncSettingsStore.Load();
 
         PortalSyncScheduleResult? scheduleResult = null;
         if (settings.IsEnabled(_reportKind))
@@ -521,6 +504,7 @@ internal sealed class PortalSyncSetupForm : Form
 
     private void LoadSelectedBusiness()
     {
+        _document = PortalSyncSettingsStore.Load();
         if (_business.SelectedItem is not LicensedBusinessConnection business)
             return;
         var settings = FindSettings(business);

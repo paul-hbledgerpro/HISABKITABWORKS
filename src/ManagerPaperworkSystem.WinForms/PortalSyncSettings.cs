@@ -128,6 +128,12 @@ internal static class PortalSyncSettingsStore
 
     public static PortalSyncSettingsDocument Load()
     {
+        using var lease = AcquireSettingsLock();
+        return LoadCore();
+    }
+
+    private static PortalSyncSettingsDocument LoadCore()
+    {
         try
         {
             if (!File.Exists(ProtectedPath))
@@ -145,13 +151,77 @@ internal static class PortalSyncSettingsStore
                 CryptographicOperations.ZeroMemory(clear);
             }
         }
-        catch
+        catch (Exception exception)
         {
-            return new PortalSyncSettingsDocument();
+            throw new InvalidOperationException(
+                "The saved POS sync settings could not be read. No settings were replaced.", exception);
         }
     }
 
-    public static void Save(PortalSyncSettingsDocument document)
+    // Hold one cross-process file lock for the complete read/merge/write. A run
+    // must never write its old document over setup changes made while it ran.
+    public static void Update(Action<PortalSyncSettingsDocument> update)
+    {
+        using var lease = AcquireSettingsLock();
+        var current = LoadCore();
+        update(current);
+        SaveCore(current);
+    }
+
+    public static void SaveRunStatus(PortalStoreSyncSettings run, PortalSyncReportKind kind)
+    {
+        Update(document =>
+        {
+            var current = document.Stores.SingleOrDefault(item => item.Id == run.Id);
+            if (current is null || !SameConfiguration(current, run) ||
+                current.IsEnabled(kind) != run.IsEnabled(kind))
+                return;
+            if (kind == PortalSyncReportKind.CashSalesSummary)
+            {
+                if (current.LastCashSummaryAttemptUtc > run.LastCashSummaryAttemptUtc) return;
+                current.LastCashSummaryAttemptUtc = run.LastCashSummaryAttemptUtc;
+                current.LastCashSummarySuccessUtc = run.LastCashSummarySuccessUtc;
+                current.LastCashSummaryReportDate = run.LastCashSummaryReportDate;
+                current.LastImportedReportDate = run.LastImportedReportDate;
+                current.LastCashSummaryStatus = run.LastCashSummaryStatus;
+            }
+            else
+            {
+                if (current.LastZReportAttemptUtc > run.LastZReportAttemptUtc) return;
+                current.LastZReportAttemptUtc = run.LastZReportAttemptUtc;
+                current.LastZReportSuccessUtc = run.LastZReportSuccessUtc;
+                current.LastZReportDate = run.LastZReportDate;
+                current.LastZReportStatus = run.LastZReportStatus;
+            }
+        });
+    }
+
+    private static bool SameConfiguration(PortalStoreSyncSettings left, PortalStoreSyncSettings right) =>
+        left.BusinessId == right.BusinessId && left.DatabaseName == right.DatabaseName &&
+        left.StoreGuid == right.StoreGuid && left.PortalStoreName == right.PortalStoreName &&
+        left.PortalUrl == right.PortalUrl && left.PortalEmail == right.PortalEmail &&
+        left.PortalPassword == right.PortalPassword && left.StoreUserName == right.StoreUserName &&
+        left.StorePassword == right.StorePassword;
+
+    private static FileStream AcquireSettingsLock()
+    {
+        Directory.CreateDirectory(AppBootstrap.AppDataPath);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            try
+            {
+                return new FileStream(ProtectedPath + ".lock", FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(50);
+            }
+        }
+    }
+
+    private static void SaveCore(PortalSyncSettingsDocument document)
     {
         Directory.CreateDirectory(AppBootstrap.AppDataPath);
         Normalize(document);
@@ -159,7 +229,7 @@ internal static class PortalSyncSettingsStore
         try
         {
             var protectedBytes = ProtectedData.Protect(clear, Entropy, DataProtectionScope.CurrentUser);
-            var temporaryPath = ProtectedPath + ".new";
+            var temporaryPath = ProtectedPath + "." + Guid.NewGuid().ToString("N") + ".new";
             File.WriteAllBytes(temporaryPath, protectedBytes);
             File.Move(temporaryPath, ProtectedPath, true);
         }
