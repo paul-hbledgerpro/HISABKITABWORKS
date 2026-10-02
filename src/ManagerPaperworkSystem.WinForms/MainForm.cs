@@ -49,6 +49,8 @@ internal sealed partial class MainForm : Form
     private readonly System.Windows.Forms.Timer _monthlyDeliveryTimer = new() { Interval = 60 * 60 * 1000 };
     private readonly System.Windows.Forms.Timer _invoiceEmailSyncTimer = new() { Interval = 4 * 60 * 60 * 1000 };
     private readonly System.Windows.Forms.Timer _portalSyncRecoveryTimer = new() { Interval = 5 * 60 * 1000 };
+    private readonly System.Windows.Forms.Timer _backfillResultTimer = new() { Interval = 5_000 };
+    private bool _showingBackfillResult;
     private readonly int _loginStoreConnectionId;
     private int _currentConnectionStoreId;
     private int _currentStoreId;
@@ -142,9 +144,12 @@ internal sealed partial class MainForm : Form
             _monthlyDeliveryTimer.Start();
             _invoiceEmailSyncTimer.Start();
             _portalSyncRecoveryTimer.Start();
+            _backfillResultTimer.Start();
+            BeginInvoke(new Action(ShowBackfillResult));
         };
         _invoiceEmailSyncTimer.Tick += async (_, _) => await BeginDueInvoiceEmailSyncAsync();
         _portalSyncRecoveryTimer.Tick += async (_, _) => await BeginDuePosPortalSyncAsync();
+        _backfillResultTimer.Tick += (_, _) => ShowBackfillResult();
         FormClosed += (_, _) =>
         {
             _monthlyDeliveryTimer.Stop();
@@ -153,8 +158,35 @@ internal sealed partial class MainForm : Form
             _invoiceEmailSyncTimer.Dispose();
             _portalSyncRecoveryTimer.Stop();
             _portalSyncRecoveryTimer.Dispose();
+            _backfillResultTimer.Stop();
+            _backfillResultTimer.Dispose();
             ActivityAuditContext.Clear();
         };
+    }
+
+    private void ShowBackfillResult()
+    {
+        if (_showingBackfillResult || IsDisposed || Disposing || !Visible || !Enabled) return;
+        _showingBackfillResult = true;
+        try
+        {
+            using var notification = PortalBackfillResults.TakeNext();
+            if (notification is null) return;
+            var request = notification.Request;
+            var result = notification.Result;
+            MessageBox.Show(this,
+                $"{request.BusinessName} — {request.ReportName}\r\n" +
+                $"{request.From:M/d/yyyy} through {request.Through:M/d/yyyy}\r\n\r\n" +
+                result.Message + (result.Success ? "\r\n\r\nReopen the report screen to refresh its records." : ""),
+                result.Success ? "Background Backfill Complete" : "Background Backfill Needs Attention",
+                MessageBoxButtons.OK, result.Success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            notification.Acknowledge();
+        }
+        catch (Exception exception)
+        {
+            _status.Text = "Backfill result notification could not be read: " + AppBootstrap.RedactSensitiveText(exception.Message);
+        }
+        finally { _showingBackfillResult = false; }
     }
 
     private string CurrentInvoiceEmailStoreKey()

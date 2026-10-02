@@ -101,25 +101,42 @@ internal static class PortalSyncService
             throw new InvalidOperationException(
                 "The installed HISAB KITAB executable could not be located.");
 
-        using var process = Process.Start(new ProcessStartInfo
+        var businessName = PortalSyncSettingsStore.Load().Stores
+            .SingleOrDefault(settings => settings.Id == storeConfigurationId)?.BusinessName
+            ?? throw new InvalidOperationException("The selected store sync setup was not found.");
+        var request = PortalBackfillResults.Create(businessName, ReportDisplayName(reportKind), historicalStartDate, historicalEndDate);
+        try
         {
-            FileName = executable,
-            WorkingDirectory = Path.GetDirectoryName(executable) ?? "",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            ArgumentList =
+            using var process = Process.Start(new ProcessStartInfo
             {
-                "--portal-sync-store", storeConfigurationId.ToString("D"),
-                "--portal-sync-report", ReportArgument(reportKind),
-                "--portal-sync-backfill-from",
-                historicalStartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                "--portal-sync-backfill-through",
-                historicalEndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-            }
-        }) ?? throw new InvalidOperationException(
-            "The background historical sync process could not be started.");
+                FileName = executable,
+                WorkingDirectory = Path.GetDirectoryName(executable) ?? "",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                ArgumentList =
+                {
+                    "--portal-sync-store", storeConfigurationId.ToString("D"),
+                    "--portal-sync-report", ReportArgument(reportKind),
+                    "--portal-sync-job", request.Id.ToString("D"),
+                    "--portal-sync-backfill-from",
+                    historicalStartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    "--portal-sync-backfill-through",
+                    historicalEndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                }
+            }) ?? throw new InvalidOperationException(
+                "The background historical sync process could not be started.");
 
-        return process.Id;
+            DateTime? processStartedUtc = null;
+            try { processStartedUtc = process.StartTime.ToUniversalTime(); }
+            catch (InvalidOperationException) { }
+            PortalBackfillResults.RegisterProcess(request, process.Id, processStartedUtc);
+            return process.Id;
+        }
+        catch
+        {
+            PortalBackfillResults.CancelStartup(request.Id);
+            throw;
+        }
     }
 
     public static PortalSyncScheduleResult EnsureDailyTask(

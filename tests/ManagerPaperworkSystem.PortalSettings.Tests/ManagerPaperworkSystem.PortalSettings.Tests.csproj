@@ -13,5 +13,6 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.4" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalSyncSettings.cs" Link="PortalSyncSettings.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalStoreIsolationPolicy.cs" Link="PortalStoreIsolationPolicy.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalBackfillResults.cs" Link="PortalBackfillResults.cs" />
   </ItemGroup>
 </Project>

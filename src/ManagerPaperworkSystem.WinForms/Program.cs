@@ -141,11 +141,16 @@ internal static class Program
             if (portalStoreArgument + 1 < args.Length &&
                 Guid.TryParse(args[portalStoreArgument + 1], out var parsedId))
                 storeConfigurationId = parsedId;
+            Guid? backfillJobId = null;
+            var jobArgument = Array.FindIndex(args, x => x.Equals("--portal-sync-job", StringComparison.OrdinalIgnoreCase));
+            if (jobArgument >= 0 && jobArgument + 1 < args.Length && Guid.TryParse(args[jobArgument + 1], out var jobId))
+                backfillJobId = jobId;
             RunPortalSync(
                 storeConfigurationId,
                 ParsePortalSyncReportKind(args),
                 ParseDateOnlyArgument(args, "--portal-sync-backfill-from"),
-                ParseDateOnlyArgument(args, "--portal-sync-backfill-through"));
+                ParseDateOnlyArgument(args, "--portal-sync-backfill-through"),
+                backfillJobId);
             return;
         }
 
@@ -380,8 +385,11 @@ internal static class Program
         Guid? storeConfigurationId,
         PortalSyncReportKind? reportKind,
         DateOnly? historicalStartDate = null,
-        DateOnly? historicalEndDate = null)
+        DateOnly? historicalEndDate = null,
+        Guid? backfillJobId = null)
     {
+        var completedSuccessfully = false;
+        var completionMessage = "The background backfill did not complete.";
         try
         {
             var historicalBackfill =
@@ -390,11 +398,12 @@ internal static class Program
             var licenseValidation = DeviceLicenseService.ValidateInstalledLicense();
             if (licenseValidation.Status != DeviceLicenseStatus.Valid)
             {
+                completionMessage = $"POS sync stopped because the device license status is " +
+                    $"{licenseValidation.Status}: {licenseValidation.Message}";
                 PortalSyncService.WriteDiagnostic(
                     "",
                     false,
-                    $"Scheduled POS sync stopped because the device license status is " +
-                    $"{licenseValidation.Status}: {licenseValidation.Message}");
+                    completionMessage);
                 Environment.ExitCode = 1;
                 return;
             }
@@ -414,11 +423,17 @@ internal static class Program
                     historicalEndDate: historicalEndDate)
                 .GetAwaiter()
                 .GetResult();
-            if (results.Any(result => !result.Success))
+            completedSuccessfully = results.Count > 0 && results.All(result => result.Success);
+            completionMessage = results.Count == 0
+                ? "No backfill run started. Check that the selected store is connected and its sync setup is saved."
+                : $"Completed requests: {results.Count(result => result.Success)}; failed requests: {results.Count(result => !result.Success)}.\r\n\r\n" +
+                    string.Join("\r\n", results.OrderBy(result => result.Success).Select(result => result.Message).Take(12));
+            if (!completedSuccessfully)
                 Environment.ExitCode = 1;
         }
         catch (Exception exception)
         {
+            completionMessage = AppBootstrap.RedactSensitiveText(exception.Message);
             Environment.ExitCode = 1;
             try
             {
@@ -432,6 +447,22 @@ internal static class Program
             catch
             {
                 // Scheduled background execution has no interactive error path.
+            }
+        }
+        finally
+        {
+            if (backfillJobId.HasValue)
+            {
+                try
+                {
+                    PortalBackfillResults.Complete(backfillJobId.Value, completedSuccessfully,
+                        AppBootstrap.RedactSensitiveText(completionMessage));
+                }
+                catch (Exception exception)
+                {
+                    PortalSyncService.WriteDiagnostic("", false,
+                        "Could not save the backfill notification: " + AppBootstrap.RedactSensitiveText(exception.Message));
+                }
             }
         }
     }

@@ -286,7 +286,7 @@ internal sealed class PortalSyncSetupForm : Form
             }
         };
         test.Click += async (_, _) => await RunSelectedSyncAsync(actions);
-        backfill.Click += async (_, _) =>
+        backfill.Click += (_, _) =>
         {
             var from = DateOnly.FromDateTime(_historicalFrom.Value);
             var through = DateOnly.FromDateTime(_historicalThrough.Value);
@@ -325,15 +325,29 @@ internal sealed class PortalSyncSetupForm : Form
                     this,
                     $"Backfill {ReportDisplayName} for the selected store from " +
                     $"{from:M/d/yyyy} through {through:M/d/yyyy}?\r\n\r\n" +
-                    "Keep this window open until the result appears. " +
-                    "The normal daily sync schedule will remain enabled.",
+                    "Backfill will run in the background. You can close this setup and continue working. " +
+                    "HISAB KITAB will show the result when it finishes, or when you next open the app.",
                     $"{ReportDisplayName} Historical Backfill",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question) != DialogResult.Yes)
             {
                 return;
             }
-            await RunSelectedSyncAsync(actions, from, through);
+            try
+            {
+                var selectedSettings = SaveSettings(showConfirmation: false);
+                PortalSyncService.StartHistoricalBackfill(selectedSettings.Id, _reportKind, from, through);
+                MessageBox.Show(this,
+                    $"{ReportDisplayName} backfill started for {selectedSettings.BusinessName}, " +
+                    $"{from:M/d/yyyy} through {through:M/d/yyyy}.\r\n\r\n" +
+                    "You can continue working. A completion notification will show the result or any error.",
+                    "Background Backfill Started", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                Close();
+            }
+            catch (Exception exception)
+            {
+                ShowError(exception);
+            }
         };
         close.Click += (_, _) => Close();
 
