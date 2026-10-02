@@ -753,8 +753,10 @@ internal static class PortalSyncService
             ]
         });
 
-        var pages = await browser.PagesAsync();
-        var page = pages.FirstOrDefault() ?? await browser.NewPageAsync();
+        // A setup/profile session can belong to a different portal store. Every
+        // run (including backfill) must authenticate and select its own store.
+        await using var context = await browser.CreateBrowserContextAsync();
+        var page = await context.NewPageAsync();
         page.DefaultTimeout = 45_000;
         await ConfigureDownloadsAsync(page, downloadDirectory);
         string? cashSummaryPath = null;
@@ -792,11 +794,11 @@ internal static class PortalSyncService
                             "but AdventPOS did not provide a readable PDF." +
                             FormatExportError(generated.ExportError));
                     }
-                    CashSalesSummaryImportCoordinator.Validate(
-                        CashSalesSummaryPdfImporter.ImportAsync(
-                                generated.PdfPath,
-                                cancellationToken)
-                            .GetAwaiter().GetResult());
+                    var parsedSummary = await CashSalesSummaryPdfImporter.ImportAsync(
+                        generated.PdfPath, cancellationToken);
+                    CashSalesSummaryImportCoordinator.Validate(parsedSummary);
+                    PortalStoreIsolationPolicy.ValidateSummaryStore(
+                        parsedSummary.StoreName, settings.PortalStoreName);
                     cashSummaryPath = StoreCashSummaryFeedFile(
                         settings,
                         generated.PdfPath,
@@ -1103,7 +1105,8 @@ internal static class PortalSyncService
                 cashSummaryPath,
                 0,
                 "Automatic POS Portal Sync",
-                cancellationToken);
+                cancellationToken,
+                expectedPortalStoreName: settings.PortalStoreName);
             cashSummaryImported = !outcome.Duplicate;
         }
 
@@ -1256,6 +1259,11 @@ internal static class PortalSyncService
 
         await WaitForOwnerLoginAsync(page, TimeSpan.FromSeconds(45));
 
+        if (!await IsVisibleAsync(page, "#StoreSelectionModal"))
+            throw new InvalidOperationException(
+                "Store verification failed: AdventPOS bypassed store selection. No reports were imported. " +
+                "Check the saved portal credentials in POS Auto Sync Setup.");
+
         if (await IsVisibleAsync(page, "#StoreSelectionModal"))
         {
             await SelectPortalStoreAsync(page, settings.PortalStoreName);
@@ -1380,47 +1388,30 @@ internal static class PortalSyncService
                 "Enter the AdventPOS store name in POS Auto Sync Setup.");
 
         await WaitUntilAsync(page,
-            () => page.EvaluateFunctionAsync<bool>(
-                @"configuredName => {
-                    const normalize = value => (value || '')
-                        .normalize('NFKD')
-                        .replace(/[\u0300-\u036f]/g, '')
-                        .replace(/[^a-z0-9]/gi, '')
-                        .toLowerCase();
+            () => page.EvaluateExpressionAsync<bool>(
+                @"(() => {
                     const select = document.querySelector('#cbxSelectStore');
                     if (!select) return false;
                     const style = window.getComputedStyle(select);
                     const bounds = select.getBoundingClientRect();
                     if (style.display === 'none' || style.visibility === 'hidden' ||
                         bounds.width <= 0 || bounds.height <= 0) return false;
-                    const wanted = normalize(configuredName);
-                    return Array.from(select.options).some(option => {
-                        const actual = normalize(option.textContent);
-                        return option.value !== '-1' &&
-                               (actual === wanted || actual.includes(wanted) || wanted.includes(actual));
-                    });
-                }",
-                configuredStoreName),
+                    return Array.from(select.options).some(option => option.value && option.value !== '-1');
+                })()"),
             TimeSpan.FromSeconds(45),
             $"The configured AdventPOS store '{configuredStoreName}' was not found in the Store Selection list.");
 
+        var names = await page.EvaluateExpressionAsync<string[]>(
+            @"Array.from(document.querySelector('#cbxSelectStore').options)
+                .filter(option => option.value && option.value !== '-1')
+                .map(option => (option.textContent || '').trim())");
+        var selectedIndex = PortalStoreIsolationPolicy.SelectExactStore(configuredStoreName, names);
         var selectedName = await page.EvaluateFunctionAsync<string>(
-            @"configuredName => {
-                const normalize = value => (value || '')
-                    .normalize('NFKD')
-                    .replace(/[\u0300-\u036f]/g, '')
-                    .replace(/[^a-z0-9]/gi, '')
-                    .toLowerCase();
+            @"(index, expectedText) => {
                 const select = document.querySelector('#cbxSelectStore');
-                const wanted = normalize(configuredName);
-                const options = Array.from(select.options).filter(option => option.value !== '-1');
-                const option =
-                    options.find(candidate => normalize(candidate.textContent) === wanted) ||
-                    options.find(candidate => {
-                        const actual = normalize(candidate.textContent);
-                        return actual.includes(wanted) || wanted.includes(actual);
-                    });
-                if (!option) return '';
+                const options = Array.from(select.options).filter(option => option.value && option.value !== '-1');
+                const option = options[index];
+                if (!option || (option.textContent || '').trim() !== expectedText) return '';
 
                 select.disabled = false;
                 select.value = option.value;
@@ -1440,9 +1431,9 @@ internal static class PortalSyncService
 
                 return (option.textContent || '').trim();
             }",
-            configuredStoreName);
+            selectedIndex, names[selectedIndex]);
 
-        if (string.IsNullOrWhiteSpace(selectedName))
+        if (!string.Equals(selectedName, names[selectedIndex], StringComparison.Ordinal))
             throw new InvalidOperationException(
                 $"AdventPOS did not select the configured store '{configuredStoreName}'.");
     }
@@ -1816,7 +1807,7 @@ internal static class PortalSyncService
 
         // AdventPOS sometimes reuses an earlier report popup. Close stale
         // report viewers first so every batch starts from a known page.
-        foreach (var stalePage in (await browser.PagesAsync()).Where(candidate =>
+        foreach (var stalePage in (await page.BrowserContext.PagesAsync()).Where(candidate =>
                      !ReferenceEquals(candidate, page) &&
                      candidate.Url.Contains(
                          "/Report/ViewReportResult",
@@ -1842,7 +1833,7 @@ internal static class PortalSyncService
                 "/Report/ViewReportResult",
                 StringComparison.OrdinalIgnoreCase)
                 ? page
-                : (await browser.PagesAsync()).LastOrDefault(candidate =>
+                : (await page.BrowserContext.PagesAsync()).LastOrDefault(candidate =>
                     candidate.Url.Contains(
                         "/Report/ViewReportResult",
                         StringComparison.OrdinalIgnoreCase));
@@ -2737,6 +2728,11 @@ internal static class PortalSyncService
         if (!StoreDirectoryPreferencesStore.IsConnected(licensed, businesses))
             throw new InvalidOperationException(
                 $"'{settings.BusinessName}' is disconnected from this PC login.");
+
+        if (!PortalStoreIsolationPolicy.DatabaseMatches(settings.DatabaseName, licensed.DatabaseName))
+            throw new InvalidOperationException(
+                "Store verification failed: the saved sync database does not match the licensed business. " +
+                "Reconfigure POS Auto Sync Setup before importing reports.");
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlServer(LocalSqlServerPolicy.BuildConnectionString(licensed.DatabaseName))

@@ -21,10 +21,13 @@ internal static class CashSalesSummaryImportCoordinator
         string sourcePath,
         int importedByUserId,
         string importedByName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? expectedPortalStoreName = null)
     {
         var parsed = await CashSalesSummaryPdfImporter.ImportAsync(sourcePath, cancellationToken);
         Validate(parsed);
+        if (expectedPortalStoreName is not null)
+            PortalStoreIsolationPolicy.ValidateSummaryStore(parsed.StoreName, expectedPortalStoreName);
 
         var reportFrom = parsed.ReportFrom!.Value;
         var reportTo = parsed.ReportTo!.Value;

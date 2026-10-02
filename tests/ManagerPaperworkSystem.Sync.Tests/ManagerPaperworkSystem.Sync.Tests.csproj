@@ -13,5 +13,6 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalSyncRecoveryPolicy.cs" Link="PortalSyncRecoveryPolicy.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalStoreIsolationPolicy.cs" Link="PortalStoreIsolationPolicy.cs" />
   </ItemGroup>
 </Project>

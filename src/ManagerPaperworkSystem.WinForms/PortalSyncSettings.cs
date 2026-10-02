@@ -176,7 +176,8 @@ internal static class PortalSyncSettingsStore
         if (business.BusinessId > 0)
         {
             var byBusinessId = stores.FirstOrDefault(settings =>
-                settings.BusinessId == business.BusinessId);
+                settings.BusinessId == business.BusinessId &&
+                PortalStoreIsolationPolicy.DatabaseMatches(settings.DatabaseName, business.DatabaseName));
             if (byBusinessId is not null)
                 return byBusinessId;
         }
@@ -223,7 +224,8 @@ internal static class PortalSyncSettingsStore
             var byBusinessId = businesses.FirstOrDefault(business =>
                 business.BusinessId == settings.BusinessId);
             if (byBusinessId is not null)
-                return byBusinessId;
+                return PortalStoreIsolationPolicy.DatabaseMatches(settings.DatabaseName, byBusinessId.DatabaseName)
+                    ? byBusinessId : null;
         }
 
         if (!string.IsNullOrWhiteSpace(settings.DatabaseName))
