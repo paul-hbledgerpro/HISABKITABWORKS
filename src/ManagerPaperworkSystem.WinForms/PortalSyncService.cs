@@ -726,7 +726,6 @@ internal static class PortalSyncService
         using var auditScope = ActivityAuditContext.BeginSystem("Automatic POS Portal Sync");
         var chrome = FindGoogleChrome()
                      ?? throw new InvalidOperationException("Google Chrome is not installed.");
-        var profile = PortalSyncSettingsStore.ProfileDirectory(settings.Id);
         var downloadDirectory = PortalSyncSettingsStore.DownloadDirectory(settings.Id);
         await using var db = CreateStoreDatabase(settings);
         await EnsureTargetDatabaseReadyAsync(db, settings.BusinessName);
@@ -757,7 +756,6 @@ internal static class PortalSyncService
         var zResult = new ZReportImportOutcome(0, 0, 0);
         var existingHistoricalZReports = 0;
 
-        Directory.CreateDirectory(profile);
         Directory.CreateDirectory(downloadDirectory);
         DeleteOldDownloads(downloadDirectory);
         var runDirectory = Path.Combine(downloadDirectory, $"run-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}");
@@ -766,21 +764,8 @@ internal static class PortalSyncService
         Directory.CreateDirectory(cashDownloadDirectory);
         Directory.CreateDirectory(zDownloadDirectory);
 
-        await CloseDedicatedProfileBrowserAsync(profile, cancellationToken);
-        await using var browser = await Puppeteer.LaunchAsync(new LaunchOptions
-        {
-            Headless = !visibleChrome,
-            ExecutablePath = chrome,
-            UserDataDir = profile,
-            DefaultViewport = null,
-            Args =
-            [
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-background-networking",
-                $"--download-default-directory={downloadDirectory}"
-            ]
-        });
+        await using var browser = await Puppeteer.LaunchAsync(
+            CreateSyncBrowserLaunchOptions(chrome, downloadDirectory, visibleChrome));
 
         // A setup/profile session can belong to a different portal store. Every
         // run (including backfill) must authenticate and select its own store.
@@ -1222,63 +1207,24 @@ internal static class PortalSyncService
                 : $"Z Report sync: {zReportDescription}.");
     }
 
-    private static async Task CloseDedicatedProfileBrowserAsync(
-        string profileDirectory,
-        CancellationToken cancellationToken)
+    internal static LaunchOptions CreateSyncBrowserLaunchOptions(
+        string chrome, string downloadDirectory, bool visibleChrome) => new()
     {
-        var portFile = Path.Combine(profileDirectory, "DevToolsActivePort");
-        if (!File.Exists(portFile))
-            return;
-
-        try
-        {
-            var lines = await File.ReadAllLinesAsync(portFile, cancellationToken);
-            if (lines.Length == 0 ||
-                !int.TryParse(lines[0], NumberStyles.None, CultureInfo.InvariantCulture, out var port))
-            {
-                return;
-            }
-
-            using var http = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(3)
-            };
-            var json = await http.GetStringAsync(
-                $"http://127.0.0.1:{port}/json/version",
-                cancellationToken);
-            using var document = JsonDocument.Parse(json);
-            if (!document.RootElement.TryGetProperty(
-                    "webSocketDebuggerUrl",
-                    out var endpointElement))
-            {
-                return;
-            }
-
-            var endpoint = endpointElement.GetString();
-            if (string.IsNullOrWhiteSpace(endpoint))
-                return;
-
-            await using var runningBrowser = await Puppeteer.ConnectAsync(
-                new ConnectOptions { BrowserWSEndpoint = endpoint });
-            await runningBrowser.CloseAsync();
-
-            var deadline = DateTime.UtcNow.AddSeconds(8);
-            while (File.Exists(portFile) && DateTime.UtcNow < deadline)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await Task.Delay(250, cancellationToken);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            // A stale DevTools port file is harmless. Puppeteer will provide
-            // the actionable launch error if the dedicated profile is still locked.
-        }
-    }
+        Headless = !visibleChrome,
+        ExecutablePath = chrome,
+        // Let Puppeteer own a fresh temporary profile for each attempt. The
+        // persistent profile belongs to One-Time Setup and may still be open.
+        // An incognito context alone cannot avoid the browser's profile lock.
+        UserDataDir = null,
+        DefaultViewport = null,
+        Args =
+        [
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            $"--download-default-directory={downloadDirectory}"
+        ]
+    };
 
     private static string FirstSentence(string value)
     {
