@@ -1468,7 +1468,11 @@ internal static class PortalSyncService
                 if (!option || (option.textContent || '').trim() !== expectedText) return '';
 
                 select.disabled = false;
-                select.value = option.value;
+                // AdventPOS uses STOREUSER_ID as the option value; several
+                // businesses can share it. Setting select.value picks the first
+                // such option and sends its data-StoreDBID at final login.
+                // Select the exact matched DOM option instead.
+                select.selectedIndex = option.index;
                 if (typeof window.LoadStoreUsers === 'function')
                     window.LoadStoreUsers(option.value);
                 else {
@@ -1484,7 +1488,7 @@ internal static class PortalSyncService
                     window.UserAnotherAccount_Clicked();
 
                 const selected = select.options[select.selectedIndex];
-                return selected && selected.value === option.value ? (selected.textContent || '').trim() : '';
+                return selected === option ? (selected.textContent || '').trim() : '';
             }",
             selectedIndex, names[selectedIndex]);
 
