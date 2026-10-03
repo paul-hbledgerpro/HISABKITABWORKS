@@ -142,9 +142,9 @@ public sealed class PosReportImportService
         // Employee: extract just the username after "User:" - stop at whitespace or newline
         var employee = RegexMatch1(header, @"User:\s*([A-Za-z0-9_]+)")?.Trim();
         
-        var startDate = ParseDateOnly(RegexMatch1(header, @"Start Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})")) ??
-                        ParseDateOnlyFromHuman(RegexMatch0(header, @"Start\s*(?:Day|Date)\s*:\s*([^\n\r]+)"));
-        var endDate = ParseDateOnly(RegexMatch1(header, @"End Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})"));
+        var startDate = ParseZReportDate(RegexMatch1(header, @"Start Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})")) ??
+                        ParseZReportDate(RegexMatch0(header, @"Start\s*(?:Day|Date)\s*:\s*([^\n\r]+)"));
+        var endDate = ParseZReportDate(RegexMatch1(header, @"End Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})"));
 
         var netSales = MoneyOrZero(RegexMatch1(header, @"Net Sales:\s*\$?\s*([0-9,]+\.[0-9]{2})"));
 
@@ -247,9 +247,9 @@ public sealed class PosReportImportService
             employee = rawName.Trim();
         }
         
-        var startDate = ParseDateOnly(RegexMatch1(text, @"Start Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})")) ??
-                        ParseDateOnlyFromHuman(RegexMatch0(text, @"Start\s*(?:Day|Date)\s*:\s*([^\n\r]+)"));
-        var endDate = ParseDateOnly(RegexMatch1(text, @"End Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})"));
+        var startDate = ParseZReportDate(RegexMatch1(text, @"Start Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})")) ??
+                        ParseZReportDate(RegexMatch0(text, @"Start\s*(?:Day|Date)\s*:\s*([^\n\r]+)"));
+        var endDate = ParseZReportDate(RegexMatch1(text, @"End Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})"));
         var netSales = MoneyOrZero(RegexMatch1(text, @"Net Sales:\s*\$?\s*([0-9,]+\.[0-9]{2})"));
 
         // Tax: look for pattern like "T=Sales Tax (8.5000): 188.10" or "State Sales Tax"
@@ -412,6 +412,20 @@ public sealed class PosReportImportService
         if (string.IsNullOrWhiteSpace(input)) return null;
         var m = Regex.Match(input, pattern, RegexOptions.IgnoreCase);
         return m.Success ? m.Groups[1].Value : null;
+    }
+
+    // AdventPOS receipts use US month/day dates regardless of the Windows
+    // account's regional settings. In day/month cultures October 1 previously
+    // became January 10, while September 30 fell back to the correct US date.
+    private static DateOnly? ParseZReportDate(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        // A PDF may put more receipt fields on the same line after a named date.
+        var named = Regex.Match(value, @"[A-Za-z]{3,9}\s+[0-9]{1,2},\s*[0-9]{4}");
+        return DateTime.TryParse(named.Success ? named.Value : value,
+            CultureInfo.GetCultureInfo("en-US"), DateTimeStyles.None, out var date)
+                ? DateOnly.FromDateTime(date)
+                : null;
     }
 
     private static DateOnly? ParseDateOnly(string? s)

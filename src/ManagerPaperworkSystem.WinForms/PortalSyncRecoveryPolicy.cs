@@ -21,6 +21,21 @@ internal static class PortalSyncRecoveryPolicy
         !lastSuccessUtc.HasValue || lastSuccessUtc > utcNow ||
         utcNow - lastSuccessUtc.Value >= ZBatchRecheckInterval;
 
+    public static List<long> PendingZBatches(
+        IEnumerable<long> portalBatches, IReadOnlySet<long> importedBatches, bool historical)
+    {
+        var missing = portalBatches.Distinct().Where(batch => !importedBatches.Contains(batch));
+        if (historical || importedBatches.Count == 0)
+            return missing.OrderByDescending(batch => batch).ToList();
+
+        var latest = importedBatches.Max();
+        // Import new close-outs before revisiting legacy holes. An unreadable
+        // old receipt must not stop today's shifts from ever being reached.
+        // Exact imported membership still preserves late and missing batches.
+        return missing.OrderBy(batch => batch > latest ? 0 : 1)
+            .ThenBy(batch => batch).ToList();
+    }
+
     public static List<DateOnly> PendingCashDates(
         IEnumerable<(DateOnly From, DateOnly Through)> reportCoverage, DateOnly dueThrough)
     {

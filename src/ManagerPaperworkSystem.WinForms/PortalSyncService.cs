@@ -898,19 +898,11 @@ internal static class PortalSyncService
                     var historicalZBackfill =
                         historicalStartDate.HasValue &&
                         historicalEndDate.HasValue;
-                    var candidateBatches = historicalZBackfill
-                        ? numericPortalBatches
-                            .Where(item => !importedZBatches.Contains(item.Number))
-                            .OrderByDescending(item => item.Number)
-                            .ToList()
-                        : hadImportedZBatches
-                            ? numericPortalBatches
-                                .Where(item => !importedZBatches.Contains(item.Number))
-                                .OrderBy(item => item.Number)
-                                .ToList()
-                            : numericPortalBatches
-                                .OrderByDescending(item => item.Number)
-                                .ToList();
+                    var batchesByNumber = numericPortalBatches
+                        .GroupBy(item => item.Number).ToDictionary(group => group.Key, group => group.First());
+                    var candidateBatches = PortalSyncRecoveryPolicy.PendingZBatches(
+                            batchesByNumber.Keys, importedZBatches, historicalZBackfill)
+                        .Select(number => batchesByNumber[number]).ToList();
 
                     var checkedBatches = 0;
                     foreach (var candidate in candidateBatches)
@@ -1029,8 +1021,7 @@ internal static class PortalSyncService
                                 dataStoreId,
                                 actualDate,
                                 cancellationToken: cancellationToken);
-                            lastProcessedZBatch = historicalZBackfill &&
-                                                  lastProcessedZBatch.HasValue
+                            lastProcessedZBatch = lastProcessedZBatch.HasValue
                                 ? Math.Max(lastProcessedZBatch.Value, candidate.Number)
                                 : candidate.Number;
                         }
@@ -1042,11 +1033,12 @@ internal static class PortalSyncService
                         {
                             rejectedZReportDetails.Add(
                                 $"batch {batch}: {FirstSentence(exception.Message)}");
-                            // Do not skip over an unreadable next batch. Stopping here
-                            // keeps the database cursor honest so the next run retries it.
+                            // Keep failed batches pending and preserve all verification
+                            // checks. New close-outs have priority over these older gaps.
                             throw new InvalidOperationException(
-                                $"AdventPOS Z-report catch-up stopped at next batch {batch}: " +
-                                FirstSentence(exception.Message),
+                                $"AdventPOS Z-report catch-up stopped at batch {batch}: " +
+                                FirstSentence(exception.Message) +
+                                $" This attempt imported {zResult.Imported} new and refreshed {zResult.Updated} shift(s) before stopping.",
                                 exception);
                         }
                     }
@@ -1191,7 +1183,7 @@ internal static class PortalSyncService
 
         var zReportDescription = zResult.Total > 0
             ? $"{zResult.Imported} new and {zResult.Updated} updated Z-report shift(s) imported " +
-              $"sequentially through batch {lastProcessedZBatch}"
+              $"(highest imported batch {lastProcessedZBatch})"
             : existingHistoricalZReports > 0
                 ? $"No new Z-report shifts imported; {existingHistoricalZReports} existing batch(es) match the selected date range"
             : latestImportedZBatch.HasValue
@@ -2809,7 +2801,7 @@ internal static class PortalSyncService
             Directory.CreateDirectory(directory);
             var runningVersion = typeof(PortalSyncService).Assembly.GetName().Version;
             var line =
-                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{result.BusinessName}\t{(result.Success ? "OK" : "FAILED")}\t{result.Message}\t[version={runningVersion}; pid={Environment.ProcessId}]{Environment.NewLine}";
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{result.BusinessName}\t{(result.Success ? "OK" : "FAILED")}\t{result.Message}\t[version={runningVersion}; pid={Environment.ProcessId}; culture={CultureInfo.CurrentCulture.Name}]{Environment.NewLine}";
             File.AppendAllText(Path.Combine(directory, "pos-portal-sync.log"), line);
         }
         catch
