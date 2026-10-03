@@ -13,5 +13,9 @@
     <PackageReference Include="ClosedXML" Version="0.102.3" />
     <PackageReference Include="PdfPig" Version="0.1.13" />
     <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/PosReportImportService.cs" Link="PosReportImportService.cs" />
+    <ProjectReference Include="../../src/ManagerPaperworkSystem.Data/ManagerPaperworkSystem.Data.csproj" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalZReportHistory.cs" Link="PortalZReportHistory.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalStoreIsolationPolicy.cs" Link="PortalStoreIsolationPolicy.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalSyncRecoveryPolicy.cs" Link="PortalSyncRecoveryPolicy.cs" />
   </ItemGroup>
 </Project>

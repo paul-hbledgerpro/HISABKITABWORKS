@@ -229,6 +229,10 @@ public sealed class ShiftLogEntry : Entity
     [MaxLength(500)]
     public string PosReportPath { get; set; } = "";
 
+    // Set only after verifying the source store, report date and batch.
+    [MaxLength(500)]
+    public string PosReportStoreIdentity { get; set; } = "";
+
     [NotMapped]
     public decimal GrossSales => CashTotal + CardTotal + Tax;
 

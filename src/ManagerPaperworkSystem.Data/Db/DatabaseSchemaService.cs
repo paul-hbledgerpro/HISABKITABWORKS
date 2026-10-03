@@ -166,6 +166,7 @@ public static class DatabaseSchemaService
                     [CreatedByUserId] INT NULL,
                     [CreatedByName] NVARCHAR(200) NOT NULL DEFAULT '',
                     [CreatedUtc] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                    [PosReportStoreIdentity] NVARCHAR(500) NOT NULL DEFAULT '',
                     [PosReportPath] NVARCHAR(500) NOT NULL DEFAULT ''
                 )");
 
@@ -206,6 +207,7 @@ public static class DatabaseSchemaService
             await EnsureColumnAsync(conn, "ShiftLogs", "PosSalesSummaryId", "INT NULL");
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportKey", "NVARCHAR(200) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "ShiftLogs", "PosReportPath", "NVARCHAR(500) NOT NULL DEFAULT ''");
+            await EnsureColumnAsync(conn, "ShiftLogs", "PosReportStoreIdentity", "NVARCHAR(500) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "ShiftLogs", "CorrectionReason", "NVARCHAR(300) NOT NULL DEFAULT ''");
             await EnsureColumnAsync(conn, "CashOnHand", "CreatedByUserId", "INT NOT NULL DEFAULT 0");
             await EnsureColumnAsync(conn, "CashOnHand", "CreatedByName", "NVARCHAR(120) NOT NULL DEFAULT ''");

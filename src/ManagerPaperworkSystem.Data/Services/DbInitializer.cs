@@ -96,6 +96,8 @@ public static class DbInitializer
                         ALTER TABLE [dbo].[ShiftLogs] ADD [PosSalesSummaryId] INT NULL;
                     IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PosReportKey') IS NULL
                         ALTER TABLE [dbo].[ShiftLogs] ADD [PosReportKey] NVARCHAR(200) NOT NULL DEFAULT '';
+                    IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PosReportStoreIdentity') IS NULL
+                        ALTER TABLE [dbo].[ShiftLogs] ADD [PosReportStoreIdentity] NVARCHAR(500) NOT NULL DEFAULT '';
                     IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'PosReportPath') IS NULL
                         ALTER TABLE [dbo].[ShiftLogs] ADD [PosReportPath] NVARCHAR(500) NOT NULL DEFAULT '';
                     IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'CorrectionReason') IS NULL
@@ -253,6 +255,7 @@ public static class DbInitializer
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosSalesSummaryId", "INTEGER NULL", ct);
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosReportKey", "TEXT NOT NULL DEFAULT ''", ct);
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosReportPath", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosReportStoreIdentity", "TEXT NOT NULL DEFAULT ''", ct);
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "CorrectionReason", "TEXT NOT NULL DEFAULT ''", ct);
             using (var normalizeShiftCmd = conn.CreateCommand())
             {

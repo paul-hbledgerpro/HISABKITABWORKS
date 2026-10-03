@@ -749,12 +749,7 @@ internal static class PortalSyncService
         var needsCashSummary =
             reportKind == PortalSyncReportKind.CashSalesSummary &&
             !targetStatus.CashSummaryPresent;
-        var latestImportedZBatch = reportKind == PortalSyncReportKind.ZReports
-            ? await GetLatestImportedZBatchAsync(
-                db,
-                dataStoreId,
-                cancellationToken)
-            : null;
+        long? latestImportedZBatch = null;
         var zResult = new ZReportImportOutcome(0, 0, 0);
         var existingHistoricalZReports = 0;
 
@@ -869,41 +864,26 @@ internal static class PortalSyncService
                         })
                         .ToList();
 
-                    // Genuine AdventPOS-keyed rows are the primary cursor. Older
-                    // databases may predate PosReportKey, so only accept a legacy
-                    // numeric Shift No when that same number exists in this
-                    // portal's batch list. Other shift systems can use much larger
-                    // numeric identifiers and must not make Z sync appear caught up.
-                    if (!latestImportedZBatch.HasValue)
-                    {
-                        latestImportedZBatch =
-                            await GetLatestMatchingLegacyZBatchAsync(
-                                db,
-                                dataStoreId,
-                                numericPortalBatches
-                                    .Select(item => item.Number)
-                                    .ToHashSet(),
-                                cancellationToken);
-                        lastProcessedZBatch = latestImportedZBatch;
-                    }
-
-                    // Track exact imported batches instead of treating the greatest
-                    // batch as a cursor. Multi-register stores can close registers
-                    // out of date order, so importing batch N+1 must not permanently
-                    // hide a still-missing batch N.
-                    var importedZBatches = await GetImportedZBatchNumbersAsync(
-                        db,
-                        dataStoreId,
-                        numericPortalBatches.Select(item => item.Number).ToHashSet(),
-                        cancellationToken);
+                    // The selected database may contain legacy wrong-store rows.
+                    // Only source-verified history can suppress a portal batch.
+                    var history = await PortalZReportHistory.LoadAsync(
+                        db, dataStoreId, settings.PortalStoreName, cancellationToken);
+                    var portalNumbers = numericPortalBatches.Select(item => item.Number).ToHashSet();
+                    var importedZBatches = history.Keys.Where(portalNumbers.Contains).ToHashSet();
+                    latestImportedZBatch = importedZBatches.Count > 0 ? importedZBatches.Max() : null;
+                    lastProcessedZBatch = latestImportedZBatch;
                     var hadImportedZBatches = importedZBatches.Count > 0;
                     var historicalZBackfill =
                         historicalStartDate.HasValue &&
                         historicalEndDate.HasValue;
                     var batchesByNumber = numericPortalBatches
                         .GroupBy(item => item.Number).ToDictionary(group => group.Key, group => group.First());
+                    var historicalAnchor = historicalZBackfill
+                        ? history.Where(item => item.Value < historicalStartDate!.Value && portalNumbers.Contains(item.Key))
+                            .Select(item => (long?)item.Key).Max()
+                        : null;
                     var candidateBatches = PortalSyncRecoveryPolicy.PendingZBatches(
-                            batchesByNumber.Keys, importedZBatches, historicalZBackfill)
+                            batchesByNumber.Keys, importedZBatches, historicalZBackfill, historicalAnchor)
                         .Select(number => batchesByNumber[number]).ToList();
 
                     var checkedBatches = 0;
@@ -1047,13 +1027,8 @@ internal static class PortalSyncService
 
                     if (historicalZBackfill && zResult.Total == 0)
                     {
-                        var storedBatchesInRange = await db.ShiftLogs.AsNoTracking()
-                            .Where(item => item.StoreId == dataStoreId &&
-                                item.Date >= historicalStartDate!.Value && item.Date <= historicalEndDate!.Value &&
-                                item.PosReportKey != null && item.PosReportKey.StartsWith("ADVENTPOS-Z|"))
-                            .Select(item => item.ShiftNo).ToListAsync(cancellationToken);
-                        existingHistoricalZReports = storedBatchesInRange
-                            .Select(NumericBatchOrder).Where(importedZBatches.Contains).Distinct().Count();
+                        existingHistoricalZReports = history.Count(item =>
+                            item.Value >= historicalStartDate!.Value && item.Value <= historicalEndDate!.Value);
                         if (existingHistoricalZReports == 0)
                             throw new InvalidOperationException(
                                 $"No missing AdventPOS Close-Out batch had a Start Date from " +
@@ -2279,112 +2254,6 @@ internal static class PortalSyncService
         }
     }
 
-    private static async Task<long?> GetLatestImportedZBatchAsync(
-        AppDbContext db,
-        int storeId,
-        CancellationToken cancellationToken)
-    {
-        // Never use every numeric Shift No as a portal cursor. A store can retain
-        // rows from another register system whose identifiers are unrelated to
-        // AdventPOS and much larger than its current batch numbers.
-        var shiftNumbers = await db.ShiftLogs
-            .AsNoTracking()
-            .Where(item =>
-                item.StoreId == storeId &&
-                item.ShiftNo != null &&
-                item.PosReportKey != null &&
-                item.PosReportKey.StartsWith("ADVENTPOS-Z|"))
-            .Select(item => item.ShiftNo!)
-            .ToListAsync(cancellationToken);
-
-        return LatestNumericBatch(shiftNumbers);
-    }
-
-    private static async Task<HashSet<long>> GetImportedZBatchNumbersAsync(
-        AppDbContext db,
-        int storeId,
-        IReadOnlySet<long> portalBatches,
-        CancellationToken cancellationToken)
-    {
-        var rows = await db.ShiftLogs
-            .AsNoTracking()
-            .Where(item => item.StoreId == storeId && item.ShiftNo != null)
-            .Select(item => new { item.ShiftNo, item.PosReportKey })
-            .ToListAsync(cancellationToken);
-
-        var imported = new HashSet<long>();
-        foreach (var row in rows)
-        {
-            if (!long.TryParse(
-                    row.ShiftNo!.Trim(),
-                    NumberStyles.None,
-                    CultureInfo.InvariantCulture,
-                    out var batch) ||
-                !portalBatches.Contains(batch))
-            {
-                continue;
-            }
-
-            // A signed AdventPOS key is definitive. For upgraded databases,
-            // accept an exact legacy shift number only when the same batch is
-            // still advertised by this portal.
-            if (!string.IsNullOrWhiteSpace(row.PosReportKey) &&
-                !row.PosReportKey.StartsWith("ADVENTPOS-Z|", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-            imported.Add(batch);
-        }
-        return imported;
-    }
-
-    private static async Task<long?> GetLatestMatchingLegacyZBatchAsync(
-        AppDbContext db,
-        int storeId,
-        IReadOnlySet<long> portalBatches,
-        CancellationToken cancellationToken)
-    {
-        if (portalBatches.Count == 0)
-            return null;
-
-        var shiftNumbers = await db.ShiftLogs
-            .AsNoTracking()
-            .Where(item =>
-                item.StoreId == storeId &&
-                item.ShiftNo != null &&
-                (item.PosReportKey == null || item.PosReportKey == ""))
-            .Select(item => item.ShiftNo!)
-            .ToListAsync(cancellationToken);
-
-        return LatestNumericBatch(
-            shiftNumbers,
-            batch => portalBatches.Contains(batch));
-    }
-
-    private static long? LatestNumericBatch(
-        IEnumerable<string> values,
-        Func<long, bool>? include = null)
-    {
-        long? latest = null;
-        foreach (var value in values)
-        {
-            if (!long.TryParse(
-                    value.Trim(),
-                    NumberStyles.None,
-                    CultureInfo.InvariantCulture,
-                    out var batch))
-            {
-                continue;
-            }
-            if (include is not null && !include(batch))
-                continue;
-
-            if (!latest.HasValue || batch > latest.Value)
-                latest = batch;
-        }
-        return latest;
-    }
-
     private static async Task<PortalTargetStatus> GetTargetStatusAsync(
         PortalStoreSyncSettings settings,
         DateOnly targetDate,
@@ -2405,17 +2274,14 @@ internal static class PortalSyncService
                         item.ReportFrom <= targetDate &&
                         item.ReportTo >= targetDate,
                     cancellationToken);
-            var keyPrefix = $"ADVENTPOS-Z|{targetDate:yyyy-MM-dd}|";
-            var zReportCount = await db.ShiftLogs
-                .AsNoTracking()
-                .Where(item =>
-                    item.StoreId == dataStoreId &&
-                    item.Date == targetDate &&
-                    item.PosReportKey != null &&
-                    item.PosReportKey.StartsWith(keyPrefix))
-                .Select(item => item.PosReportKey)
-                .Distinct()
-                .CountAsync(cancellationToken);
+            var zRows = await db.ShiftLogs.AsNoTracking()
+                .Where(item => item.StoreId == dataStoreId && item.Date == targetDate &&
+                    item.PosSalesSummaryId == null && !item.IsCorrection && item.PosReportStoreIdentity != "")
+                .Select(item => new { item.ShiftNo, item.PosReportPath, item.PosReportStoreIdentity })
+                .ToListAsync(cancellationToken);
+            var zReportCount = zRows.Where(item => item.PosReportStoreIdentity ==
+                    PortalZReportHistory.Identity(settings.PortalStoreName, targetDate, item.ShiftNo, item.PosReportPath))
+                .Select(item => item.ShiftNo).Distinct().Count();
             return new PortalTargetStatus(cashSummaryPresent, zReportCount);
         }
         catch
@@ -2559,6 +2425,12 @@ internal static class PortalSyncService
             }
             else
             {
+                if (!string.IsNullOrWhiteSpace(shift.PosReportKey) &&
+                    shift.PosReportKey.StartsWith("ADVENTPOS-Z|", StringComparison.OrdinalIgnoreCase) &&
+                    shift.PosReportStoreIdentity != PortalZReportHistory.Identity(portalStoreName, targetDate, batch, shift.PosReportPath))
+                    throw new InvalidOperationException(
+                        $"Batch {batch} on {targetDate:M/d/yyyy} conflicts with an existing unverified report. " +
+                        "No existing shift was overwritten. Collect store recovery evidence for this row.");
                 shift.PosReportKey = reportKey;
                 shift.PosReportPath = storedPath;
                 shift.CreatedByName ??= "Automatic POS Portal Sync";
@@ -2567,6 +2439,7 @@ internal static class PortalSyncService
 
             // Keep any manager-entered cash drop, payout, and reason intact
             // when a retry refreshes the source report totals.
+            shift.PosReportStoreIdentity = PortalZReportHistory.Identity(portalStoreName, targetDate, batch, shift.PosReportPath);
             shift.Date = targetDate;
             shift.ShiftNo = batch;
             shift.Employee = employee;

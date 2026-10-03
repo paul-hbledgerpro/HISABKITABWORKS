@@ -22,9 +22,13 @@ internal static class PortalSyncRecoveryPolicy
         utcNow - lastSuccessUtc.Value >= ZBatchRecheckInterval;
 
     public static List<long> PendingZBatches(
-        IEnumerable<long> portalBatches, IReadOnlySet<long> importedBatches, bool historical)
+        IEnumerable<long> portalBatches, IReadOnlySet<long> importedBatches, bool historical, long? historicalAnchor = null)
     {
         var missing = portalBatches.Distinct().Where(batch => !importedBatches.Contains(batch));
+        // Backfill resumes after the last verified batch before its date range,
+        // rather than treating unrelated or contaminated rows as its cursor.
+        if (historical && historicalAnchor.HasValue)
+            return missing.Where(batch => batch > historicalAnchor.Value).OrderBy(batch => batch).ToList();
         if (historical || importedBatches.Count == 0)
             return missing.OrderByDescending(batch => batch).ToList();
 
