@@ -986,6 +986,9 @@ internal static class PortalSyncService
                                 batch);
                         }
 
+                        // Outside the PDF parsing fallback: a wrong-store PDF
+                        // must never be retried as a rendered-text import.
+                        PortalStoreIsolationPolicy.ValidateZReportStore(report.SourceReportText, settings.PortalStoreName);
                         var actualDate = report.ReportDate!.Value;
                         if (historicalZBackfill)
                         {
@@ -1015,6 +1018,7 @@ internal static class PortalSyncService
                                 dataStoreId,
                                 feedPath,
                                 actualDate,
+                                settings.PortalStoreName,
                                 cancellationToken);
                         }
                         else
@@ -1027,6 +1031,7 @@ internal static class PortalSyncService
                                     report,
                                     generated.ScreenshotPath),
                                 actualDate,
+                                settings.PortalStoreName,
                                 cancellationToken);
                         }
 
@@ -1351,6 +1356,8 @@ internal static class PortalSyncService
             () => IsPortalHomeReadyAsync(page),
             TimeSpan.FromSeconds(60),
             "AdventPOS did not reach the store home page. A verification code, CAPTCHA, or password update may require attention.");
+        var signedInStore = await page.EvaluateExpressionAsync<string>("localStorage.getItem('StoreName') || ''");
+        PortalStoreIsolationPolicy.ValidateSummaryStore(signedInStore, settings.PortalStoreName);
     }
 
     private static async Task WaitForOwnerLoginAsync(IPage page, TimeSpan timeout)
@@ -1476,7 +1483,8 @@ internal static class PortalSyncService
                 if (typeof window.UserAnotherAccount_Clicked === 'function')
                     window.UserAnotherAccount_Clicked();
 
-                return (option.textContent || '').trim();
+                const selected = select.options[select.selectedIndex];
+                return selected && selected.value === option.value ? (selected.textContent || '').trim() : '';
             }",
             selectedIndex, names[selectedIndex]);
 
@@ -2131,8 +2139,10 @@ internal static class PortalSyncService
         string sourcePath,
         DateOnly targetDate)
     {
-        var matchingBatches = new PosReportImportService()
-            .ImportZReports(sourcePath)
+        var reports = new PosReportImportService().ImportZReports(sourcePath);
+        foreach (var report in reports)
+            PortalStoreIsolationPolicy.ValidateZReportStore(report.SourceReportText, settings.PortalStoreName);
+        var matchingBatches = reports
             .Where(report =>
                 report.ReportDate == targetDate &&
                 !string.IsNullOrWhiteSpace(report.ShiftOrBatch))
@@ -2466,6 +2476,7 @@ internal static class PortalSyncService
         int storeId,
         string sourcePath,
         DateOnly targetDate,
+        string portalStoreName,
         CancellationToken cancellationToken)
     {
         ValidateZReports(sourcePath, targetDate);
@@ -2474,6 +2485,9 @@ internal static class PortalSyncService
             .OrderBy(report => NumericBatchOrder(report.ShiftOrBatch))
             .ThenBy(report => report.ShiftOrBatch, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        foreach (var report in reports)
+            PortalStoreIsolationPolicy.ValidateZReportStore(report.SourceReportText, portalStoreName);
 
         var sourceBytes = await File.ReadAllBytesAsync(sourcePath, cancellationToken);
         var sourceHash = Convert.ToHexString(SHA256.HashData(sourceBytes));
@@ -2494,6 +2508,7 @@ internal static class PortalSyncService
             reports,
             storedPath,
             targetDate,
+            portalStoreName,
             cancellationToken);
     }
 
@@ -2503,6 +2518,7 @@ internal static class PortalSyncService
         int storeId,
         CapturedZReport captured,
         DateOnly targetDate,
+        string portalStoreName,
         CancellationToken cancellationToken)
     {
         if (captured.Report.ReportDate != targetDate ||
@@ -2512,6 +2528,7 @@ internal static class PortalSyncService
                 $"The captured Z report was not valid for {targetDate:M/d/yyyy}.");
         }
 
+        PortalStoreIsolationPolicy.ValidateZReportStore(captured.Report.SourceReportText, portalStoreName);
         var sourceBytes = await File.ReadAllBytesAsync(captured.SourcePath, cancellationToken);
         var sourceHash = Convert.ToHexString(SHA256.HashData(sourceBytes));
         var reportFolder = Path.Combine(
@@ -2534,6 +2551,7 @@ internal static class PortalSyncService
             [captured.Report],
             storedPath,
             targetDate,
+            portalStoreName,
             cancellationToken);
     }
 
@@ -2543,8 +2561,13 @@ internal static class PortalSyncService
         IReadOnlyList<PosReportData> reports,
         string storedPath,
         DateOnly targetDate,
+        string portalStoreName,
         CancellationToken cancellationToken)
     {
+        // Validate the entire collection before tracking or saving any rows.
+        foreach (var report in reports)
+            PortalStoreIsolationPolicy.ValidateZReportStore(report.SourceReportText, portalStoreName);
+
         var imported = 0;
         var updated = 0;
         foreach (var report in reports)
@@ -2834,8 +2857,9 @@ internal static class PortalSyncService
         {
             var directory = Path.Combine(AppBootstrap.AppDataPath, "Logs");
             Directory.CreateDirectory(directory);
+            var runningVersion = typeof(PortalSyncService).Assembly.GetName().Version;
             var line =
-                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{result.BusinessName}\t{(result.Success ? "OK" : "FAILED")}\t{result.Message}{Environment.NewLine}";
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{result.BusinessName}\t{(result.Success ? "OK" : "FAILED")}\t{result.Message}\t[version={runningVersion}; pid={Environment.ProcessId}]{Environment.NewLine}";
             File.AppendAllText(Path.Combine(directory, "pos-portal-sync.log"), line);
         }
         catch

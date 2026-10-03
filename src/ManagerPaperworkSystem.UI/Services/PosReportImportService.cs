@@ -14,7 +14,12 @@ public sealed record PosReportData(
     decimal NetSales,
     decimal TaxTotal,
     string DetectedType
-);
+)
+{
+    // Preserve the source header for automatic import verification. Manual
+    // imports retain their existing behavior; no identity is inferred from filenames.
+    public string SourceReportText { get; init; } = "";
+}
 
 /// <summary>
 /// Imports POS reports from either XLSX or PDF.
@@ -281,7 +286,10 @@ public sealed class PosReportImportService
         // Card total: use Credit/Debit total
         var cardTotal = MoneyOrZero(RegexMatch1(text, @"Credit/Debit:?\s*\$?\s*([0-9,]+\.[0-9]{2})"));
 
-        return new PosReportData(startDate ?? endDate, employee, batch, cashTotal, cardTotal, netSales, tax, "Z Report");
+        return new PosReportData(startDate ?? endDate, employee, batch, cashTotal, cardTotal, netSales, tax, "Z Report")
+        {
+            SourceReportText = text
+        };
     }
 
     private static PosReportData ParseEndOfShiftFromText(string text)
