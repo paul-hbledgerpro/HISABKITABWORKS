@@ -16,8 +16,8 @@ internal static class PortalSyncRecoveryPolicy
         utcNow - lastAttemptUtc.Value >= RetryInterval;
 
     public static bool ShouldCheckZBatches(DateOnly? lastReportDate, DateTime? lastSuccessUtc,
-        DateOnly dueThrough, DateTime utcNow) =>
-        !lastReportDate.HasValue || lastReportDate < dueThrough ||
+        DateOnly dueThrough, DateTime utcNow, bool targetDatePresent) =>
+        !targetDatePresent || !lastReportDate.HasValue || lastReportDate < dueThrough ||
         !lastSuccessUtc.HasValue || lastSuccessUtc > utcNow ||
         utcNow - lastSuccessUtc.Value >= ZBatchRecheckInterval;
 

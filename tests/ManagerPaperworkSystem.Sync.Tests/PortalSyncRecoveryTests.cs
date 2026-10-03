@@ -97,9 +97,19 @@ public sealed class PortalSyncRecoveryTests
     [Fact]
     public void ZBatchCheckRetriesLateRegistersEvenWhenYesterdayWasAlreadySuccessful()
     {
-        Assert.False(PortalSyncRecoveryPolicy.ShouldCheckZBatches(Through, NowUtc.AddHours(-1), Through, NowUtc));
-        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(Through, NowUtc.AddHours(-4), Through, NowUtc));
-        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(Through.AddDays(-1), NowUtc.AddHours(-1), Through, NowUtc));
-        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(null, null, Through, NowUtc));
+        Assert.False(PortalSyncRecoveryPolicy.ShouldCheckZBatches(Through, NowUtc.AddHours(-1), Through, NowUtc, targetDatePresent: true));
+        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(Through, NowUtc.AddHours(-4), Through, NowUtc, targetDatePresent: true));
+        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(Through.AddDays(-1), NowUtc.AddHours(-1), Through, NowUtc, targetDatePresent: true));
+        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(null, null, Through, NowUtc, targetDatePresent: true));
+    }
+    [Fact]
+    public void StaleSuccessCannotSuppressRetryWhenDatabaseHasNoReportsForDueDate()
+    {
+        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(
+            Through, NowUtc.AddMinutes(-1), Through, NowUtc, targetDatePresent: false));
+        Assert.True(PortalSyncRecoveryPolicy.ShouldCheckZBatches(
+            Through.AddDays(1), NowUtc.AddMinutes(-1), Through, NowUtc, targetDatePresent: false));
+        Assert.False(PortalSyncRecoveryPolicy.ShouldCheckZBatches(
+            Through, NowUtc.AddMinutes(-1), Through, NowUtc, targetDatePresent: true));
     }
 }

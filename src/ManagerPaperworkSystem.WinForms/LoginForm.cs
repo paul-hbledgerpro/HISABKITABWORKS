@@ -1125,6 +1125,18 @@ internal sealed class LoginLeftPanel : Panel
     {
         DoubleBuffered = true;
         ResizeRedraw = true;
+        Controls.Add(new Label
+        {
+            Name = "InstalledVersion",
+            Text = $"Version {AppUpdateStartupService.CurrentVersion}",
+            AutoSize = true,
+            Location = new Point(16, 8),
+            Padding = new Padding(10, 5, 10, 5),
+            Font = WinTheme.BoldFont(12),
+            ForeColor = Color.White,
+            BackColor = WinTheme.BlueDark,
+            AccessibleName = "Installed HISAB KITAB version"
+        });
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)

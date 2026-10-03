@@ -371,15 +371,17 @@ internal static class PortalSyncService
                     }
                     else
                     {
-                        pendingDates = reportKind == PortalSyncReportKind.CashSalesSummary
-                            ? await GetPendingCashSummaryDatesAsync(
-                                settings,
-                                dueThrough,
-                                cancellationToken)
-                            : !force && !PortalSyncRecoveryPolicy.ShouldCheckZBatches(
-                                settings.LastZReportDate, settings.LastZReportSuccessUtc, dueThrough, nowUtc)
-                                ? []
-                                : [dueThrough];
+                        if (reportKind == PortalSyncReportKind.CashSalesSummary)
+                        {
+                            pendingDates = await GetPendingCashSummaryDatesAsync(settings, dueThrough, cancellationToken);
+                        }
+                        else
+                        {
+                            var coverage = await GetTargetStatusAsync(settings, dueThrough, cancellationToken);
+                            pendingDates = force || PortalSyncRecoveryPolicy.ShouldCheckZBatches(
+                                settings.LastZReportDate, settings.LastZReportSuccessUtc, dueThrough, nowUtc,
+                                targetDatePresent: coverage.ZReportCount > 0) ? [dueThrough] : [];
+                        }
                     }
                     if (!force &&
                         pendingDates.Count == 0)
@@ -1179,6 +1181,17 @@ internal static class PortalSyncService
             throw new InvalidOperationException(
                 $"Z Report sync did not complete. {zReportsError.Message}{cursorDetails}",
                 zReportsError);
+        }
+
+        if (!historicalStartDate.HasValue && !historicalEndDate.HasValue)
+        {
+            var coverage = await GetTargetStatusAsync(settings, targetDate, cancellationToken);
+            if (coverage.ZReportCount == 0)
+                return new PortalSyncRunResult(settings.BusinessName, false, zResult.Imported > 0,
+                    $"Z Report sync is still pending for {targetDate:M/d/yyyy}: no Z-report shifts for that date " +
+                    "were found in this store database after checking the portal. " +
+                    $"This attempt imported {zResult.Imported} new and refreshed {zResult.Updated} shift(s) for other dates. " +
+                    "Check the Close-Out report Start Date in AdventPOS. Automatic retry remains enabled.");
         }
 
         var zReportDescription = zResult.Total > 0
@@ -2397,6 +2410,7 @@ internal static class PortalSyncService
                 .AsNoTracking()
                 .Where(item =>
                     item.StoreId == dataStoreId &&
+                    item.Date == targetDate &&
                     item.PosReportKey != null &&
                     item.PosReportKey.StartsWith(keyPrefix))
                 .Select(item => item.PosReportKey)

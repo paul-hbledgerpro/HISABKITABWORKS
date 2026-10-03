@@ -340,13 +340,16 @@ internal sealed partial class MainForm : Form
         try
         {
             var results = await PortalSyncService.RunDueAsync(_paths, force: false, visibleChrome: false);
-            var message = results.LastOrDefault()?.Message;
-            if (!string.IsNullOrWhiteSpace(message) && !IsDisposed)
-                BeginInvoke(() => _status.Text = message);
+            var result = results.FirstOrDefault(item => !item.Success) ?? results.LastOrDefault();
+            if (result is not null && !IsDisposed)
+                BeginInvoke(() => _status.Text = $"{result.BusinessName}: {result.Message}");
         }
-        catch
+        catch (Exception exception)
         {
-            // The recovery timer, scheduled task and next startup retry automatically.
+            var message = "Automatic POS sync needs attention: " + AppBootstrap.RedactSensitiveText(exception.Message);
+            PortalSyncService.WriteDiagnostic("", false, message);
+            if (!IsDisposed && !Disposing)
+                BeginInvoke(() => _status.Text = message);
         }
     }
 
