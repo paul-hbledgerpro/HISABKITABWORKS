@@ -150,6 +150,8 @@ internal sealed partial class MainForm : Form
         _invoiceEmailSyncTimer.Tick += async (_, _) => await BeginDueInvoiceEmailSyncAsync();
         _portalSyncRecoveryTimer.Tick += async (_, _) => await BeginDuePosPortalSyncAsync();
         _backfillResultTimer.Tick += (_, _) => ShowBackfillResult();
+        _backfillResultTimer.Tick += async (_, _) => await ShowPendingResultAsync();
+        _backfillResultTimer.Tick += async (_, _) => await PromptOpeningCashAsync();
         FormClosed += (_, _) =>
         {
             _monthlyDeliveryTimer.Stop();
@@ -764,6 +766,10 @@ internal sealed partial class MainForm : Form
         settings.DropDownItems.Add(new ToolStripSeparator());
         settings.DropDownItems.Add(MenuItem("Change Password...", (_, _) => OpenForm<ChangePasswordForm>()));
         settings.DropDownItems.Add(MenuItem("User Accounts...", (_, _) => OpenAdminForm<UserAccountsForm>()));
+        var appearance=new ToolStripMenuItem("Appearance");
+        foreach(var choice in new[]{"Light","Dark","Follow Windows"})appearance.DropDownItems.Add(MenuItem(choice,(_,_)=>{try{ThemePreferences.Set(choice);}catch(Exception ex){MessageBox.Show(this,ex.Message,"Appearance");}}));
+        settings.DropDownItems.Add(appearance);
+        settings.DropDownItems.Add(MenuItem("Month Close / History...",async(_,_)=>await ManageLedgerMonthAsync()));
 
         var help = new ToolStripMenuItem("Help") { ForeColor = Color.White };
         var updateItem = MenuItem("Check for Updates...", async (_, _) => await AppUpdateStartupService.CheckManuallyAsync(this));
@@ -955,6 +961,8 @@ internal sealed partial class MainForm : Form
 
     private void ShowModule(string module)
     {
+        if (_ledgerPeriodMode == 0) { _ledgerFrom = LedgerMonthService.Month(DateOnly.FromDateTime(DateTime.Today)); _ledgerTo = DateOnly.FromDateTime(DateTime.Today); }
+
         _currentModule = module;
         _pendingModuleActivation = null;
         foreach (var kvp in _navButtons)
@@ -992,9 +1000,12 @@ internal sealed partial class MainForm : Form
             };
             ConfigureResponsiveModuleActionBars(control);
             ApplyLightModuleTheme(control);
+            if(module is "Shift Cash Drop" or "Cash On Hand" or "Check Payout" or "Cash & Sales Summary") control=AddLedgerPeriodBar(control,module);
+            ThemePreferences.ApplyTree(control);
             if (LicenseRuntime.IsReadOnly)
                 ApplyReadOnlyMode(control);
             _content.Controls.Add(control);
+            if(module=="Cash On Hand")_content.BeginInvoke(new Action(async()=>await PromptOpeningCashAsync()));
             var activation = _pendingModuleActivation;
             _pendingModuleActivation = null;
             if (activation is not null)
@@ -1485,7 +1496,7 @@ internal sealed partial class MainForm : Form
         var kpis = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1, BackColor = WinTheme.Bg };
         for (var i = 0; i < 4; i++)
             kpis.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        kpis.Controls.Add(KpiCard("Cash On Hand", cash.Sum(x => x.CashAdded - x.PayoutAmount).ToString("C"), "Current store balance", WinTheme.Copper), 0, 0);
+        kpis.Controls.Add(KpiCard("Cash On Hand", LedgerMonthService.BalanceThrough(cash, DateOnly.FromDateTime(DateTime.Today)).ToString("C"), "Current store balance", WinTheme.Copper), 0, 0);
         kpis.Controls.Add(KpiCard("Uncleared Checks", checks.Where(x => !x.Cleared).Sum(x => x.CheckAmount).ToString("C"), "Pending payouts", WinTheme.Red), 1, 0);
         kpis.Controls.Add(KpiCard("Monthly Payouts", (cash.Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).Sum(x => x.PayoutAmount) + checks.Where(x => x.Date.Month == now.Month && x.Date.Year == now.Year).Sum(x => x.CheckAmount)).ToString("C"), "Cash + check payouts", WinTheme.Copper), 2, 0);
         kpis.Controls.Add(KpiCard("Sales Summary", shifts.Sum(x => x.NetSales).ToString("C"), "This month", WinTheme.Green), 3, 0);
@@ -2152,7 +2163,7 @@ internal sealed partial class MainForm : Form
                 .ToDictionary(
                     group => group.Key,
                     group => group.OrderByDescending(item => item.CreatedUtc).First().Id);
-            grid.DataSource = rows
+            grid.DataSource = rows.Where(x => x.Date >= _ledgerFrom && x.Date <= _ledgerTo)
                 .OrderByDescending(x => x.Date)
                 .ThenBy(x => NumericBatchOrder(x.ShiftNo))
                 .ThenBy(x => x.CreatedUtc)
@@ -2196,7 +2207,7 @@ internal sealed partial class MainForm : Form
 
             var value = Convert.ToDecimal(e.Value ?? 0m, CultureInfo.CurrentCulture);
             if (e.CellStyle is not null)
-                e.CellStyle.ForeColor = value > 0 ? WinTheme.Green : value < 0 ? WinTheme.Red : WinTheme.Text;
+                e.CellStyle.ForeColor = ThemePreferences.Ink(value > 0 ? WinTheme.Green : value < 0 ? WinTheme.Red : WinTheme.Text);
         };
         void clearImported()
         {
@@ -2439,11 +2450,16 @@ internal sealed partial class MainForm : Form
                 CreatedByName = _session.DisplayName,
                 CreatedUtc = DateTime.UtcNow
             };
-            db.ShiftLogs.Add(correctionEntry);
-            await db.SaveChangesAsync();
-            await SyncShiftLogAccountingAsync(oldDate);
-            if (correctionEntry.Date != oldDate)
-                await SyncShiftLogAccountingAsync(correctionEntry.Date);
+            try
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+                db.ShiftLogs.Add(correctionEntry);
+                await db.SaveChangesAsync();
+                await SyncShiftLogAccountingAsync(oldDate, db);
+                if (correctionEntry.Date != oldDate) await SyncShiftLogAccountingAsync(correctionEntry.Date, db);
+                await transaction.CommitAsync();
+            }
+            catch (Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message), "Shift Cash Drop"); return; }
             refresh();
             MessageBox.Show(this, "Correction saved. The original remains in history and is excluded from calculations.", "Shift Cash Drop", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -2489,11 +2505,17 @@ internal sealed partial class MainForm : Form
                 return;
             }
 
-            entry.CashDropReceived = Money(drop.Text);
-            entry.RegisterPayout = payoutAmount;
-            entry.PayoutReason = reason.Text.Trim();
-            await db.SaveChangesAsync();
-            await SyncShiftLogAccountingAsync(entry.Date);
+            try
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+                entry.CashDropReceived = Money(drop.Text);
+                entry.RegisterPayout = payoutAmount;
+                entry.PayoutReason = reason.Text.Trim();
+                await db.SaveChangesAsync();
+                await SyncShiftLogAccountingAsync(entry.Date, db);
+                await transaction.CommitAsync();
+            }
+            catch (Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message), "Shift Cash Drop"); return; }
             refresh();
             clearAllShiftFields();
             if (string.IsNullOrWhiteSpace(DemoRuntime.PresentationDirectory))
@@ -2561,6 +2583,10 @@ internal sealed partial class MainForm : Form
         dashboard.Click += (_, _) => ShowModule("Dashboard");
         actions.Controls.Add(dashboard);
         var saveDrop = MockActionButton("", "Select Auto-Synced Row", true, 245);
+        var recordDrop=MockActionButton("","Record Shift Drop",true,200);
+        recordDrop.Click+=async(_,_)=>await RecordShiftDropAsync();actions.Controls.Add(recordDrop);
+        var pendingDrops=MockActionButton("","Pending Shift Drops",false,200);
+        pendingDrops.Click+=async(_,_)=>await ShowPendingDropsAsync();actions.Controls.Add(pendingDrops);
         saveDropButton = saveDrop;
         saveDrop.Enabled = false;
         saveDrop.Click += async (_, _) => await saveSelectedCashDropAsync();
@@ -2712,7 +2738,7 @@ internal sealed partial class MainForm : Form
             var today = DateOnly.FromDateTime(DateTime.Today);
             var monthStart = new DateOnly(today.Year, today.Month, 1);
             var nextMonth = monthStart.AddMonths(1);
-            grid.DataSource = rows.OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
+            grid.DataSource = rows.Where(x => x.Date >= _ledgerFrom && x.Date <= _ledgerTo).OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
                 .Select(x => new
                 {
                     x.Id,
@@ -2733,10 +2759,10 @@ internal sealed partial class MainForm : Form
                     Reference = x.Reference
                 })
                 .ToList();
-            currentBalance.Text = effectiveRows.Sum(x => x.CashAdded - x.PayoutAmount).ToString("C2");
+            currentBalance.Text = LedgerMonthService.BalanceThrough(effectiveRows, _ledgerTo).ToString("C2");
             todayAdded.Text = effectiveRows.Where(x => !x.IsPayout && x.Date == today).Sum(x => x.CashAdded).ToString("C2");
             pendingPayouts.Text = effectiveRows.Where(x => x.IsPayout && x.Date >= monthStart && x.Date < nextMonth).Sum(x => x.PayoutAmount).ToString("C2");
-            openingBalance.Text = effectiveRows.Where(x => x.Date < today).Sum(x => x.CashAdded - x.PayoutAmount).ToString("C2");
+            openingBalance.Text = LedgerMonthService.OpeningForRange(effectiveRows, _ledgerFrom).ToString("C2");
             closingBalance.Text = currentBalance.Text;
             HideId(grid);
         }
@@ -2751,36 +2777,8 @@ internal sealed partial class MainForm : Form
         async Task setCarryForwardAsync()
         {
             using var db = CreateDb();
-            var amount = Money(carryForward.Text);
-            var today = DateTime.Today;
-            var firstDay = new DateOnly(today.Year, today.Month, 1);
-            var existing = await db.CashOnHand
-                .Where(x => x.StoreId == _currentStoreId && x.Date == firstDay && x.Reference == "CARRY_FORWARD" && !x.IsCorrection)
-                .OrderByDescending(x => x.Id)
-                .FirstOrDefaultAsync();
-            if (existing is null)
-            {
-                db.CashOnHand.Add(new CashOnHandEntry
-                {
-                    StoreId = _currentStoreId,
-                    Date = firstDay,
-                    CashAdded = amount,
-                    IsPayout = false,
-                    PayoutAmount = 0m,
-                    Description = "Carry Forward (Start of Month)",
-                    Reference = "CARRY_FORWARD",
-                    CreatedByUserId = _session.UserId,
-                    CreatedByName = _session.DisplayName
-                });
-            }
-            else
-            {
-                existing.CashAdded = amount;
-                existing.IsPayout = false;
-                existing.PayoutAmount = 0m;
-                existing.Description = "Carry Forward (Start of Month)";
-            }
-            await db.SaveChangesAsync();
+            await LedgerMonthService.SetOpeningAsync(db, _currentStoreId,
+                DateOnly.FromDateTime(DateTime.Today), Money(carryForward.Text), _session.UserId, _session.DisplayName);
             await refreshAsync();
         }
 
@@ -2995,7 +2993,10 @@ internal sealed partial class MainForm : Form
             layout.Controls.Add(saveCarry);
             dialog.Controls.Add(layout);
             if (dialog.ShowDialog(this) == DialogResult.OK)
-                await setCarryForwardAsync();
+            {
+                try { await setCarryForwardAsync(); }
+                catch(Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message), "Opening Cash"); }
+            }
             layout.Controls.Remove(carryForward);
         };
         actions.Controls.Add(setCarry);
@@ -3170,7 +3171,7 @@ internal sealed partial class MainForm : Form
             refreshingChecks = true;
             using var db = CreateDb();
             var rows = db.CheckPayouts.AsNoTracking().Where(x => x.StoreId == _currentStoreId).ToList();
-            grid.DataSource = rows.OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
+            grid.DataSource = rows.Where(x => x.Date >= _ledgerFrom && x.Date <= _ledgerTo).OrderByDescending(x => x.Date).ThenByDescending(x => x.Id)
                 .Select(x => new CheckPayoutGridRow
                 {
                     Id = x.Id,
@@ -3557,7 +3558,7 @@ internal sealed partial class MainForm : Form
                 todayShifts.Sum(x => x.CashDropReceived),
                 todayShifts.Count,
                 todayShifts.Sum(x => x.NetSales),
-                cash.Sum(x => x.CashAdded - x.PayoutAmount),
+                LedgerMonthService.BalanceThrough(cash, DateOnly.FromDateTime(DateTime.Today)),
                 monthCash.Sum(x => x.CashAdded),
                 monthCash.Where(x => x.IsPayout).Sum(x => x.PayoutAmount),
                 checks.Count(x => !x.Cleared),
@@ -9331,7 +9332,7 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
                 .ToListAsync();
 
             foreach (var date in dates.OrderBy(x => x))
-                await SyncShiftLogAccountingAsync(date);
+                await SyncShiftLogAccountingAsync(date, requirePayoutConsistency: false);
         }
         finally
         {
@@ -9339,10 +9340,18 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
         }
     }
 
-    private async Task SyncShiftLogAccountingAsync(DateOnly date)
+    private async Task SyncShiftLogAccountingAsync(DateOnly date, AppDbContext? existingDb = null, bool requirePayoutConsistency = true)
     {
-        await SyncShiftLogCashDropsToCashOnHandAsync(date);
-        await SyncShiftLogCashDropsToCashSalesSummaryAsync(date);
+        if (existingDb is not null)
+        {
+            await SyncShiftLogCashDropsToCashOnHandAsync(date, existingDb);
+            await CashDropRollupService.SyncDateAsync(existingDb, _currentStoreId, date, _session.UserId, _session.DisplayName, requirePayoutConsistency: requirePayoutConsistency);
+            return;
+        }
+        await using var db = CreateDb();
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        await SyncShiftLogAccountingAsync(date, db, requirePayoutConsistency);
+        await transaction.CommitAsync();
     }
 
     private async Task SyncShiftLogCashDropsToCashSalesSummaryAsync(DateOnly date)
@@ -9359,11 +9368,14 @@ ImportedUtc=datetime('now'), CreatedByName=excluded.CreatedByName;";
             _session.DisplayName);
     }
 
-    private async Task SyncShiftLogCashDropsToCashOnHandAsync(DateOnly date)
+    private async Task SyncShiftLogCashDropsToCashOnHandAsync(DateOnly date, AppDbContext? existingDb = null)
     {
         if (_currentStoreId <= 0) return;
 
-        using var db = CreateDb();
+        using var ownedDb = existingDb is null ? CreateDb() : null;
+        var db = existingDb ?? ownedDb!;
+        var month = LedgerMonthService.Month(date);
+        if (await db.LedgerMonths.AnyAsync(x => x.StoreId == _currentStoreId && x.Month == month && x.IsClosed)) return;
         var rows = await db.ShiftLogs
             .Where(x => x.StoreId == _currentStoreId)
             .OrderBy(x => x.CreatedUtc)
@@ -9549,7 +9561,7 @@ internal sealed class OperationsSparkline : Control
             _caption,
             WinTheme.BoldFont(7),
             captionRect,
-            WinTheme.Muted,
+            ThemePreferences.Ink(WinTheme.Muted),
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
         var graph = new Rectangle(8, 19, Math.Max(20, Width - 16), Math.Max(12, Height - 24));
@@ -9562,7 +9574,7 @@ internal sealed class OperationsSparkline : Control
                 "No activity",
                 WinTheme.BodyFont(7),
                 graph,
-                WinTheme.Muted,
+                ThemePreferences.Ink(WinTheme.Muted),
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
             return;
         }
@@ -9678,10 +9690,10 @@ internal sealed class KpiCardPanel : Panel
         var valueRect = new Rectangle(inner.Left, inner.Top + 20, inner.Width, Math.Max(46, inner.Height - 42));
         var subRect = new Rectangle(inner.Left, inner.Bottom - 22, inner.Width, 22);
 
-        TextRenderer.DrawText(e.Graphics, _title, WinTheme.BoldFont(10), titleRect, WinTheme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        TextRenderer.DrawText(e.Graphics, _title, WinTheme.BoldFont(10), titleRect, ThemePreferences.Ink(WinTheme.Text), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         using var valueFont = FitFont(e.Graphics, _value, WinTheme.HeaderFont(34), valueRect.Size);
         TextRenderer.DrawText(e.Graphics, _value, valueFont, valueRect, _valueColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(e.Graphics, _subtitle, WinTheme.BodyFont(9), subRect, WinTheme.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        TextRenderer.DrawText(e.Graphics, _subtitle, WinTheme.BodyFont(9), subRect, ThemePreferences.Ink(WinTheme.Muted), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
     private static Font FitFont(Graphics graphics, string text, Font preferred, Size available)
@@ -9720,7 +9732,7 @@ internal sealed class SalesLineChart : Control
         using var axisPen = new Pen(Color.FromArgb(75, 94, 112));
         using var linePen = new Pen(Color.FromArgb(229, 126, 45), 3);
         using var fillBrush = new SolidBrush(Color.FromArgb(229, 126, 45));
-        using var labelBrush = new SolidBrush(WinTheme.Muted);
+        using var labelBrush = new SolidBrush(ThemePreferences.Ink(WinTheme.Muted));
 
         for (var i = 0; i <= 4; i++)
         {
@@ -9732,7 +9744,7 @@ internal sealed class SalesLineChart : Control
 
         if (_points.Count == 0)
         {
-            TextRenderer.DrawText(e.Graphics, "No sales data for this month", WinTheme.BodyFont(11), area, WinTheme.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(e.Graphics, "No sales data for this month", WinTheme.BodyFont(11), area, ThemePreferences.Ink(WinTheme.Muted), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
 
@@ -9783,7 +9795,7 @@ internal sealed class DonutBreakdownControl : Control
         var total = _items.Sum(x => x.Value);
         if (total <= 0)
         {
-            TextRenderer.DrawText(e.Graphics, "No payout data for this month", WinTheme.BodyFont(11), ClientRectangle, WinTheme.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(e.Graphics, "No payout data for this month", WinTheme.BodyFont(11), ClientRectangle, ThemePreferences.Ink(WinTheme.Muted), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
 
@@ -9803,8 +9815,8 @@ internal sealed class DonutBreakdownControl : Control
             start += sweep;
         }
 
-        TextRenderer.DrawText(e.Graphics, "Total", WinTheme.BodyFont(10), new Rectangle(donut.Left, donut.Top + donut.Height / 2 - 28, donut.Width, 24), WinTheme.Muted, TextFormatFlags.HorizontalCenter);
-        TextRenderer.DrawText(e.Graphics, total.ToString("C0"), WinTheme.HeaderFont(15), new Rectangle(donut.Left, donut.Top + donut.Height / 2 - 4, donut.Width, 32), WinTheme.Text, TextFormatFlags.HorizontalCenter);
+        TextRenderer.DrawText(e.Graphics, "Total", WinTheme.BodyFont(10), new Rectangle(donut.Left, donut.Top + donut.Height / 2 - 28, donut.Width, 24), ThemePreferences.Ink(WinTheme.Muted), TextFormatFlags.HorizontalCenter);
+        TextRenderer.DrawText(e.Graphics, total.ToString("C0"), WinTheme.HeaderFont(15), new Rectangle(donut.Left, donut.Top + donut.Height / 2 - 4, donut.Width, 32), ThemePreferences.Ink(WinTheme.Text), TextFormatFlags.HorizontalCenter);
 
         var legendX = donut.Right + 34;
         var legendY = donut.Top + 6;
@@ -9815,9 +9827,9 @@ internal sealed class DonutBreakdownControl : Control
             using var swatch = new SolidBrush(item.Color);
             e.Graphics.FillRectangle(swatch, legendX, y + 5, 13, 13);
             var percent = item.Value / total;
-            TextRenderer.DrawText(e.Graphics, item.Label, WinTheme.BodyFont(10), new Rectangle(legendX + 24, y, Math.Max(120, Width - legendX - 180), 24), WinTheme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(e.Graphics, item.Value.ToString("C0"), WinTheme.BoldFont(10), new Rectangle(Width - 154, y, 78, 24), WinTheme.Text, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(e.Graphics, percent.ToString("P1"), WinTheme.BodyFont(10), new Rectangle(Width - 70, y, 58, 24), WinTheme.Muted, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(e.Graphics, item.Label, WinTheme.BodyFont(10), new Rectangle(legendX + 24, y, Math.Max(120, Width - legendX - 180), 24), ThemePreferences.Ink(WinTheme.Text), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(e.Graphics, item.Value.ToString("C0"), WinTheme.BoldFont(10), new Rectangle(Width - 154, y, 78, 24), ThemePreferences.Ink(WinTheme.Text), TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(e.Graphics, percent.ToString("P1"), WinTheme.BodyFont(10), new Rectangle(Width - 70, y, 58, 24), ThemePreferences.Ink(WinTheme.Muted), TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
         }
     }
 }

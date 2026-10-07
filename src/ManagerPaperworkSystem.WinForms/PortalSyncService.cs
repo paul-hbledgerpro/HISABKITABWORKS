@@ -34,7 +34,7 @@ internal sealed record CapturedZReport(PosReportData Report, string SourcePath);
 internal sealed record PortalTargetStatus(bool CashSummaryPresent, int ZReportCount);
 internal sealed record PortalSyncScheduleResult(bool WindowsTaskCreated, string Message);
 
-internal static class PortalSyncService
+internal static partial class PortalSyncService
 {
     private const string LegacyTaskName = "HISAB KITAB - Daily POS Report Sync";
     private const string StartupRunName = "HISAB KITAB POS Report Sync";
@@ -347,6 +347,10 @@ internal static class PortalSyncService
                         continue;
                     if (!settings.IsEnabled(reportKind) && !historicalBackfill)
                         continue;
+                    if(reportKind==PortalSyncReportKind.ZReports && !historicalBackfill) {
+                        var pending=await ProcessPendingDropsAsync(settings,paths,cancellationToken);
+                        if(pending.Count>0) results.AddRange(pending);
+                    }
                     var nowUtc = DateTime.UtcNow;
                     var lastAttempt = reportKind == PortalSyncReportKind.CashSalesSummary
                         ? settings.LastCashSummaryAttemptUtc
@@ -672,7 +676,7 @@ internal static class PortalSyncService
         DateOnly? historicalStartDate,
         DateOnly? historicalEndDate,
         CancellationToken cancellationToken,
-        IProgress<string>? progress)
+        IProgress<string>? progress, string? requestedBatch = null)
     {
         Exception? lastError = null;
         var maximumAttempts = 3;
@@ -689,7 +693,7 @@ internal static class PortalSyncService
                     historicalStartDate,
                     historicalEndDate,
                     cancellationToken,
-                    progress);
+                    progress, requestedBatch);
             }
             catch (OperationCanceledException)
             {
@@ -722,7 +726,7 @@ internal static class PortalSyncService
         DateOnly? historicalStartDate,
         DateOnly? historicalEndDate,
         CancellationToken cancellationToken,
-        IProgress<string>? progress)
+        IProgress<string>? progress, string? requestedBatch = null)
     {
         progress?.Report($"Preparing {settings.BusinessName} {ReportDisplayName(reportKind)} for {targetDate:M/d/yyyy}...");
         using var auditScope = ActivityAuditContext.BeginSystem("Automatic POS Portal Sync");
@@ -885,6 +889,10 @@ internal static class PortalSyncService
                     var candidateBatches = PortalSyncRecoveryPolicy.PendingZBatches(
                             batchesByNumber.Keys, importedZBatches, historicalZBackfill, historicalAnchor)
                         .Select(number => batchesByNumber[number]).ToList();
+                    if(requestedBatch is not null) {
+                        candidateBatches=numericPortalBatches.Where(x=>x.Number==long.Parse(requestedBatch,CultureInfo.InvariantCulture)).ToList();
+                        if(candidateBatches.Count!=1) throw new InvalidOperationException($"Batch {requestedBatch} is not available in this store's portal yet. The cash entry is still waiting.");
+                    }
 
                     var checkedBatches = 0;
                     foreach (var candidate in candidateBatches)
@@ -960,7 +968,7 @@ internal static class PortalSyncService
                         {
                             if (actualDate > targetDate)
                                 continue;
-                            if (!hadImportedZBatches && actualDate != targetDate)
+                            if (requestedBatch is null && !hadImportedZBatches && actualDate != targetDate)
                                 continue;
                         }
 

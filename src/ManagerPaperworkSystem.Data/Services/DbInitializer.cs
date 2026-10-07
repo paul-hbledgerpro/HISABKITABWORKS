@@ -39,6 +39,7 @@ public static class DbInitializer
 
         // Run migrations for new columns (safe to run multiple times)
         await RunMigrationsAsync(db, ct);
+        await LedgerWorkflowSchema.EnsureAsync(db, ct);
 
         // Ensure Settings row exists
         if (!await db.Settings.AnyAsync(ct))

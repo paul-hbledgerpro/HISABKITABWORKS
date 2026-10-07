@@ -1,13 +1,17 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "1.0.174"
+    [string]$Version = "1.0.176"
 )
 
 $ErrorActionPreference = "Stop"
 
 $installerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = (Resolve-Path (Join-Path $installerDir "..")).Path
+$releaseHighlights = Get-Content -LiteralPath (Join-Path $root 'src/ManagerPaperworkSystem.WinForms/ReleaseHighlights.json') -Raw | ConvertFrom-Json
+if ($releaseHighlights.Version -ne $Version -or @($releaseHighlights.Features).Count -eq 0) {
+    throw "Update ReleaseHighlights.json for version $Version before building a release."
+}
 $publishRoot = Join-Path $installerDir "publish"
 $releaseDir = Join-Path $installerDir "release"
 $innoDir = Join-Path $installerDir "InnoSetup"

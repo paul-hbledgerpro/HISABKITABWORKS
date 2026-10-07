@@ -47,9 +47,9 @@ internal sealed partial class MainForm
         filterCard.Controls.Add(filters);
 
         var from = WinTheme.DatePicker();
-        from.Value = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        from.Value = _ledgerFrom.ToDateTime(TimeOnly.MinValue);
         var to = WinTheme.DatePicker();
-        to.Value = DateTime.Today;
+        to.Value = _ledgerTo.ToDateTime(TimeOnly.MinValue);
         filters.Controls.Add(FilterLabel("FROM"), 0, 0);
         filters.Controls.Add(from, 1, 0);
         filters.Controls.Add(FilterLabel("TO"), 2, 0);
@@ -161,7 +161,7 @@ internal sealed partial class MainForm
         var footer = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 4,
+            ColumnCount = 5,
             RowCount = 1,
             BackColor = WinTheme.Bg
         };
@@ -173,7 +173,7 @@ internal sealed partial class MainForm
 
         var status = new Label
         {
-            Text = "Cash & Sales reports sync independently. Cash drop is the combined total entered against that day's Z-report batches in Shift Cash Drop.",
+            Text = "Cash & Sales reports sync independently. Cash drop and payouts come from that day's Shift Cash Drop batches. Edit shift payouts in Shift Cash Drop.",
             Dock = DockStyle.Fill,
             ForeColor = WinTheme.Muted,
             Font = WinTheme.BodyFont(9),
@@ -199,7 +199,32 @@ internal sealed partial class MainForm
         shiftLog.Click += (_, _) => ShowModule("Shift Cash Drop");
         footer.Controls.Add(shiftLog, 3, 0);
 
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
+        var useShiftPayouts = WinTheme.Button("USE SHIFT PAYOUTS");
+        useShiftPayouts.Dock = DockStyle.Fill;
+        useShiftPayouts.Visible = false;
+        footer.Controls.Add(useShiftPayouts, 4, 0);
         int? selectedSummaryId = null;
+        useShiftPayouts.Click += async (_, _) =>
+        {
+            if (!_session.IsAdmin || LicenseRuntime.IsReadOnly || selectedSummaryId is null) return;
+            if (MessageBox.Show(this, "Replace this daily summary's separately entered payout with the matching shift payouts? Review the amounts first. Pending shift entries can then be recorded again.", "Use Shift Payouts", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try
+            {
+                await using var db = CreateDb();
+                await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+                var summary = await db.PosSalesSummaries.SingleAsync(x => x.Id == selectedSummaryId && x.StoreId == _currentStoreId);
+                if (summary.ReportFrom != summary.ReportTo) throw new InvalidOperationException("Select a daily summary.");
+                var previous = await db.ShiftPayoutRollups.SingleOrDefaultAsync(x => x.SummaryId == summary.Id);
+                if (previous is not null) db.ShiftPayoutRollups.Remove(previous);
+                summary.RegisterPayout = 0; summary.PayoutReason = "";
+                await db.SaveChangesAsync();
+                await CashDropRollupService.SyncDateAsync(db, _currentStoreId, summary.ReportTo, _session.UserId, _session.DisplayName);
+                await transaction.CommitAsync();
+                await RefreshAsync();
+            }
+            catch(Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message), "Cash Reconciliation"); }
+        };
 
         void UpdateVariance(decimal expected)
         {
@@ -253,6 +278,9 @@ internal sealed partial class MainForm
             cashDrop.Text = summary.CashDropReceived.ToString("0.00", CultureInfo.CurrentCulture);
             registerPayout.Text = summary.RegisterPayout.ToString("0.00", CultureInfo.CurrentCulture);
             payoutReason.Text = summary.PayoutReason;
+            var shiftManagedPayout = await db.ShiftPayoutRollups.AnyAsync(x => x.SummaryId == summary.Id);
+            registerPayout.ReadOnly = payoutReason.ReadOnly = shiftManagedPayout;
+            useShiftPayouts.Visible = _session.IsAdmin && (summary.RegisterPayout != 0 || summary.PayoutReason.Length > 0) && !shiftManagedPayout;
             UpdateVariance(summary.CashSales);
             saveReconciliation.Enabled = true;
             resetReconciliation.Enabled = true;
@@ -468,15 +496,20 @@ internal sealed partial class MainForm
             if (summary is null)
                 return;
 
-            summary.RegisterPayout = payoutAmount;
-            summary.PayoutReason = payoutReason.Text.Trim();
-            await db.SaveChangesAsync();
-            await CashDropRollupService.SyncDateAsync(
-                db,
-                _currentStoreId,
-                summary.ReportTo,
-                _session.UserId,
-                _session.DisplayName);
+            try
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+                var shiftManaged = await db.ShiftPayoutRollups.AnyAsync(x => x.SummaryId == summary.Id);
+                if (!shiftManaged)
+                {
+                    summary.RegisterPayout = payoutAmount;
+                    summary.PayoutReason = payoutReason.Text.Trim();
+                    await db.SaveChangesAsync();
+                }
+                await CashDropRollupService.SyncDateAsync(db, _currentStoreId, summary.ReportTo, _session.UserId, _session.DisplayName);
+                await transaction.CommitAsync();
+            }
+            catch (Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message), "Cash Reconciliation"); return; }
 
             await RefreshAsync();
             status.Text = $"Cash summary reconciled. Expected {summary.CashSales:C2}; accounted for " +

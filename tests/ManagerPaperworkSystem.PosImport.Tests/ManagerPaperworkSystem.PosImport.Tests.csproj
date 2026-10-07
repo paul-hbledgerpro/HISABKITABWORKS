@@ -17,5 +17,8 @@
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalZReportHistory.cs" Link="PortalZReportHistory.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalStoreIsolationPolicy.cs" Link="PortalStoreIsolationPolicy.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalSyncRecoveryPolicy.cs" Link="PortalSyncRecoveryPolicy.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/ShiftDropWorkflow.cs" Link="ShiftDropWorkflow.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/LedgerMonthService.cs" Link="LedgerMonthService.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/CashDropRollupService.cs" Link="CashDropRollupService.cs" />
   </ItemGroup>
 </Project>

@@ -173,6 +173,8 @@ internal static class Program
                 return;
             }
 
+            WhatsNewStartupService.ShowOnce();
+
             var retryStartup = true;
             while (retryStartup)
             {

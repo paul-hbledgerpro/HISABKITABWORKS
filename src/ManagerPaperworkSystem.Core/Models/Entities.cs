@@ -437,7 +437,7 @@ public sealed class PosSalesSummary : Entity
     [Column(TypeName = "decimal(18,2)")]
     public decimal RegisterPayout { get; set; }
 
-    [MaxLength(300)]
+    [MaxLength(4000)]
     public string PayoutReason { get; set; } = "";
 
     public bool IsReconciled { get; set; }

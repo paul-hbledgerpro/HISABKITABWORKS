@@ -1114,7 +1114,7 @@ internal sealed class LoginBackgroundPanel : Panel
         if (bounds.Width <= 0 || bounds.Height <= 0)
             return;
 
-        using var brush = new LinearGradientBrush(bounds, Color.White, WinTheme.Panel2, 0f);
+        using var brush = new LinearGradientBrush(bounds, ThemePreferences.Surface(Color.White), ThemePreferences.Surface(WinTheme.Panel2), 0f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }
@@ -1151,7 +1151,7 @@ internal sealed class LoginLeftPanel : Panel
         if (bounds.Width <= 0 || bounds.Height <= 0)
             return;
 
-        using var brush = new LinearGradientBrush(bounds, Color.FromArgb(231, 241, 252), Color.White, 90f);
+        using var brush = new LinearGradientBrush(bounds, ThemePreferences.Surface(Color.FromArgb(231, 241, 252)), ThemePreferences.Surface(Color.White), 90f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }
@@ -1170,7 +1170,7 @@ internal sealed class LoginRightPanel : Panel
         if (bounds.Width <= 0 || bounds.Height <= 0)
             return;
 
-        using var brush = new LinearGradientBrush(bounds, Color.White, Color.FromArgb(248, 251, 255), 20f);
+        using var brush = new LinearGradientBrush(bounds, ThemePreferences.Surface(Color.White), ThemePreferences.Surface(Color.FromArgb(248, 251, 255)), 20f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }

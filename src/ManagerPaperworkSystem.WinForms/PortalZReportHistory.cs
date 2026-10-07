@@ -25,6 +25,7 @@ internal static class PortalZReportHistory
             .Where(row => row.StoreId == storeId && row.PosSalesSummaryId == null && !row.IsCorrection)
             .Select(row => new { row.Id, row.Date, row.ShiftNo, row.PosReportKey, row.PosReportPath, row.PosReportStoreIdentity })
             .ToListAsync(cancellationToken);
+        var closedMonths = (await db.LedgerMonths.AsNoTracking().Where(x => x.StoreId == storeId && x.IsClosed).Select(x => x.Month).ToListAsync(cancellationToken)).ToHashSet();
         var verified = new Dictionary<long, DateOnly>();
         var sources = new Dictionary<string, IReadOnlyList<PosReportData>>(StringComparer.OrdinalIgnoreCase);
         foreach (var row in rows)
@@ -70,6 +71,7 @@ internal static class PortalZReportHistory
                 sources[row.PosReportPath] = Array.Empty<PosReportData>();
                 continue;
             }
+            if (closedMonths.Contains(new DateOnly(row.Date.Year, row.Date.Month, 1))) { verified[batch] = row.Date; continue; }
             // Persist only provenance metadata, shared by both Windows accounts.
             // A concurrent edit invalidates this update instead of stamping stale data.
             var saved = await db.ShiftLogs.Where(item => item.Id == row.Id && item.StoreId == storeId &&

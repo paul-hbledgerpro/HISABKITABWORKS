@@ -20,6 +20,9 @@ public sealed class AppDbContext : DbContext
     public DbSet<Purpose> Purposes => Set<Purpose>();
 
     public DbSet<ShiftLogEntry> ShiftLogs => Set<ShiftLogEntry>();
+    public DbSet<PendingShiftDrop> PendingShiftDrops => Set<PendingShiftDrop>();
+    public DbSet<LedgerMonth> LedgerMonths => Set<LedgerMonth>();
+    public DbSet<ShiftPayoutRollup> ShiftPayoutRollups => Set<ShiftPayoutRollup>();
     public DbSet<CashOnHandEntry> CashOnHand => Set<CashOnHandEntry>();
     public DbSet<CheckPayout> CheckPayouts => Set<CheckPayout>();
     public DbSet<PosSalesSummary> PosSalesSummaries => Set<PosSalesSummary>();
@@ -43,6 +46,10 @@ public sealed class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<PendingShiftDrop>().HasIndex(x => x.RequestId).IsUnique();
+        modelBuilder.Entity<PendingShiftDrop>().HasIndex(x => new {x.StoreId,x.Batch});
+        modelBuilder.Entity<LedgerMonth>().HasIndex(x => new {x.StoreId,x.Month}).IsUnique();
+        modelBuilder.Entity<ShiftPayoutRollup>().HasIndex(x => x.SummaryId).IsUnique();
 
         // Map entity names to SQL Server table names
         modelBuilder.Entity<AppSettings>().ToTable("AppSettings");
@@ -51,10 +58,10 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<Store>().ToTable("Stores");
         modelBuilder.Entity<Vendor>().ToTable("Vendors");
         modelBuilder.Entity<Purpose>().ToTable("Purposes");
-        modelBuilder.Entity<ShiftLogEntry>().ToTable("ShiftLogs");
-        modelBuilder.Entity<CashOnHandEntry>().ToTable("CashOnHand");
-        modelBuilder.Entity<CheckPayout>().ToTable("CheckPayouts");
-        modelBuilder.Entity<PosSalesSummary>().ToTable("PosSalesSummaries");
+        modelBuilder.Entity<ShiftLogEntry>().ToTable("ShiftLogs", t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<CashOnHandEntry>().ToTable("CashOnHand", t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<CheckPayout>().ToTable("CheckPayouts", t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<PosSalesSummary>().ToTable("PosSalesSummaries", t => t.UseSqlOutputClause(false));
         modelBuilder.Entity<PosSalesTenderLine>().ToTable("PosSalesTenderLines");
         modelBuilder.Entity<PosSalesHourlyLine>().ToTable("PosSalesHourlyLines");
         modelBuilder.Entity<PosSalesDepartmentLine>().ToTable("PosSalesDepartmentLines");

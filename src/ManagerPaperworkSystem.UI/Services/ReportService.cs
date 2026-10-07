@@ -112,9 +112,9 @@ public sealed class ReportService : IReportService
             .OrderBy(x => x.Date)
             .ToListAsync(ct);
 
-        var eff = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc)
-            .Where(x => x.Date >= from && x.Date <= to).ToList();
-        SelectedOptionReportPdf.GenerateCashOnHand(storeName, storeAddress, from, to, eff, outputPdfPath);
+        var history = EffectiveRows(entries, x => x.IsCorrection, x => x.CorrectsId, x => x.Id, x => x.CreatedUtc).ToList();
+        var eff = history.Where(x => x.Date >= from && x.Date <= to).ToList();
+        SelectedOptionReportPdf.GenerateCashOnHand(storeName, storeAddress, from, to, eff, outputPdfPath, history);
     }
 
     public async Task GenerateCashOnHandSummaryPdfAsync(DateOnly from, DateOnly to, string outputPdfPath, CancellationToken ct = default)

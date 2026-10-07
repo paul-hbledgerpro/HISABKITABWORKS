@@ -1,0 +1,33 @@
+{
+  "Version": "1.0.176",
+  "Features": [
+    {
+      "Title": "Record Shift Drop in one small window",
+      "Description": "Enter the batch, cash drop, payout and reason. Press Enter or OK to save for your selected store."
+    },
+    {
+      "Title": "Missing batches are retrieved in the background",
+      "Description": "Your entry waits safely while the matching store’s Z report is retrieved. See Pending Shift Drops."
+    },
+    {
+      "Title": "See OVER, SHORT or BALANCED immediately",
+      "Description": "After the report is available, overages show in green and shortages in red."
+    },
+    {
+      "Title": "Shift payouts flow into Cash & Sales Summary",
+      "Description": "Payouts and reasons transfer by store and date. Separate summary payouts stay available for owner review."
+    },
+    {
+      "Title": "Choose Light, Dark or Follow Windows",
+      "Description": "Find your theme under Settings → Appearance. Your preference is remembered."
+    },
+    {
+      "Title": "Close a month and review its history",
+      "Description": "Use Settings → Month Close / History. Review closed records through Period → Previous Month or Custom."
+    },
+    {
+      "Title": "Start each month with opening cash",
+      "Description": "Enter monthly opening cash in Cash On Hand. New drops and payouts update it without counting the old balance twice."
+    }
+  ]
+}

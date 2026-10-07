@@ -1,3 +1,4 @@
+using ManagerPaperworkSystem.Core.Services;
 using System.Globalization;
 using ManagerPaperworkSystem.Core.Models;
 using QuestPDF.Fluent;
@@ -88,10 +89,13 @@ public static class SelectedOptionReportPdf
         });
     }
 
-    public static void GenerateCashOnHand(string storeName, string storeAddress, DateOnly from, DateOnly to, IReadOnlyList<CashOnHandEntry> entries, string outputPath)
+    public static void GenerateCashOnHand(string storeName, string storeAddress, DateOnly from, DateOnly to, IReadOnlyList<CashOnHandEntry> entries, string outputPath, IReadOnlyList<CashOnHandEntry>? balanceHistory = null)
     {
         var rows = (entries ?? Array.Empty<CashOnHandEntry>()).OrderBy(x => x.Date).ThenBy(x => x.CreatedUtc).ToList();
-        var added = rows.Sum(x => x.CashAdded);
+        var history = balanceHistory ?? rows;
+        var opening = CashBalanceCalculator.OpeningForRange(history, from);
+        var closing = CashBalanceCalculator.BalanceThrough(history, to);
+        var added = rows.Where(x => x.Reference != "CARRY_FORWARD").Sum(x => x.CashAdded);
         var payout = rows.Where(x => x.IsPayout).Sum(x => x.PayoutAmount);
 
         Create(outputPath, PageSizes.Letter.Landscape(), page =>
@@ -102,10 +106,10 @@ public static class SelectedOptionReportPdf
                 col.Spacing(8);
                 col.Item().Row(row =>
                 {
-                    Metric(row, "Opening Balance", Money(0), "Beginning selected period", Copper);
+                    Metric(row, "Opening Balance", Money(opening), "Beginning selected period", Copper);
                     Metric(row, "Cash Added", Money(added), "Selected period", Green);
                     Metric(row, "Payouts", Money(payout), "Cash payouts", Red);
-                    Metric(row, "Closing", Money(added - payout), "Expected", added - payout < 0 ? Red : Green);
+                    Metric(row, "Closing", Money(closing), "After opening cash resets", closing < 0 ? Red : Green);
                 });
                 col.Item().Element(c => Table(c,
                     new[] { "Date", "Cash Added", "Is Payout", "Payout", "Vendor", "Purpose", "Description", "Check #" },
@@ -247,7 +251,7 @@ public static class SelectedOptionReportPdf
                 {
                     Metric(row, "Sales Summary", "Ready", Money(shifts.Sum(x => x.NetSales)), Green);
                     Metric(row, "Shift Log", "Ready", $"{shifts.Count} entries", Green);
-                    Metric(row, "Cash On Hand", "Ready", Money(cash.Sum(x => x.CashAdded - x.PayoutAmount)), Green);
+                    Metric(row, "Cash On Hand", "Ready", Money(CashBalanceCalculator.BalanceThrough(cash, to)), Green);
                 });
                 col.Item().Row(row =>
                 {

@@ -25,6 +25,7 @@ internal static class WinTheme
 
     public static void Apply(Form form)
     {
+        ThemePreferences.Attach(form);
         form.BackColor = Bg;
         form.ForeColor = Text;
         form.Font = BodyFont();

@@ -14,5 +14,6 @@
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalSyncSettings.cs" Link="PortalSyncSettings.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalStoreIsolationPolicy.cs" Link="PortalStoreIsolationPolicy.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalBackfillResults.cs" Link="PortalBackfillResults.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/WhatsNewStateStore.cs" Link="WhatsNewStateStore.cs" />
   </ItemGroup>
 </Project>

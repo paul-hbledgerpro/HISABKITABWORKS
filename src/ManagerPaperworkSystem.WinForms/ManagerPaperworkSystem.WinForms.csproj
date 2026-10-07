@@ -20,6 +20,10 @@
     <ProjectReference Include="..\ManagerPaperworkSystem.Reports\ManagerPaperworkSystem.Reports.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="ReleaseHighlights.json" LogicalName="HisabKitab.ReleaseHighlights.json" />
+  </ItemGroup>
+
   <!-- The WebView2 SDK includes both WinForms and WPF references. This app only
        uses WinForms; removing the unused WPF assembly avoids a WindowsBase
        reference conflict in .NET 8 builds. -->
