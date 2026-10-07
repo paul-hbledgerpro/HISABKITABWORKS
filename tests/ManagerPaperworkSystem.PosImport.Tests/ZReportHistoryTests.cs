@@ -34,6 +34,25 @@ public sealed class ZReportHistoryTests : IAsyncLifetime
     { SourceReportText = $"{name}\n20 S STATE ST\nELGIN, IL\nZ-Report\nRegister Number: 2\nBatch: {batch}\nStart Date: {date:MM/dd/yyyy}" };
 
     [Fact]
+    public async Task SingleBatchLookupUsesSavedPostalIdentityWithoutReadingOtherReports()
+    {
+        await using var db = Db();
+        var row = Row("2998", September, "original-profile.pdf");
+        row.PosReportStoreIdentity = PortalZReportHistory.Identity(Galaxy, row.Date, row.ShiftNo, row.PosReportPath);
+        db.ShiftLogs.AddRange(row, Row("2999", September, "unrelated.pdf"), Row("2998", September, "other-store.pdf", 2));
+        await db.SaveChangesAsync();
+        var reads = 0;
+        var history = await PortalZReportHistory.LoadAsync(db, 1, "GALAXY SMOKE SHOP (ELGIN,IL)", default,
+            _ => { reads++; return []; }, batchNumber: "2998");
+        Assert.Equal(new long[] { 2998 }, history.Keys);
+        Assert.Equal(0, reads);
+        Assert.Equal(row.PosReportStoreIdentity, (await db.ShiftLogs.AsNoTracking().SingleAsync(x => x.Id == row.Id)).PosReportStoreIdentity);
+        Assert.False(PortalZReportHistory.MatchesIdentity(row.PosReportStoreIdentity, Other, row.Date, row.ShiftNo, row.PosReportPath));
+        Assert.False(PortalZReportHistory.MatchesIdentity(row.PosReportStoreIdentity, "GALAXY SMOKE SHOP (ELGIN, IL - 60124)", row.Date, row.ShiftNo, row.PosReportPath));
+        Assert.False(PortalZReportHistory.MatchesIdentity(row.PosReportStoreIdentity, "GALAXY SMOKE SHOP (ELGIN,IL)", row.Date, row.ShiftNo, "changed.pdf"));
+    }
+
+    [Fact]
     public async Task Contaminated1551And1820CannotHideGalaxyNextBatches()
     {
         await using var db = Db();

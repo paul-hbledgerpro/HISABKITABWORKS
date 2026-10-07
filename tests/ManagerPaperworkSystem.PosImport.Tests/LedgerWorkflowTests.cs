@@ -50,22 +50,23 @@ public class LedgerWorkflowTests
             db.ShiftLogs.AddRange(Shift(1,"1551",portal),Shift(2,"1551","ELGIN SMOKE SHOP"),Shift(1,"1552","ELGIN SMOKE SHOP"));
             db.PosSalesSummaries.AddRange(new PosSalesSummary{StoreId=1,ReportFrom=day,ReportTo=day,CashSales=200},new PosSalesSummary{StoreId=2,ReportFrom=day,ReportTo=day,CashSales=100});
             await db.SaveChangesAsync(); db.ChangeTracker.Clear();
-            var request=await ShiftDropWorkflow.RecordAsync(db,1,config,portal,"1551",90,10,"Supplies",1,"Owner",false);
+            var request=await ShiftDropWorkflow.RecordAsync(db,1,config,"GALAXY SMOKE SHOP (ELGIN,IL)","1551",90,10,"Supplies",1,"Owner",false);
             Assert.Equal("Applied",request.Status); Assert.Equal(0,request.Variance);
-            await ShiftDropWorkflow.ApplyAsync(db,request.Id,portal); // retry must not add cash/payout again
+            await ShiftDropWorkflow.ApplyAsync(db,request.Id,"GALAXY SMOKE SHOP (ELGIN,IL)"); // retry must not add cash/payout again
             db.ChangeTracker.Clear();
             var summary=await db.PosSalesSummaries.SingleAsync(x=>x.StoreId==1);
             Assert.Equal(90,summary.CashDropReceived); Assert.Equal(10,summary.RegisterPayout); Assert.Contains("1551: Supplies",summary.PayoutReason);
             Assert.Equal(0,(await db.ShiftLogs.SingleAsync(x=>x.StoreId==2)).CashDropReceived);
             Assert.Equal(0,(await db.PosSalesSummaries.SingleAsync(x=>x.StoreId==2)).RegisterPayout);
+            Assert.Equal(90,(await db.ShiftLogs.SingleAsync(x => x.StoreId == 1 && x.ShiftNo == "1551")).CashDropReceived);
             Assert.Equal(90,(await db.CashOnHand.SingleAsync()).CashAdded); Assert.Equal(0,(await db.CashOnHand.SingleAsync()).PayoutAmount);
-            var waiting=await ShiftDropWorkflow.RecordAsync(db,1,config,portal,"1552",85,10,"Ice",1,"Owner",false);
+            var waiting=await ShiftDropWorkflow.RecordAsync(db,1,config,"GALAXY SMOKE SHOP (ELGIN,IL)","1552",85,10,"Ice",1,"Owner",false);
             Assert.Equal("Pending",waiting.Status); Assert.Equal(3,await db.ShiftLogs.CountAsync());
             waiting.NotifiedUtc=DateTime.UtcNow;await db.SaveChangesAsync();
             await Assert.ThrowsAsync<InvalidOperationException>(()=>ShiftDropWorkflow.RecordAsync(db,1,config,portal,"1552",1,0,"",1,"Owner",false)); db.ChangeTracker.Clear();
             await Assert.ThrowsAsync<InvalidOperationException>(()=>ShiftDropWorkflow.ApplyAsync(db,waiting.Id,"ELGIN SMOKE SHOP")); db.ChangeTracker.Clear();
             db.ShiftLogs.Add(Shift(1,"1552",portal)); await db.SaveChangesAsync();
-            await ShiftDropWorkflow.ApplyAsync(db,waiting.Id,portal); db.ChangeTracker.Clear();
+            await ShiftDropWorkflow.ApplyAsync(db,waiting.Id,"GALAXY SMOKE SHOP (ELGIN,IL)"); db.ChangeTracker.Clear();
             Assert.Equal(-5,(await db.PendingShiftDrops.SingleAsync(x=>x.Id==waiting.Id)).Variance);
             Assert.Null((await db.PendingShiftDrops.SingleAsync(x=>x.Id==waiting.Id)).NotifiedUtc);
             summary=await db.PosSalesSummaries.SingleAsync(x=>x.StoreId==1);

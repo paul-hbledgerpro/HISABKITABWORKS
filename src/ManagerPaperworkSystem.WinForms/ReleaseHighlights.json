@@ -1,13 +1,13 @@
 {
-  "Version": "1.0.176",
+  "Version": "1.0.177",
   "Features": [
     {
       "Title": "Record Shift Drop in one small window",
-      "Description": "Enter the batch, cash drop, payout and reason. Press Enter or OK to save for your selected store."
+      "Description": "Next to Dashboard: enter the batch, drop, payout and reason. Existing verified batches update the grid and Cash On Hand immediately, including setups with an omitted ZIP code."
     },
     {
       "Title": "Missing batches are retrieved in the background",
-      "Description": "Your entry waits safely while the matching store’s Z report is retrieved. See Pending Shift Drops."
+      "Description": "Recording a drop checks only its batch for faster saving. Only genuinely missing or unverified reports need retrieval. Existing pending entries retry automatically."
     },
     {
       "Title": "See OVER, SHORT or BALANCED immediately",

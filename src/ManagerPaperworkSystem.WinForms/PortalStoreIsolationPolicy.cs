@@ -11,11 +11,23 @@ internal static class PortalStoreIsolationPolicy
         .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark && char.IsLetterOrDigit(c))
         .Select(char.ToUpperInvariant).ToArray());
 
+    // Only a complete name and city/state may omit the postal code. Never use
+    // substring matching: differently named stores and cities remain distinct.
+    public static bool MatchesNormalizedStore(string configuredName, string normalizedStore)
+    {
+        var wanted = Normalize(configuredName);
+        if (wanted.Length == 0) return false;
+        if (wanted == normalizedStore) return true;
+        if (!Regex.IsMatch(configuredName, @"\([A-Za-z .'-]+,\s*[A-Za-z]{2}\)\s*$")) return false;
+        return normalizedStore.StartsWith(wanted, StringComparison.Ordinal)
+            && Regex.IsMatch(normalizedStore[wanted.Length..], @"^\d{5}(?:\d{4})?$");
+    }
+
     public static int SelectExactStore(string configuredName, IReadOnlyList<string> names)
     {
         var wanted = Normalize(configuredName);
         var matches = Enumerable.Range(0, names.Count)
-            .Where(i => wanted.Length > 0 && Normalize(names[i]) == wanted).ToArray();
+            .Where(i => wanted.Length > 0 && MatchesNormalizedStore(configuredName, Normalize(names[i]))).ToArray();
         if (matches.Length != 1)
             throw new InvalidOperationException(
                 $"Store verification failed: '{configuredName}' must match exactly one AdventPOS store. " +

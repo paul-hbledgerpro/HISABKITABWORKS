@@ -14,9 +14,18 @@ public class PortalStoreIsolationTests
             "Galaxy Smoke Shop (Carpentersville, IL - 60110)",
             "GALAXY SMOKE SHOP (ELGIN, IL - 60123)"];
         Assert.Equal(2, PortalStoreIsolationPolicy.SelectExactStore(names[2], names));
-        Assert.Throws<InvalidOperationException>(()=>PortalStoreIsolationPolicy.SelectExactStore(Elgin,names));
+        Assert.Equal(2, PortalStoreIsolationPolicy.SelectExactStore(Elgin,names));
         PortalStoreIsolationPolicy.ValidateSummaryStore("GALAXY SMOKE SHOP",names[2]);
         Assert.Throws<InvalidOperationException>(()=>PortalStoreIsolationPolicy.ValidateSummaryStore("ELGIN SMOKE SHOP",names[2]));
+    }
+
+    [Fact]
+    public void PostalOmissionCannotChooseBetweenTwoLocationsOrOverrideExplicitPostalCode()
+    {
+        string[] names = ["GALAXY SMOKE SHOP (ELGIN, IL - 60123)", "GALAXY SMOKE SHOP (ELGIN, IL - 60124)"];
+        Assert.Throws<InvalidOperationException>(() => PortalStoreIsolationPolicy.SelectExactStore(Elgin, names));
+        Assert.Equal(0, PortalStoreIsolationPolicy.SelectExactStore(names[0], names));
+        Assert.Throws<InvalidOperationException>(() => PortalStoreIsolationPolicy.SelectExactStore("GALAXY SMOKE SHOP (ELGIN, IL - 60125)", names));
     }
 
     [Fact]

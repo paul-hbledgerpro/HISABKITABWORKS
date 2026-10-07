@@ -18,7 +18,7 @@ internal static class ShiftDropWorkflow
     {
         batch = long.TryParse(batch, out var number) ? number.ToString(System.Globalization.CultureInfo.InvariantCulture) : batch;
         Validate(batch, drop, payout, reason);
-        await PortalZReportHistory.LoadAsync(db, storeId, portalStore, CancellationToken.None);
+        await PortalZReportHistory.LoadAsync(db, storeId, portalStore, CancellationToken.None, batchNumber: batch);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var request = await db.PendingShiftDrops.SingleOrDefaultAsync(x => x.StoreId == storeId && x.Batch == batch && (x.Status == "Pending" || x.Status == "Attention"));
         if (request is not null) throw new InvalidOperationException("This batch already has a waiting entry. Open Pending Shift Drops to review or cancel it first.");
@@ -33,6 +33,9 @@ internal static class ShiftDropWorkflow
     public static async Task ApplyAsync(AppDbContext db, int requestId, string portalStore)
     {
         db.ChangeTracker.Clear();
+        var pending = await db.PendingShiftDrops.AsNoTracking().SingleAsync(x => x.Id == requestId);
+        if (pending.Status != "Pending") return;
+        await PortalZReportHistory.LoadAsync(db, pending.StoreId, portalStore, CancellationToken.None, batchNumber: pending.Batch);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var request = await db.PendingShiftDrops.SingleAsync(x => x.Id == requestId);
         if (request.Status != "Pending") return;
@@ -44,12 +47,12 @@ internal static class ShiftDropWorkflow
     private static async Task ApplyCoreAsync(AppDbContext db, PendingShiftDrop request, string portalStore, bool allowReplace)
     {
         if (PortalStoreIsolationPolicy.Normalize(request.PortalStoreName) != PortalStoreIsolationPolicy.Normalize(portalStore)) throw new InvalidOperationException("The saved portal store changed. Review this pending entry before applying it.");
-        var prefix = "Z1|" + PortalStoreIsolationPolicy.Normalize(portalStore) + "|";
-        var matches = await db.ShiftLogs.Where(x => x.StoreId == request.StoreId && x.ShiftNo == request.Batch && !x.IsCorrection && x.PosSalesSummaryId == null && x.PosReportStoreIdentity.StartsWith(prefix)).ToListAsync();
+        var candidates = await db.ShiftLogs.Where(x => x.StoreId == request.StoreId && x.ShiftNo == request.Batch && !x.IsCorrection && x.PosSalesSummaryId == null).ToListAsync();
+        var matches = candidates.Where(x => PortalZReportHistory.MatchesIdentity(x.PosReportStoreIdentity, portalStore, x.Date, x.ShiftNo, x.PosReportPath)).ToList();
         if (matches.Count == 0) return;
         if (matches.Count != 1) throw new InvalidOperationException("More than one report matches this batch. Select the dated shift in Shift Cash Drop.");
         var shift = matches[0];
-        if (shift.PosReportStoreIdentity != PortalZReportHistory.Identity(portalStore, shift.Date, shift.ShiftNo, shift.PosReportPath)) throw new InvalidOperationException("The report identity needs review before recording cash.");
+        if (!PortalZReportHistory.MatchesIdentity(shift.PosReportStoreIdentity, portalStore, shift.Date, shift.ShiftNo, shift.PosReportPath)) throw new InvalidOperationException("The report identity needs review before recording cash.");
         if (await db.ShiftLogs.AnyAsync(x => x.StoreId == request.StoreId && x.CorrectsId == shift.Id)) throw new InvalidOperationException("This shift has a correction. Use the existing correction workflow.");
         if (await db.LedgerMonths.AnyAsync(x => x.StoreId == request.StoreId && x.Month == new DateOnly(shift.Date.Year, shift.Date.Month, 1) && x.IsClosed)) throw new InvalidOperationException("This shift belongs to a closed month. Ask an owner to reopen that month.");
         if (!allowReplace && (shift.CashDropReceived != 0 || shift.RegisterPayout != 0 || shift.PayoutReason.Length > 0 || await db.PendingShiftDrops.AnyAsync(x => x.StoreId == request.StoreId && x.ShiftId == shift.Id && x.Status == "Applied"))) throw new InvalidOperationException("This shift already has entered cash information. Review it before replacing amounts.");

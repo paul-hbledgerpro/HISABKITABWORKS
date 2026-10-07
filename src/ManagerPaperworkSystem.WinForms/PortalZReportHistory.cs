@@ -16,13 +16,23 @@ internal static class PortalZReportHistory
         IdentityPrefix(portalStore, date) + batch.Trim() + "|" + Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(sourcePath.Trim().Replace('/', '\\').ToUpperInvariant())));
 
+    public static bool MatchesIdentity(string identity, string portalStore, DateOnly date, string batch, string path)
+    {
+        var parts = (identity ?? "").Split('|');
+        if (parts.Length != 5 || parts[0] != "Z1" ||
+            !PortalStoreIsolationPolicy.MatchesNormalizedStore(portalStore, parts[1])) return false;
+        var expected = Identity(portalStore, date, batch, path).Split('|');
+        return parts[2] == expected[2] && parts[3] == expected[3] && parts[4] == expected[4];
+    }
+
     public static async Task<Dictionary<long, DateOnly>> LoadAsync(
         AppDbContext db, int storeId, string portalStore, CancellationToken cancellationToken,
-        Func<string, IReadOnlyList<PosReportData>>? readReports = null)
+        Func<string, IReadOnlyList<PosReportData>>? readReports = null, string? batchNumber = null)
     {
         readReports ??= new PosReportImportService().ImportZReports;
         var rows = await db.ShiftLogs.AsNoTracking()
-            .Where(row => row.StoreId == storeId && row.PosSalesSummaryId == null && !row.IsCorrection)
+            .Where(row => row.StoreId == storeId && row.PosSalesSummaryId == null && !row.IsCorrection &&
+                (batchNumber == null || row.ShiftNo == batchNumber))
             .Select(row => new { row.Id, row.Date, row.ShiftNo, row.PosReportKey, row.PosReportPath, row.PosReportStoreIdentity })
             .ToListAsync(cancellationToken);
         var closedMonths = (await db.LedgerMonths.AsNoTracking().Where(x => x.StoreId == storeId && x.IsClosed).Select(x => x.Month).ToListAsync(cancellationToken)).ToHashSet();
@@ -34,7 +44,7 @@ internal static class PortalZReportHistory
             if (!long.TryParse(row.ShiftNo?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var batch))
                 continue;
             var identity = Identity(portalStore, row.Date, row.ShiftNo!, row.PosReportPath);
-            if (row.PosReportStoreIdentity == identity)
+            if (MatchesIdentity(row.PosReportStoreIdentity, portalStore, row.Date, row.ShiftNo!, row.PosReportPath))
             {
                 verified[batch] = row.Date;
                 continue;
@@ -53,7 +63,7 @@ internal static class PortalZReportHistory
             {
                 if (!sources.TryGetValue(row.PosReportPath, out var reports))
                 {
-                    reports = readReports(row.PosReportPath);
+                    reports = await Task.Run(() => readReports(row.PosReportPath), cancellationToken);
                     // A mixed-store source file is not proof for any of its rows.
                     foreach (var report in reports)
                         PortalStoreIsolationPolicy.ValidateZReportStore(report.SourceReportText, portalStore);
