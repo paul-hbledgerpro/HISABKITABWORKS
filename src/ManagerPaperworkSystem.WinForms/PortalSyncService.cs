@@ -275,6 +275,9 @@ internal static partial class PortalSyncService
                 throw new InvalidOperationException("Historical backfill must target one licensed store and one report type.");
         }
 
+        if (historicalBackfill)
+            WriteProgressLog("", $"Background backfill {onlyStoreConfigurationId:D}: " +
+                $"{historicalStartDate:M/d/yyyy} through {historicalEndDate:M/d/yyyy}; waiting for the sync slot.");
         var waitTimeout = existingRunWaitTimeout ?? TimeSpan.FromMinutes(3);
         var gateAcquired = waitForExistingRun
             ? await RunGate.WaitAsync(waitTimeout, cancellationToken)
@@ -310,6 +313,8 @@ internal static partial class PortalSyncService
                 }
             }
 
+            if (historicalBackfill)
+                WriteProgressLog("", $"Background backfill {onlyStoreConfigurationId:D}: sync slot acquired; starting.");
             var document = PortalSyncSettingsStore.Load();
             var results = new List<PortalSyncRunResult>();
             var configuredStores = document.Stores
@@ -870,8 +875,10 @@ internal static partial class PortalSyncService
 
                     // The selected database may contain legacy wrong-store rows.
                     // Only source-verified history can suppress a portal batch.
+                    WriteProgressLog(settings.BusinessName, "Z sync: verifying this store's imported batch history.");
                     var history = await PortalZReportHistory.LoadAsync(
-                        db, dataStoreId, settings.PortalStoreName, cancellationToken);
+                        db, dataStoreId, settings.PortalStoreName, cancellationToken,
+                        batchNumber: requestedBatch);
                     var portalNumbers = numericPortalBatches.Select(item => item.Number).ToHashSet();
                     var importedZBatches = history.Keys.Where(portalNumbers.Contains).ToHashSet();
                     latestImportedZBatch = importedZBatches.Count > 0 ? importedZBatches.Max() : null;
@@ -894,12 +901,20 @@ internal static partial class PortalSyncService
                         if(candidateBatches.Count!=1) throw new InvalidOperationException($"Batch {requestedBatch} is not available in this store's portal yet. The cash entry is still waiting.");
                     }
 
+                    var mode = requestedBatch is not null ? $"requested batch {requestedBatch}" :
+                        historicalZBackfill ? $"backfill {historicalStartDate:M/d/yyyy} through {historicalEndDate:M/d/yyyy}" : "automatic catch-up";
+                    WriteProgressLog(settings.BusinessName,
+                        $"Z {mode}: portal batches {portalNumbers.Count}; verified imported {importedZBatches.Count}; " +
+                        $"date-range anchor {historicalAnchor?.ToString(CultureInfo.InvariantCulture) ?? "none"}; " +
+                        $"candidates {candidateBatches.Count}; first batches {string.Join(", ", candidateBatches.Take(12).Select(item => item.Batch))}.");
                     var checkedBatches = 0;
                     foreach (var candidate in candidateBatches)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        progress?.Report($"Checking Z batch {++checkedBatches} of {candidateBatches.Count}: {candidate.Batch}. " +
-                            $"Imported {zResult.Imported}; refreshed {zResult.Updated}.");
+                        var batchProgress = $"Z {mode}: checking batch {candidate.Batch} ({++checkedBatches} of {candidateBatches.Count}); " +
+                            $"imported {zResult.Imported}; refreshed {zResult.Updated}.";
+                        progress?.Report(batchProgress);
+                        WriteProgressLog(settings.BusinessName, batchProgress);
                         var batch = candidate.Batch;
                         var batchDownloadDirectory = Path.Combine(
                             zDownloadDirectory,
@@ -959,10 +974,12 @@ internal static partial class PortalSyncService
                         var actualDate = report.ReportDate!.Value;
                         if (historicalZBackfill)
                         {
-                            if (actualDate > historicalEndDate!.Value)
+                            if (actualDate > historicalEndDate!.Value || actualDate < historicalStartDate!.Value)
+                            {
+                                WriteProgressLog(settings.BusinessName,
+                                    $"Z {mode}: batch {batch} has Start Date {actualDate:M/d/yyyy}, outside the selected range; skipped.");
                                 continue;
-                            if (actualDate < historicalStartDate!.Value)
-                                continue;
+                            }
                         }
                         else
                         {
@@ -1011,6 +1028,9 @@ internal static partial class PortalSyncService
                                 dataStoreId,
                                 actualDate,
                                 cancellationToken: cancellationToken);
+                            WriteProgressLog(settings.BusinessName,
+                                $"Z {mode}: saved batch {batch}, Start Date {actualDate:M/d/yyyy}; " +
+                                $"total imported {zResult.Imported}; refreshed {zResult.Updated}.");
                             lastProcessedZBatch = lastProcessedZBatch.HasValue
                                 ? Math.Max(lastProcessedZBatch.Value, candidate.Number)
                                 : candidate.Number;
@@ -2688,7 +2708,10 @@ internal static partial class PortalSyncService
         }
     }
 
-    private static void WriteLog(PortalSyncRunResult result)
+    private static void WriteProgressLog(string businessName, string message) =>
+        WriteLog(new PortalSyncRunResult(businessName, false, false, message), "RUNNING");
+
+    private static void WriteLog(PortalSyncRunResult result, string? state = null)
     {
         try
         {
@@ -2696,7 +2719,7 @@ internal static partial class PortalSyncService
             Directory.CreateDirectory(directory);
             var runningVersion = typeof(PortalSyncService).Assembly.GetName().Version;
             var line =
-                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{result.BusinessName}\t{(result.Success ? "OK" : "FAILED")}\t{result.Message}\t[version={runningVersion}; pid={Environment.ProcessId}; culture={CultureInfo.CurrentCulture.Name}]{Environment.NewLine}";
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{result.BusinessName}\t{state ?? (result.Success ? "OK" : "FAILED")}\t{result.Message}\t[version={runningVersion}; pid={Environment.ProcessId}; culture={CultureInfo.CurrentCulture.Name}]{Environment.NewLine}";
             File.AppendAllText(Path.Combine(directory, "pos-portal-sync.log"), line);
         }
         catch

@@ -1,0 +1,11 @@
+# HISAB KITAB WORKS 1.0.179
+
+A pending-drop retrieval can import a newer batch while earlier shifts are still missing. Automatic Z sync previously sorted every missing batch below that new maximum in ascending order, placing years-old gaps before recent missing shifts. Those old reports could fail or consume the sync time limit while a requested historical backfill waited for the same sync lock.
+
+Automatic catch-up now checks new batches in ascending order, then gaps below the highest verified batch in descending order. It still checks every eligible portal batch, excludes only this store's verified imports, and retains all receipt/store verification. Explicit date-range backfill continues ascending after its verified pre-range anchor, regardless of whether a cash drop exists. Single-batch pending-drop retrieval loads only that batch's history. No stored cash or payout values are changed by the scheduling fix.
+
+Diagnostics record backfill waiting/acquisition, history verification, candidate count/first batches, and each report checked, excluded by date, or saved. These entries use RUNNING rather than claiming completion. Backfill remains in the background with its existing completion notification.
+
+Regression tests reproduce the old ordering with pending-drop batches above an earlier verified batch, include old verified history and unavailable source history, and check complete date-range membership plus restart behavior. The earlier client diagnostic predates this run; it cannot establish whether the currently requested client backfill was waiting, active, or stopped. Live client recovery still requires confirmation.
+
+Validation: WinForms Release build passed with zero warnings/errors; 64 sync tests and 48 import/SQL tests passed without skips. The production parser accepted all 28 supplied receipt PDFs. An isolated SQL harness applied the four supplied pending-drop reports and then imported 19 explicitly synthetic missing-batch fixtures without pending drops, verifying complete fixture coverage and duplicate-safe retries. Offscreen UI checks passed for the updated release notice and existing ledger forms; the desktop application was not launched. Live portal behavior was not exercised.

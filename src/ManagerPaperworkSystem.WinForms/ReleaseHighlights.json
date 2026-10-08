@@ -1,6 +1,10 @@
 {
-  "Version": "1.0.178",
+  "Version": "1.0.179",
   "Features": [
+    {
+      "Title": "Recent missing Z reports take priority",
+      "Description": "After retrieving a batch for an entered drop, automatic sync checks the other recent missing batches before older history. Date-range backfill includes missing reports even when no drop has been entered."
+    },
     {
       "Title": "Z reports with named registers now sync correctly",
       "Description": "Reports showing register names such as 1 (POS1) or 2 (POSS) now pass store verification. Automatic catch-up and saved pending drops can continue."

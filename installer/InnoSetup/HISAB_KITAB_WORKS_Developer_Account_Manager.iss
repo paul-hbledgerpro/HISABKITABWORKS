@@ -1,6 +1,6 @@
 #define MyAppName "HISAB KITAB WORKS Account Manager"
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.178"
+#define MyAppVersion "1.0.179"
 #endif
 #define MyAppPublisher "Hisab Kitab Works"
 #define MyAppExeName "HISAB KITAB WORKS Client Account Manager.exe"

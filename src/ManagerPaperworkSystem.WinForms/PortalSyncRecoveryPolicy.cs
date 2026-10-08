@@ -33,11 +33,12 @@ internal static class PortalSyncRecoveryPolicy
             return missing.OrderByDescending(batch => batch).ToList();
 
         var latest = importedBatches.Max();
-        // Import new close-outs before revisiting legacy holes. An unreadable
-        // old receipt must not stop today's shifts from ever being reached.
-        // Exact imported membership still preserves late and missing batches.
-        return missing.OrderBy(batch => batch > latest ? 0 : 1)
-            .ThenBy(batch => batch).ToList();
+        // A targeted pending-drop import can jump the highest known batch.
+        // Check recent gaps below it before years-old missing receipts; do not
+        // treat that single imported batch as proof that earlier shifts exist.
+        return missing.Where(batch => batch > latest).OrderBy(batch => batch)
+            .Concat(missing.Where(batch => batch <= latest).OrderByDescending(batch => batch))
+            .ToList();
     }
 
     public static List<DateOnly> PendingCashDates(
