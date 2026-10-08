@@ -1,6 +1,10 @@
 {
-  "Version": "1.0.177",
+  "Version": "1.0.178",
   "Features": [
+    {
+      "Title": "Z reports with named registers now sync correctly",
+      "Description": "Reports showing register names such as 1 (POS1) or 2 (POSS) now pass store verification. Automatic catch-up and saved pending drops can continue."
+    },
     {
       "Title": "Record Shift Drop in one small window",
       "Description": "Next to Dashboard: enter the batch, drop, payout and reason. Existing verified batches update the grid and Cash On Hand immediately, including setups with an omitted ZIP code."

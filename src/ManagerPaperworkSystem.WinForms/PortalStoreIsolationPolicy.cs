@@ -67,7 +67,9 @@ internal static class PortalStoreIsolationPolicy
         {
             var following = sourceText!.Substring(title.Index + title.Length,
                 Math.Min(250, sourceText.Length - title.Index - title.Length));
-            if (!Regex.IsMatch(following, @"^\s*(?:=+\s*)?Register\s+Number\s*:\s*\d+\s*Batch\s*:",
+            // Registers can include the portal terminal name, e.g. 1 (POS1).
+            // The optional label never substitutes for the receipt store/address.
+            if (!Regex.IsMatch(following, @"^\s*(?:=+\s*)?Register\s+Number\s*:\s*\d+(?:[^\S\r\n]*\([A-Za-z0-9][A-Za-z0-9 _./#-]{0,39}\))?\s*Batch\s*:",
                     RegexOptions.IgnoreCase | RegexOptions.Singleline))
                 continue;
 

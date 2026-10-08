@@ -15,6 +15,27 @@ public class ZReportStoreTests
         PortalStoreIsolationPolicy.ValidateZReportStore(Receipt("GALAXY SMOKE SHOP", separator: separator), Expected);
 
     [Theory]
+    [InlineData("1 (POS1)", "\n")]
+    [InlineData("2 (POSS)", "\r\n")]
+    [InlineData("2 (POSS)", "                 ")]
+    [InlineData("2 (Front Register)", "\n")]
+    public void NamedRegisterStillVerifiesReceiptStore(string register, string separator)
+    {
+        var receipt = Receipt("GALAXY SMOKE SHOP", "HANOVER PARK, IL", separator)
+            .Replace("Register Number: 2", "Register Number: " + register);
+        PortalStoreIsolationPolicy.ValidateZReportStore(receipt, "GALAXY SMOKE SHOP (HANOVER PARK, IL)");
+        Assert.Throws<InvalidOperationException>(() => PortalStoreIsolationPolicy.ValidateZReportStore(receipt, Expected));
+    }
+
+    [Fact]
+    public void NamedRegisterOnWrongStorePageCannotBeSkipped()
+    {
+        var other = Receipt("ELGIN SMOKE SHOP").Replace("Register Number: 2", "Register Number: 2 (POS1)");
+        Assert.Throws<InvalidOperationException>(() => PortalStoreIsolationPolicy.ValidateZReportStore(
+            Receipt("GALAXY SMOKE SHOP") + "\n" + other, Expected));
+    }
+
+    [Theory]
     [InlineData("ELGIN SMOKE SHOP", "ELGIN, IL")]
     [InlineData("GALAXY SMOKE SHOP", "CARPENTERSVILLE, IL")]
     [InlineData("GALAXY", "ELGIN, IL")]
