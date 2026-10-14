@@ -908,7 +908,7 @@ internal static partial class PortalSyncService
                         $"date-range anchor {historicalAnchor?.ToString(CultureInfo.InvariantCulture) ?? "none"}; " +
                         $"candidates {candidateBatches.Count}; first batches {string.Join(", ", candidateBatches.Take(12).Select(item => item.Batch))}.");
                     var checkedBatches = 0;
-                    foreach (var candidate in candidateBatches)
+                    await PortalZBatchSequence.RunAsync(candidateBatches, async candidate =>
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         var batchProgress = $"Z {mode}: checking batch {candidate.Batch} ({++checkedBatches} of {candidateBatches.Count}); " +
@@ -978,15 +978,15 @@ internal static partial class PortalSyncService
                             {
                                 WriteProgressLog(settings.BusinessName,
                                     $"Z {mode}: batch {batch} has Start Date {actualDate:M/d/yyyy}, outside the selected range; skipped.");
-                                continue;
+                                return;
                             }
                         }
                         else
                         {
                             if (actualDate > targetDate)
-                                continue;
+                                return;
                             if (requestedBatch is null && !hadImportedZBatches && actualDate != targetDate)
-                                continue;
+                                return;
                         }
 
                         ZReportImportOutcome result;
@@ -1039,7 +1039,7 @@ internal static partial class PortalSyncService
                         {
                             throw;
                         }
-                        catch (Exception exception)
+                        catch (Exception exception) when (exception is not PortalZReportConflictException)
                         {
                             rejectedZReportDetails.Add(
                                 $"batch {batch}: {FirstSentence(exception.Message)}");
@@ -1051,7 +1051,22 @@ internal static partial class PortalSyncService
                                 $" This attempt imported {zResult.Imported} new and refreshed {zResult.Updated} shift(s) before stopping.",
                                 exception);
                         }
-                    }
+                    }, (candidate, exception) =>
+                    {
+                        // Discard any uncommitted tracking changes from the rejected
+                        // batch before saving the next independently verified report.
+                        db.ChangeTracker.Clear();
+                        rejectedZReportDetails.Add($"batch {candidate.Batch}: {FirstSentence(exception.Message)}");
+                        WriteLog(new PortalSyncRunResult(settings.BusinessName, false, false,
+                            $"Z {mode}: batch {candidate.Batch} left unchanged because its existing report is unverified. " +
+                            "Continuing with the remaining batches; this entry needs review."));
+                    });
+
+                    if (rejectedZReportDetails.Count > 0)
+                        throw new InvalidOperationException(
+                            $"Checked the remaining Z-report batches and imported {zResult.Imported} new and refreshed {zResult.Updated} shift(s). " +
+                            $"{rejectedZReportDetails.Count} conflicting existing batch(es) were left unchanged and need review. " +
+                            "Automatic sync remains enabled for other batches.");
 
                     if (historicalZBackfill && zResult.Total == 0)
                     {
@@ -2456,9 +2471,7 @@ internal static partial class PortalSyncService
                 if (!string.IsNullOrWhiteSpace(shift.PosReportKey) &&
                     shift.PosReportKey.StartsWith("ADVENTPOS-Z|", StringComparison.OrdinalIgnoreCase) &&
                     shift.PosReportStoreIdentity != PortalZReportHistory.Identity(portalStoreName, targetDate, batch, shift.PosReportPath))
-                    throw new InvalidOperationException(
-                        $"Batch {batch} on {targetDate:M/d/yyyy} conflicts with an existing unverified report. " +
-                        "No existing shift was overwritten. Collect store recovery evidence for this row.");
+                    throw new PortalZReportConflictException(batch, targetDate, shift.Id);
                 shift.PosReportKey = reportKey;
                 shift.PosReportPath = storedPath;
                 shift.CreatedByName ??= "Automatic POS Portal Sync";

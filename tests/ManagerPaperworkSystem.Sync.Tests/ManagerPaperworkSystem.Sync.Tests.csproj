@@ -14,5 +14,7 @@
     </PackageReference>
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalSyncRecoveryPolicy.cs" Link="PortalSyncRecoveryPolicy.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalStoreIsolationPolicy.cs" Link="PortalStoreIsolationPolicy.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalZBatchSequence.cs" Link="PortalZBatchSequence.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalZReportConflictException.cs" Link="PortalZReportConflictException.cs" />
   </ItemGroup>
 </Project>

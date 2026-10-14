@@ -1,6 +1,10 @@
 {
-  "Version": "1.0.179",
+  "Version": "1.0.180",
   "Features": [
+    {
+      "Title": "An older conflicting batch no longer stops later reports",
+      "Description": "Z sync leaves an unverified saved batch unchanged and continues importing other verified reports. The result lists entries needing review and the number of shifts imported."
+    },
     {
       "Title": "Recent missing Z reports take priority",
       "Description": "After retrieving a batch for an entered drop, automatic sync checks the other recent missing batches before older history. Date-range backfill includes missing reports even when no drop has been entered."

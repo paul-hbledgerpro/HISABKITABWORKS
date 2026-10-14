@@ -1,0 +1,11 @@
+# HISAB KITAB WORKS 1.0.180
+
+An existing unverified local Z-report row previously stopped the entire catch-up/backfill loop. A conflict on an older batch could therefore prevent later valid reports from importing. The importer now identifies this specific conflict with a dedicated exception; the batch sequence leaves that row untouched, clears unsaved tracked changes, and continues checking the remaining reports. Final results retain the failed/conflict status, list the affected batches and include imported/refreshed counts. No success cursor is advanced for an incomplete run.
+
+Only this local-row conflict is recoverable per batch. Portal store/header mismatches, authentication, parsing, cancellation and database errors retain their stop behavior. Existing drops, payouts, source identities and linked cash for conflicting rows are not overwritten, deleted, reset or automatically relabeled.
+
+A read-only Elgin Smoke Shop diagnostic collects saved report provenance, local source-file availability, recent shifts and cash, portal setup metadata, filtered logs, scheduled versions and backfill process/completion states. It excludes protected files, browser profiles and credential values. The screenshot establishes the blocking conflict; why that client row cannot be verified remains unknown until current evidence is collected.
+
+Validation: production build; batch-sequence regression tests including multiple conflicts, wrong-store receipts, cancellation and similar-looking unrelated errors; isolated SQL harness through the production importer/sequence verifying unchanged conflicting rows/cash, later reports without pending drops, duplicate-safe retry, other-store isolation and discarded unsaved changes. Diagnostic tested in PowerShell 5.1 using synthetic protected settings and a temporary SQL database, including active/stopped jobs, filtered queue logs, secret redaction and unchanged financial rows. No client portal or database was accessed.
+
+Final verification: WinForms Release build passed with zero warnings/errors; 68 sync tests and 48 import/SQL tests passed with no skips. Offscreen UI checks passed; updated What's New dialog visually inspected. Temporary SQL reflection harness emitted its existing WindowsBase reference warning; the production build was clean.
