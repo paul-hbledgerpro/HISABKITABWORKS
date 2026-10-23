@@ -1,45 +1,25 @@
 {
-  "Version": "1.0.180",
+  "Version": "1.0.181",
   "Features": [
     {
-      "Title": "An older conflicting batch no longer stops later reports",
-      "Description": "Z sync leaves an unverified saved batch unchanged and continues importing other verified reports. The result lists entries needing review and the number of shifts imported."
+      "Title": "Side Entry Grid is now the default",
+      "Description": "Shift Cash Drop and Cash On Hand keep their full transaction grids, with entry fields beside them for faster recording."
     },
     {
-      "Title": "Recent missing Z reports take priority",
-      "Description": "After retrieving a batch for an entered drop, automatic sync checks the other recent missing batches before older history. Date-range backfill includes missing reports even when no drop has been entered."
+      "Title": "Choose your preferred layout",
+      "Description": "Use View at the top to choose Classic Grid, Side Entry Grid or Guided Grid for each section. Your choices are remembered."
     },
     {
-      "Title": "Z reports with named registers now sync correctly",
-      "Description": "Reports showing register names such as 1 (POS1) or 2 (POSS) now pass store verification. Automatic catch-up and saved pending drops can continue."
+      "Title": "Remember payees and payout reasons",
+      "Description": "Type a new Paid To / Vendor or Purpose / Reason, or select a saved one. After a successful save, the choices are available in both sections for the same store."
     },
     {
-      "Title": "Record Shift Drop in one small window",
-      "Description": "Next to Dashboard: enter the batch, drop, payout and reason. Existing verified batches update the grid and Cash On Hand immediately, including setups with an omitted ZIP code."
+      "Title": "Review before saving with Guided Grid",
+      "Description": "Guided Grid lets you review the entry before confirming. Changing layouts keeps an unfinished entry in place."
     },
     {
-      "Title": "Missing batches are retrieved in the background",
-      "Description": "Recording a drop checks only its batch for faster saving. Only genuinely missing or unverified reports need retrieval. Existing pending entries retry automatically."
-    },
-    {
-      "Title": "See OVER, SHORT or BALANCED immediately",
-      "Description": "After the report is available, overages show in green and shortages in red."
-    },
-    {
-      "Title": "Shift payouts flow into Cash & Sales Summary",
-      "Description": "Payouts and reasons transfer by store and date. Separate summary payouts stay available for owner review."
-    },
-    {
-      "Title": "Choose Light, Dark or Follow Windows",
-      "Description": "Find your theme under Settings → Appearance. Your preference is remembered."
-    },
-    {
-      "Title": "Close a month and review its history",
-      "Description": "Use Settings → Month Close / History. Review closed records through Period → Previous Month or Custom."
-    },
-    {
-      "Title": "Start each month with opening cash",
-      "Description": "Enter monthly opening cash in Cash On Hand. New drops and payouts update it without counting the old balance twice."
+      "Title": "Existing drop and payout accounting continues",
+      "Description": "Verified batches update their shift and cash balance; pending drops wait for the matching store report. Existing corrections and month-close rules remain in place."
     }
   ]
 }

@@ -8,8 +8,16 @@ namespace ManagerPaperworkSystem.Data.Services;
 public static class CashEntryService
 {
     /// <summary>Save a new cash movement and its store-local lookups, including activity history.</summary>
-    public static async Task SaveAsync(AppDbContext db, CashOnHandEntry entry, string vendorName,
+    public static Task SaveAsync(AppDbContext db, CashOnHandEntry entry, string vendorName,
         CancellationToken cancellationToken = default)
+        => SaveCoreAsync(db, entry, vendorName, null, cancellationToken);
+
+    public static Task SaveAsync(AppDbContext db, CashOnHandEntry entry, string vendorName, string purposeName,
+        CancellationToken cancellationToken = default)
+        => SaveCoreAsync(db, entry, vendorName, PayoutChoices.Clean(purposeName), cancellationToken);
+
+    private static async Task SaveCoreAsync(AppDbContext db, CashOnHandEntry entry, string vendorName, string? purposeName,
+        CancellationToken cancellationToken)
     {
         vendorName = vendorName.Trim();
         if (vendorName.Length > 200)
@@ -32,7 +40,14 @@ public static class CashEntryService
                     ?? new Vendor { StoreId = entry.StoreId, Name = vendorName };
             }
 
-            if (entry.PurposeId is int purposeId)
+            if (purposeName is not null)
+            {
+                // Editable combo text wins over an older selected item.
+                entry.PurposeId = null;
+                entry.Purpose = await PayoutChoices.PurposeAsync(db, entry.StoreId,
+                    string.IsNullOrWhiteSpace(purposeName) ? "Payout" : purposeName, cancellationToken);
+            }
+            else if (entry.PurposeId is int purposeId)
             {
                 entry.Purpose = await db.Purposes.FirstOrDefaultAsync(
                     x => x.Id == purposeId && x.StoreId == entry.StoreId, cancellationToken)

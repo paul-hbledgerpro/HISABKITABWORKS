@@ -13,6 +13,10 @@ internal sealed class CashEntryForm : Form
         IReadOnlyList<Vendor> vendors,
         IReadOnlyList<Purpose> purposes,
         Func<CashOnHandEntry, string, Task> saveEntry)
+        : this(isPayout, vendors, purposes, (entry, vendor, purpose) => saveEntry(entry, vendor)) { }
+
+    public CashEntryForm(bool isPayout, IReadOnlyList<Vendor> vendors, IReadOnlyList<Purpose> purposes,
+        Func<CashOnHandEntry, string, string, Task> saveEntry)
     {
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -80,6 +84,10 @@ internal sealed class CashEntryForm : Form
         vendor.SelectedIndex = -1;
         var purpose = WinTheme.ComboBox();
         purpose.Name = "CashEntryPurpose";
+        purpose.DropDownStyle = ComboBoxStyle.DropDown;
+        purpose.MaxLength = 200;
+        purpose.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+        purpose.AutoCompleteSource = AutoCompleteSource.ListItems;
         purpose.FlatStyle = FlatStyle.Standard;
         purpose.DisplayMember = nameof(Purpose.Name);
         var purposeOptions = purposes.ToList();
@@ -104,7 +112,7 @@ internal sealed class CashEntryForm : Form
         if (isPayout)
         {
             Field("Vendor (optional — type or select)", vendor);
-            Field("Purpose", purpose);
+            Field("Purpose / reason (type or select)", purpose);
         }
         Field(isPayout ? "Description / reason (optional)" : "Note (optional)", note);
 
@@ -147,7 +155,7 @@ internal sealed class CashEntryForm : Form
                 amount.Focus();
                 return;
             }
-            if (isPayout && purpose.SelectedItem is not Purpose && string.IsNullOrWhiteSpace(note.Text))
+            if (isPayout && string.IsNullOrWhiteSpace(purpose.Text) && string.IsNullOrWhiteSpace(note.Text))
             {
                 MessageBox.Show(this, "Select a purpose or enter a short description of the payout.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 note.Focus();
@@ -155,6 +163,7 @@ internal sealed class CashEntryForm : Form
             }
             // Capture the final edit before controls change state during the save.
             var vendorName = isPayout ? vendor.Text.Trim() : "";
+            var purposeName = isPayout ? purpose.Text.Trim() : "";
             _saving = true;
             save.Enabled = cancel.Enabled = scroll.Enabled = false;
             try
@@ -167,7 +176,7 @@ internal sealed class CashEntryForm : Form
                     PayoutAmount = isPayout ? value : 0m,
                     PurposeId = isPayout && purpose.SelectedItem is Purpose { Id: > 0 } selectedPurpose ? selectedPurpose.Id : null,
                     Description = note.Text.Trim()
-                }, vendorName);
+                }, vendorName, purposeName);
                 _saving = false;
                 DialogResult = DialogResult.OK;
                 Close();

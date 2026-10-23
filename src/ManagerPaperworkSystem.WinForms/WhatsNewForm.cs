@@ -44,6 +44,13 @@ internal sealed class WhatsNewForm : Form
         Controls.Add(content);
         Controls.Add(title);
         Controls.Add(footer);
+        void FitTitle()
+        {
+            var available = Math.Max(100, ClientSize.Width - title.Padding.Horizontal);
+            title.Height = TextRenderer.MeasureText(title.Text, title.Font, new Size(available, int.MaxValue), TextFormatFlags.WordBreak).Height + title.Padding.Vertical;
+        }
+        ClientSizeChanged += (_, _) => FitTitle();
+        FitTitle();
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing && DialogResult != DialogResult.OK) e.Cancel = true; };
         Shown += (_, _) => { body.SelectionStart = 0; body.SelectionLength = 0; body.ScrollToCaret(); ok.Focus(); };
         ThemePreferences.ApplyTree(this);

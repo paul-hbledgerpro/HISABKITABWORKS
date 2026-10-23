@@ -13,6 +13,7 @@ public sealed class PendingShiftDrop
     [Column(TypeName="decimal(18,2)")] public decimal Drop { get; set; }
     [Column(TypeName="decimal(18,2)")] public decimal Payout { get; set; }
     [MaxLength(300)] public string Reason { get; set; } = "";
+    [MaxLength(200)] public string Payee { get; set; } = "";
     public int UserId { get; set; }
     [MaxLength(120)] public string UserName { get; set; } = "";
     [MaxLength(30)] public string Status { get; set; } = "Pending";

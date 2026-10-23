@@ -60,14 +60,16 @@ internal sealed partial class MainForm
 
     private async Task ShowPendingResultAsync()
     {
-        if (_showingShiftResult || OwnedForms.Any(x => x.Visible) || Modal || !Visible || LicenseRuntime.IsReadOnly) return;
+        if (_showingShiftResult || _ledgerWorkspace?.Entry.IsBusy == true || _ledgerWorkspace?.Entry.HasDraft == true || OwnedForms.Any(x => x.Visible) || Modal || !Visible || LicenseRuntime.IsReadOnly) return;
         _showingShiftResult = true;
         try
         {
             var storeId = _currentStoreId; await using var db = CreateDb(); var result = await db.PendingShiftDrops.FirstOrDefaultAsync(x => x.StoreId == _currentStoreId && x.UserId == _session.UserId && x.NotifiedUtc == null && (x.Status == "Applied" || x.Status == "Attention" || (x.Status == "Pending" && x.LastAttemptUtc != null && x.Message != "Waiting for batch"))); if (result is null || storeId != _currentStoreId) return;
+            // The user may have started an entry while the database query was running.
+            if (_ledgerWorkspace?.Entry.IsBusy == true || _ledgerWorkspace?.Entry.HasDraft == true) return;
             ShowShiftResult(this, "Batch " + result.Batch, result.Variance, result.Message);
             result.NotifiedUtc = DateTime.UtcNow; await db.SaveChangesAsync();
-            if (result.Status == "Applied" && storeId == _currentStoreId && _currentModule is "Shift Cash Drop" or "Cash On Hand" or "Cash & Sales Summary") ShowModule(_currentModule);
+            if (_ledgerWorkspace?.Entry.IsBusy != true && _ledgerWorkspace?.Entry.HasDraft != true && result.Status == "Applied" && storeId == _currentStoreId && _currentModule is "Shift Cash Drop" or "Cash On Hand" or "Cash & Sales Summary") ShowModule(_currentModule);
         }
         catch (Exception ex) { Debug.WriteLine(ex.Message); }
         finally { _showingShiftResult = false; }
@@ -77,7 +79,7 @@ internal sealed partial class MainForm
     {
         var storeId = _currentStoreId; await using var db = CreateDb();
         using var form = new Form { Text = "Pending Shift Drops", ClientSize = new Size(850, 370) }; WinTheme.Apply(form);
-        var grid = WinTheme.Grid(); grid.DataSource = await db.PendingShiftDrops.AsNoTracking().Where(x => x.StoreId == storeId && (x.Status == "Pending" || x.Status == "Attention")).Select(x => new { x.Id, x.Batch, x.Drop, x.Payout, x.Reason, x.Status, x.Message }).ToListAsync(); HideId(grid);
+        var grid = WinTheme.Grid(); grid.DataSource = await db.PendingShiftDrops.AsNoTracking().Where(x => x.StoreId == storeId && (x.Status == "Pending" || x.Status == "Attention")).Select(x => new { x.Id, x.Batch, x.Drop, x.Payout, x.Payee, x.Reason, x.Status, x.Message }).ToListAsync(); HideId(grid);
         var cancel = WinTheme.Button("Cancel selected entry"); cancel.Dock = DockStyle.Bottom; form.Controls.Add(grid); form.Controls.Add(cancel);
         cancel.Click += async (_, _) =>
         {

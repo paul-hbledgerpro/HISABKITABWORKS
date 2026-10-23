@@ -787,6 +787,7 @@ internal sealed partial class MainForm : Form
                 MessageBoxIcon.Information)));
 
         menu.Items.Add(file);
+        menu.Items.Add(BuildLedgerViewMenu());
         menu.Items.Add(settings);
         menu.Items.Add(help);
         return menu;
@@ -961,6 +962,8 @@ internal sealed partial class MainForm : Form
 
     private void ShowModule(string module)
     {
+        if (_ledgerWorkspace?.Entry.IsBusy == true) { MessageBox.Show(this, "Please wait for the current cash entry to finish saving."); return; }
+        _ledgerWorkspace = null;
         if (_ledgerPeriodMode == 0) { _ledgerFrom = LedgerMonthService.Month(DateOnly.FromDateTime(DateTime.Today)); _ledgerTo = DateOnly.FromDateTime(DateTime.Today); }
 
         _currentModule = module;
@@ -1183,6 +1186,15 @@ internal sealed partial class MainForm : Form
 
         if (_storeCombo.SelectedItem is not Store store || store.Id == _currentConnectionStoreId)
             return;
+
+        if (_ledgerWorkspace?.Entry.IsBusy == true)
+        {
+            _loadingStores = true;
+            try { _storeCombo.SelectedValue = _currentConnectionStoreId; }
+            finally { _loadingStores = false; }
+            MessageBox.Show(this, "Please wait for the current cash entry to finish saving before switching stores.");
+            return;
+        }
 
         _currentConnectionStoreId = store.Id;
         _storeConnections.CurrentStoreId = store.Id;
@@ -2190,6 +2202,7 @@ internal sealed partial class MainForm : Form
                     Tax = x.Tax,
                     Drop = x.CashDropReceived,
                     Payout = x.RegisterPayout,
+                    PaidTo = x.PayoutPayee,
                     x.PayoutReason,
                     x.Variance,
                     Corrects = x.CorrectsId,
@@ -2443,6 +2456,7 @@ internal sealed partial class MainForm : Form
                 CashDropReceived = Money(correctionDrop.Text),
                 RegisterPayout = Money(correctionPayout.Text),
                 PayoutReason = correctionPayoutReason.Text.Trim(),
+                PayoutPayee = entry.PayoutPayee,
                 IsCorrection = true,
                 CorrectsId = originalId,
                 CorrectionReason = correctionAuditReason.Text.Trim(),
@@ -2584,7 +2598,7 @@ internal sealed partial class MainForm : Form
         actions.Controls.Add(dashboard);
         var saveDrop = MockActionButton("", "Select Auto-Synced Row", true, 245);
         var recordDrop=MockActionButton("","Record Shift Drop",true,200);
-        recordDrop.Click+=async(_,_)=>await RecordShiftDropAsync();actions.Controls.Add(recordDrop);
+        recordDrop.Click+=(_,_)=>_ledgerWorkspace?.FocusEntry();actions.Controls.Add(recordDrop);
         var pendingDrops=MockActionButton("","Pending Shift Drops",false,200);
         pendingDrops.Click+=async(_,_)=>await ShowPendingDropsAsync();actions.Controls.Add(pendingDrops);
         saveDropButton = saveDrop;
@@ -2675,7 +2689,19 @@ internal sealed partial class MainForm : Form
         refresh();
         clearAllShiftFields();
         updateEntryActionState();
-        return ModuleShell("\uE8C7", "Shift Cash Drop", "Record and track shift cash drops and register payouts.", root);
+        var entryStoreId = _currentStoreId;
+        var entryConnection = CurrentStoreConnectionString();
+        var quickEntry = NewLedgerEntry(true, entryStoreId, entryConnection, () => { refresh(); return Task.CompletedTask; });
+        grid.SelectionChanged += (_, _) => {
+            if (grid.CurrentRow is not null && grid.Columns.Contains("Batch")) quickEntry.SelectBatch(Convert.ToString(grid.CurrentRow.Cells["Batch"].Value) ?? "");
+        };
+        grid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) _ledgerWorkspace?.FocusEntry(); };
+        StackLegacyShiftDetails(form);
+        var footer = root.GetControlFromPosition(0, 3)!;
+        _ledgerWorkspace = new LedgerWorkspaceHost("Shift Cash Drop", actions, grid, footer, quickEntry, details: formShell);
+        _ledgerWorkspace.ApplyLayout(LedgerChoice("Shift Cash Drop"));
+        root.Dispose();
+        return ModuleShell("\uE8C7", "Shift Cash Drop", "Record and track shift cash drops and register payouts.", _ledgerWorkspace);
     }
 
     private Control BuildCashOnHand()
@@ -2799,13 +2825,13 @@ internal sealed partial class MainForm : Form
                     : new List<Purpose>();
                 if (_currentStoreId != storeId)
                     return;
-                using var dialog = new CashEntryForm(isPayout, vendors, purposes, async (entry, vendorName) =>
+                using var dialog = new CashEntryForm(isPayout, vendors, purposes, async (entry, vendorName, purposeName) =>
                 {
                     using var saveDb = CreateDb();
                     entry.StoreId = storeId;
                     entry.CreatedByUserId = _session.UserId;
                     entry.CreatedByName = _session.DisplayName;
-                    await CashEntryService.SaveAsync(saveDb, entry, vendorName);
+                    await CashEntryService.SaveAsync(saveDb, entry, vendorName, purposeName);
                 });
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
@@ -2823,7 +2849,7 @@ internal sealed partial class MainForm : Form
             }
         }
         addCash.Click += async (_, _) => await EnterCashAsync(false);
-        recordPayout.Click += async (_, _) => await EnterCashAsync(true);
+        recordPayout.Click += (_, _) => _ledgerWorkspace?.FocusEntry();
         actions.Controls.Add(addCash);
         actions.Controls.Add(recordPayout);
         var correction = MockActionButton("", "Add Correction", width: 190);
@@ -3033,7 +3059,12 @@ internal sealed partial class MainForm : Form
         // the visible content panel. This avoids the old builder/handle timing
         // race that left Cash On Hand empty until Refresh was clicked.
         _pendingModuleActivation = initializeCashOnHandAsync;
-        return ModuleShell("\uEAFD", "Cash On Hand", "Track cash added, payouts, and carry forward balance.", root);
+        var quickEntry = NewLedgerEntry(false, _currentStoreId, CurrentStoreConnectionString(), refreshAsync);
+        var footer = root.GetControlFromPosition(0, 4)!;
+        _ledgerWorkspace = new LedgerWorkspaceHost("Cash On Hand", actions, grid, footer, quickEntry, stats);
+        _ledgerWorkspace.ApplyLayout(LedgerChoice("Cash On Hand"));
+        root.Dispose();
+        return ModuleShell("\uEAFD", "Cash On Hand", "Track cash added, payouts, and carry forward balance.", _ledgerWorkspace);
     }
 
     private Control BuildCheckPayout()
@@ -6259,6 +6290,7 @@ internal sealed partial class MainForm : Form
                     CashDropReceived = previous.CashDropReceived,
                     RegisterPayout = previous.RegisterPayout,
                     PayoutReason = previous.PayoutReason,
+                    PayoutPayee = previous.PayoutPayee,
                     IsCorrection = true,
                     CorrectsId = correction.CorrectsId,
                     CorrectionReason = undoReason,

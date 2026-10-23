@@ -45,13 +45,18 @@ public class LedgerWorkflowTests
             await db.Database.EnsureCreatedAsync();
             // Exercise the deployed-schema upgrade path, as well as repeat initialization.
             await db.Database.ExecuteSqlRawAsync("DROP TABLE dbo.PendingShiftDrops; DROP TABLE dbo.LedgerMonths; DROP TABLE dbo.ShiftPayoutRollups;");
+            await db.Database.ExecuteSqlRawAsync("ALTER TABLE dbo.ShiftLogs DROP COLUMN PayoutPayee;");
             await LedgerWorkflowSchema.EnsureAsync(db); await LedgerWorkflowSchema.EnsureAsync(db);
             db.Stores.AddRange(new Store{Name="Galaxy"},new Store{Name="Other"}); await db.SaveChangesAsync();
             db.ShiftLogs.AddRange(Shift(1,"1551",portal),Shift(2,"1551","ELGIN SMOKE SHOP"),Shift(1,"1552","ELGIN SMOKE SHOP"));
             db.PosSalesSummaries.AddRange(new PosSalesSummary{StoreId=1,ReportFrom=day,ReportTo=day,CashSales=200},new PosSalesSummary{StoreId=2,ReportFrom=day,ReportTo=day,CashSales=100});
             await db.SaveChangesAsync(); db.ChangeTracker.Clear();
-            var request=await ShiftDropWorkflow.RecordAsync(db,1,config,"GALAXY SMOKE SHOP (ELGIN,IL)","1551",90,10,"Supplies",1,"Owner",false);
+            var request=await ShiftDropWorkflow.RecordAsync(db,1,config,"GALAXY SMOKE SHOP (ELGIN,IL)","1551",90,10,"Supplies",1,"Owner",false,"Local Supplier");
             Assert.Equal("Applied",request.Status); Assert.Equal(0,request.Variance);
+            Assert.Equal("Local Supplier", request.Payee);
+            Assert.Equal("Local Supplier", (await db.ShiftLogs.SingleAsync(x=>x.StoreId==1 && x.ShiftNo=="1551")).PayoutPayee);
+            Assert.True(await db.Vendors.AnyAsync(x=>x.StoreId==1 && x.Name=="Local Supplier"));
+            Assert.True(await db.Purposes.AnyAsync(x=>x.StoreId==1 && x.Name=="Supplies"));
             await ShiftDropWorkflow.ApplyAsync(db,request.Id,"GALAXY SMOKE SHOP (ELGIN,IL)"); // retry must not add cash/payout again
             db.ChangeTracker.Clear();
             var summary=await db.PosSalesSummaries.SingleAsync(x=>x.StoreId==1);

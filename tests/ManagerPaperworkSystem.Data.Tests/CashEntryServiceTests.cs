@@ -148,4 +148,52 @@ public sealed class CashEntryServiceTests : IAsyncLifetime
         Assert.False(await db.CashOnHand.AnyAsync());
         Assert.False(await db.Vendors.AnyAsync());
     }
+
+    [Fact]
+    public async Task TypedPurposeIsRememberedAndReusedOnlyWithinItsStore()
+    {
+        await using var db = CreateDb();
+        await CashEntryService.SaveAsync(db, Payout(1), "Supplier", "  Repairs  ");
+        await CashEntryService.SaveAsync(db, Payout(1), " supplier ", "repairs");
+        await CashEntryService.SaveAsync(db, Payout(2), "Supplier", "Repairs");
+        Assert.Equal(2, await db.Vendors.CountAsync());
+        Assert.Equal(2, await db.Purposes.CountAsync());
+        Assert.Equal("Repairs", (await db.Purposes.SingleAsync(x => x.StoreId == 1)).Name);
+        Assert.All(await db.CashOnHand.Include(x => x.Purpose).Include(x => x.Vendor).ToListAsync(),
+            x => { Assert.Equal(x.StoreId, x.Purpose!.StoreId); Assert.Equal(x.StoreId, x.Vendor!.StoreId); });
+    }
+
+    [Fact]
+    public async Task FinalTypedPurposeOverridesStaleSelectedPurpose()
+    {
+        await using var db = CreateDb();
+        var old = new Purpose { StoreId = 1, Name = "Old purpose" }; db.Purposes.Add(old); await db.SaveChangesAsync();
+        var entry = Payout(); entry.PurposeId = old.Id;
+        await CashEntryService.SaveAsync(db, entry, "", "New purpose");
+        Assert.NotEqual(old.Id, entry.PurposeId); Assert.Equal("New purpose", entry.Purpose!.Name);
+    }
+
+    [Fact]
+    public async Task FailedPayoutDoesNotRememberTypedNames()
+    {
+        await using (var db = CreateDb())
+        {
+            await db.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectCash BEFORE INSERT ON CashOnHand BEGIN SELECT RAISE(ABORT, 'test failure'); END;");
+            await Assert.ThrowsAsync<DbUpdateException>(() => CashEntryService.SaveAsync(db, Payout(), "New supplier", "New purpose"));
+        }
+        await using var verify = CreateDb();
+        Assert.False(await verify.Vendors.AnyAsync()); Assert.False(await verify.Purposes.AnyAsync()); Assert.False(await verify.CashOnHand.AnyAsync());
+    }
+
+    [Fact]
+    public async Task PayeeColumnUpgradePreservesExistingRecordsAndIsRepeatable()
+    {
+        await using var db = CreateDb();
+        db.ShiftLogs.Add(new ShiftLogEntry { StoreId = 1, Date = new(2026, 10, 23), ShiftNo = "3001", CashTotal = 50 }); await db.SaveChangesAsync();
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE ShiftLogs DROP COLUMN PayoutPayee;");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE PendingShiftDrops DROP COLUMN Payee;");
+        await LedgerWorkflowSchema.EnsureAsync(db); await LedgerWorkflowSchema.EnsureAsync(db);
+        db.ChangeTracker.Clear();
+        var row = await db.ShiftLogs.SingleAsync(); Assert.Equal(50, row.CashTotal); Assert.Equal("", row.PayoutPayee);
+    }
 }

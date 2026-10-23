@@ -221,6 +221,9 @@ public sealed class ShiftLogEntry : Entity
     [MaxLength(300)]
     public string PayoutReason { get; set; } = "";
 
+    [MaxLength(200)]
+    public string PayoutPayee { get; set; } = "";
+
     public int? PosSalesSummaryId { get; set; }
 
     [MaxLength(200)]

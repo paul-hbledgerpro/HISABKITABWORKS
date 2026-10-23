@@ -1,6 +1,7 @@
 using System.Data;
 using ManagerPaperworkSystem.Core.Models;
 using ManagerPaperworkSystem.Data.Db;
+using ManagerPaperworkSystem.Data.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace ManagerPaperworkSystem.WinForms;
@@ -14,16 +15,23 @@ internal static class ShiftDropWorkflow
         if (reason.Length > 300 || payout > 0 && string.IsNullOrWhiteSpace(reason)) throw new InvalidOperationException("Enter the payout reason (up to 300 characters).");
     }
 
-    public static async Task<PendingShiftDrop> RecordAsync(AppDbContext db, int storeId, Guid configurationId, string portalStore, string batch, decimal drop, decimal payout, string reason, int userId, string userName, bool allowReplace)
+    public static async Task<PendingShiftDrop> RecordAsync(AppDbContext db, int storeId, Guid configurationId, string portalStore, string batch, decimal drop, decimal payout, string reason, int userId, string userName, bool allowReplace, string payee = "")
     {
         batch = long.TryParse(batch, out var number) ? number.ToString(System.Globalization.CultureInfo.InvariantCulture) : batch;
         Validate(batch, drop, payout, reason);
+        payee = PayoutChoices.Clean(payee);
         await PortalZReportHistory.LoadAsync(db, storeId, portalStore, CancellationToken.None, batchNumber: batch);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var request = await db.PendingShiftDrops.SingleOrDefaultAsync(x => x.StoreId == storeId && x.Batch == batch && (x.Status == "Pending" || x.Status == "Attention"));
         if (request is not null) throw new InvalidOperationException("This batch already has a waiting entry. Open Pending Shift Drops to review or cancel it first.");
         request = new PendingShiftDrop { StoreId = storeId, ConfigurationId = configurationId, PortalStoreName = portalStore, Batch = batch, Drop = drop, Payout = payout, Reason = reason, UserId = userId, UserName = userName };
         db.PendingShiftDrops.Add(request);
+        if (payout > 0)
+        {
+            request.Payee = (await PayoutChoices.VendorAsync(db, storeId, payee))?.Name ?? "";
+            // Older entries allow 300-character notes; reusable purpose names use the existing 200-character limit.
+            if (reason.Trim().Length <= 200) await PayoutChoices.PurposeAsync(db, storeId, reason);
+        }
         await ApplyCoreAsync(db, request, portalStore, allowReplace);
         await db.SaveChangesAsync();
         await tx.CommitAsync();
@@ -57,6 +65,7 @@ internal static class ShiftDropWorkflow
         if (await db.LedgerMonths.AnyAsync(x => x.StoreId == request.StoreId && x.Month == new DateOnly(shift.Date.Year, shift.Date.Month, 1) && x.IsClosed)) throw new InvalidOperationException("This shift belongs to a closed month. Ask an owner to reopen that month.");
         if (!allowReplace && (shift.CashDropReceived != 0 || shift.RegisterPayout != 0 || shift.PayoutReason.Length > 0 || await db.PendingShiftDrops.AnyAsync(x => x.StoreId == request.StoreId && x.ShiftId == shift.Id && x.Status == "Applied"))) throw new InvalidOperationException("This shift already has entered cash information. Review it before replacing amounts.");
         shift.CashDropReceived = request.Drop; shift.RegisterPayout = request.Payout; shift.PayoutReason = request.Reason;
+        shift.PayoutPayee = request.Payee;
         await db.SaveChangesAsync();
         await CashDropRollupService.SyncDateAsync(db, request.StoreId, shift.Date, request.UserId, request.UserName, requirePayoutConsistency: true);
         var reference = "SHIFTLOG:" + shift.Id;

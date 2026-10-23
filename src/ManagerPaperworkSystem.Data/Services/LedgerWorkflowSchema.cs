@@ -7,6 +7,30 @@ public static class LedgerWorkflowSchema
 {
     public static async Task EnsureAsync(AppDbContext db, CancellationToken ct = default)
     {
+        if (db.Database.IsSqlite())
+        {
+            var connection = db.Database.GetDbConnection();
+            var opened = connection.State != System.Data.ConnectionState.Open;
+            if (opened) await connection.OpenAsync(ct);
+            try
+            {
+                foreach (var (table, column) in new[] { ("ShiftLogs", "PayoutPayee"), ("PendingShiftDrops", "Payee") })
+                {
+                    using var check = connection.CreateCommand(); check.CommandText = $"PRAGMA table_info([{table}])";
+                    var columns = new List<string>();
+                    await using (var reader = await check.ExecuteReaderAsync(ct)) while (await reader.ReadAsync(ct)) columns.Add(reader.GetString(1));
+                    if (columns.Count > 0 && !columns.Contains(column, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var upgrade = table == "ShiftLogs"
+                            ? "ALTER TABLE ShiftLogs ADD PayoutPayee TEXT NOT NULL DEFAULT ''"
+                            : "ALTER TABLE PendingShiftDrops ADD Payee TEXT NOT NULL DEFAULT ''";
+                        await db.Database.ExecuteSqlRawAsync(upgrade, ct);
+                    }
+                }
+            }
+            finally { if (opened) await connection.CloseAsync(); }
+            return;
+        }
         if (!db.Database.IsSqlServer()) return;
         await using var transaction = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
         await db.Database.ExecuteSqlRawAsync("DECLARE @lock int; EXEC @lock=sys.sp_getapplock @Resource='HK_LedgerWorkflowSchema',@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=30000; IF @lock<0 THROW 51121,'Ledger upgrade is busy. Please retry.',1;",ct);
@@ -19,6 +43,10 @@ BEGIN
  CREATE UNIQUE INDEX IX_PendingShiftDrops_RequestId ON dbo.PendingShiftDrops(RequestId);
  CREATE INDEX IX_PendingShiftDrops_StoreId_Batch ON dbo.PendingShiftDrops(StoreId,Batch);
 END;
+IF OBJECT_ID('dbo.ShiftLogs') IS NOT NULL AND COL_LENGTH('dbo.ShiftLogs','PayoutPayee') IS NULL
+ ALTER TABLE dbo.ShiftLogs ADD PayoutPayee nvarchar(200) NOT NULL DEFAULT '';
+IF COL_LENGTH('dbo.PendingShiftDrops','Payee') IS NULL
+ ALTER TABLE dbo.PendingShiftDrops ADD Payee nvarchar(200) NOT NULL DEFAULT '';
 IF OBJECT_ID('dbo.LedgerMonths') IS NULL
 BEGIN
  CREATE TABLE dbo.LedgerMonths(Id int IDENTITY PRIMARY KEY,StoreId int NOT NULL,Month date NOT NULL,IsClosed bit NOT NULL,ClosedUtc datetime2 NULL,ClosedBy nvarchar(120) NOT NULL,OpeningCash decimal(18,2) NULL,OpeningBy nvarchar(120) NOT NULL);
