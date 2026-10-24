@@ -8,11 +8,21 @@ internal sealed class LedgerWorkspaceHost : UserControl
     private readonly Control _entry;
     public LedgerEntryPanel Entry { get; }
     public string Section { get; }
-    public LedgerWorkspaceHost(string section, FlowLayoutPanel actions, Control grid, Control footer, LedgerEntryPanel entry, Control? stats = null, Control? details = null, Control? header = null)
+    public LedgerWorkspaceHost(string section, FlowLayoutPanel actions, Control grid, Control footer, LedgerEntryPanel entry, Control? stats = null, Control? details = null, Control? header = null, Control? gridToolbar = null)
     {
         Section = section; _grid = grid; Entry = entry; _entry = entry;
         Dock = DockStyle.Fill;
         if (grid is DataGridView ledger) LedgerGridPresentation.Attach(ledger);
+        if (gridToolbar is not null)
+        {
+            var records = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, ColumnCount = 1, RowCount = 2 };
+            records.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            records.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+            records.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            gridToolbar.Dock = DockStyle.Fill; gridToolbar.Margin = Padding.Empty;
+            records.Controls.Add(gridToolbar, 0, 0); records.Controls.Add(grid, 0, 1);
+            _grid = records;
+        }
         LedgerGridPresentation.CompactActions(actions);
         if (details is not null)
         {

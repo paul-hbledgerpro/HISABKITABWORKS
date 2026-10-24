@@ -1,25 +1,13 @@
 {
-  "Version": "1.0.182",
+  "Version": "1.0.183",
   "Features": [
     {
-      "Title": "Easier cash entry and readable grids",
-      "Description": "Shift Cash Drop and Cash On Hand keep readable columns with horizontal scrolling. Buttons stay visible, amount fields select their existing value, and shifts can be typed or picked from a batch list. Use Newest First, Oldest First or batch search to organize shifts."
+      "Title": "Nine appearance choices",
+      "Description": "Open Settings > Appearance to choose Light, Dark, Same as Windows, Classic Blue & Orange, Graphite & Orange, Midnight & Gold, Teal & Ivory, Slate & Blue, or Charcoal & Emerald. Your choice is saved for this Windows account. Existing preferences are kept. Over and short amounts remain green and red."
     },
     {
-      "Title": "Invoice Inbox and review",
-      "Description": "Purchases now has Invoice Inbox for Gmail connection, your store invoice address and import results. Review uncertain or scanned invoices before saving. Google sign-in remains subject to Google account access requirements."
-    },
-    {
-      "Title": "Safer invoice and price imports",
-      "Description": "Duplicate invoice checks cover the full store history. Invoice and product-price updates save together. Price comparisons distinguish packaging, and older backfills do not replace newer prices."
-    },
-    {
-      "Title": "Administrator account controls",
-      "Description": "Administrators can edit names, roles and permitted stores, reset passwords, or deactivate and reactivate accounts. Only unused accounts can be deleted; the last active administrator is protected."
-    },
-    {
-      "Title": "Sync health and retained backups",
-      "Description": "Use Sync Health to see the latest import, pending drops, sync results and last off-device backup. Verified backups now retain seven local copies per database in addition to the existing cloud backup. Developer sync setup remains protected."
+      "Title": "Cleaner batch search and sorting",
+      "Description": "Shift Cash Drop now has a compact toolbar directly above the records in all three layouts. Search batches with the magnifying-glass field, clear the search with X or Esc, and use the filter menu to sort by business date or batch number. Sync Health is beside these controls. Automatic sync setup remains protected for developer access."
     }
   ]
 }

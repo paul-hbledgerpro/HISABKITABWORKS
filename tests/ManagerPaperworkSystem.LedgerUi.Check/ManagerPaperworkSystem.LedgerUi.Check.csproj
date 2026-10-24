@@ -4,6 +4,7 @@
 <Compile Include="../../src/ManagerPaperworkSystem.WinForms/WhatsNewForm.cs" Link="WhatsNewForm.cs" />
 <EmbeddedResource Include="../../src/ManagerPaperworkSystem.WinForms/ReleaseHighlights.json" LogicalName="HisabKitab.ReleaseHighlights.json" />
 <Compile Include="../../src/ManagerPaperworkSystem.WinForms/ThemePreferences.cs" Link="ThemePreferences.cs" />
+<Compile Include="../../src/ManagerPaperworkSystem.WinForms/ThemePalette.cs" Link="ThemePalette.cs" />
 <Compile Include="../../src/ManagerPaperworkSystem.WinForms/WinTheme.cs" Link="WinTheme.cs" />
 <Compile Include="../../src/ManagerPaperworkSystem.WinForms/ShiftDropEntryForm.cs" Link="ShiftDropEntryForm.cs" />
 <Compile Include="../../src/ManagerPaperworkSystem.WinForms/ShiftDropResultForm.cs" Link="ShiftDropResultForm.cs" />

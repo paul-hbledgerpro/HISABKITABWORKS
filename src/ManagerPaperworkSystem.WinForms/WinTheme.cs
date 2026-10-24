@@ -142,7 +142,7 @@ internal static class WinTheme
         };
         panel.Paint += (_, e) =>
         {
-            using var pen = new Pen(Border);
+            using var pen = new Pen(ThemePreferences.Border);
             e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
         };
         return panel;
@@ -251,7 +251,7 @@ internal static class WinTheme
         var panel = new Panel { BackColor = Color.White, Padding = new Padding(padding) };
         panel.Paint += (_, e) =>
         {
-            using var pen = new Pen(Border);
+            using var pen = new Pen(ThemePreferences.Border);
             e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
         };
         return panel;
@@ -259,7 +259,8 @@ internal static class WinTheme
 
     public static void PaintGradient(PaintEventArgs e, Rectangle bounds)
     {
-        using var brush = new LinearGradientBrush(bounds, BlueDark, Blue, 0f);
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+        using var brush = new LinearGradientBrush(bounds, ThemePreferences.Navigation, ThemePreferences.NavigationEnd, 0f);
         e.Graphics.FillRectangle(brush, bounds);
     }
 }

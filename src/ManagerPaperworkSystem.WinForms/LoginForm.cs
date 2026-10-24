@@ -1189,9 +1189,9 @@ internal sealed class LoginCardPanel : Panel
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        using var border = new Pen(WinTheme.Border);
+        using var border = new Pen(ThemePreferences.Border);
         e.Graphics.DrawRectangle(border, 0, 0, Math.Max(0, Width - 1), Math.Max(0, Height - 1));
-        using var accent = new SolidBrush(WinTheme.Copper);
+        using var accent = new SolidBrush(ThemePreferences.Surface(WinTheme.Copper));
         e.Graphics.FillRectangle(accent, 0, 0, Width, 5);
     }
 }
@@ -1231,7 +1231,7 @@ internal sealed class BorderedLoginPanel : Panel
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        using var pen = new Pen(WinTheme.Border);
+        using var pen = new Pen(ThemePreferences.Border);
         e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
     }
 }

@@ -10,10 +10,12 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         typeof(ThemePreferences).GetProperty(nameof(ThemePreferences.Choice))!.SetValue(null, "Light");
+        if (args.Length == 2 && args[0] == "--toolbar") { ShiftToolbarChecks.Run(Path.GetFullPath(args[1])); return; }
+        if (args.Length == 2 && args[0] == "--themes") { ThemeChecks.Run(Path.GetFullPath(args[1])); return; }
         var output = Path.GetFullPath(args.Single()); Directory.CreateDirectory(output);
         WorkflowChecks.Run(output);
         var notes = ReleaseHighlights.Load();
-        Assert(notes.Version == "1.0.182" && notes.Features.Length == 5, "Release highlights match the update");
+        Assert(notes.Version == typeof(WinTheme).Assembly.GetName().Version!.ToString(3) && notes.Features.Length > 0, "Release highlights match the update");
         using (var notice = new WhatsNewForm(notes))
         {
             Assert(notice.AcceptButton is Button { Text: "OK", DialogResult: DialogResult.OK }, "Release notice has OK button");

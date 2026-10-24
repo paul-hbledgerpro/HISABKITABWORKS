@@ -769,8 +769,11 @@ internal sealed partial class MainForm : Form
         settings.DropDownItems.Add(new ToolStripSeparator());
         settings.DropDownItems.Add(MenuItem("Change Password...", (_, _) => OpenForm<ChangePasswordForm>()));
         settings.DropDownItems.Add(MenuItem("User Accounts...", (_, _) => OpenAdminForm<UserAccountsForm>()));
-        var appearance=new ToolStripMenuItem("Appearance");
-        foreach(var choice in new[]{"Light","Dark","Follow Windows"})appearance.DropDownItems.Add(MenuItem(choice,(_,_)=>{try{ThemePreferences.Set(choice);}catch(Exception ex){MessageBox.Show(this,ex.Message,"Appearance");}}));
+        var appearance = ThemePreferences.CreateMenu(choice =>
+        {
+            try { ThemePreferences.Set(choice); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Appearance"); }
+        });
         settings.DropDownItems.Add(appearance);
         settings.DropDownItems.Add(MenuItem("Month Close / History...",async(_,_)=>await ManageLedgerMonthAsync()));
 
@@ -826,7 +829,7 @@ internal sealed partial class MainForm : Form
 
     private Control BuildHeader()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.Panel, Padding = new Padding(18, 10, 18, 10) };
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = WinTheme.BlueDark, Padding = new Padding(18, 10, 18, 10) };
         panel.Paint += (_, e) => WinTheme.PaintGradient(e, panel.ClientRectangle);
 
         if (DemoRuntime.IsEnabled)
@@ -846,6 +849,7 @@ internal sealed partial class MainForm : Form
         var storePanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Right,
+            BackColor = WinTheme.BlueDark,
             FlowDirection = FlowDirection.LeftToRight,
             Width = 560,
             Height = 60,
@@ -978,6 +982,7 @@ internal sealed partial class MainForm : Form
             kvp.Value.ForeColor = Color.White;
             kvp.Value.FlatAppearance.BorderColor = active ? WinTheme.CopperDark : Color.FromArgb(53, 91, 130);
         }
+        ThemePreferences.ApplyTree(_nav);
 
         _content.SuspendLayout();
         _developerOnlyControls.Clear();
@@ -2161,10 +2166,7 @@ internal sealed partial class MainForm : Form
         Button? saveDropButton = null;
         Button? addEntryButton = null;
         List<ShiftLogEntry> cachedShiftRows = [];
-        var orderChoice = WinTheme.ComboBox(); orderChoice.Width = 145;
-        orderChoice.Items.AddRange(new object[] { "Newest First", "Oldest First" }); orderChoice.SelectedIndex = 0;
-        var batchSearch = WinTheme.TextBox(); batchSearch.Width = 160; batchSearch.PlaceholderText = "Search batch";
-        var batchOnlySort = false;
+        var recordTools = new ShiftGridToolbar();
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Shift cash drop records for selected store"), 0, 3);
         var grossBox = (TextBox)((TableLayoutPanel)paymentSummary.GetControlFromPosition(0, 0)!).GetControlFromPosition(1, 0)!;
@@ -2222,7 +2224,7 @@ internal sealed partial class MainForm : Form
                     group => group.Key,
                     group => group.OrderByDescending(item => item.CreatedUtc).First().Id);
             grid.DataSource = LedgerGridPresentation.Order(rows.Where(x => x.Date >= _ledgerFrom && x.Date <= _ledgerTo),
-                orderChoice.SelectedIndex == 1, batchSearch.Text, batchOnlySort)
+                recordTools.OldestFirst, recordTools.SearchText, recordTools.ByBatch)
                 .Select(x => new
                 {
                     x.Id,
@@ -2257,14 +2259,12 @@ internal sealed partial class MainForm : Form
                 .ToList();
             HideId(grid);
         }
-        orderChoice.SelectedIndexChanged += (_, _) => { batchOnlySort = false; bindShiftRows(); };
-        batchSearch.TextChanged += (_, _) => bindShiftRows();
+        recordTools.ViewChanged += (_, _) => bindShiftRows();
         grid.ColumnHeaderMouseClick += (_, e) =>
         {
             if (e.ColumnIndex < 0 || grid.Columns[e.ColumnIndex].Name is not ("Batch" or "Date")) return;
             var byBatch = grid.Columns[e.ColumnIndex].Name == "Batch";
-            orderChoice.SelectedIndex = orderChoice.SelectedIndex == 0 ? 1 : 0;
-            batchOnlySort = byBatch; bindShiftRows();
+            recordTools.SetSort(!recordTools.OldestFirst, byBatch);
         };
         grid.CellFormatting += (_, e) =>
         {
@@ -2273,7 +2273,11 @@ internal sealed partial class MainForm : Form
 
             var value = Convert.ToDecimal(e.Value ?? 0m, CultureInfo.CurrentCulture);
             if (e.CellStyle is not null)
+            {
                 e.CellStyle.ForeColor = ThemePreferences.Ink(value > 0 ? WinTheme.Green : value < 0 ? WinTheme.Red : WinTheme.Text);
+                if (ThemePreferences.Palette is not null)
+                    e.CellStyle.SelectionForeColor = e.CellStyle.ForeColor;
+            }
         };
         void clearImported()
         {
@@ -2750,15 +2754,9 @@ internal sealed partial class MainForm : Form
         grid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) _ledgerWorkspace?.FocusEntry(); };
         StackLegacyShiftDetails(form);
         var footer = root.GetControlFromPosition(0, 3)!;
-        var ledgerHeader = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
-        ledgerHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 185)); ledgerHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var developerSlot = new Panel { Dock = DockStyle.Fill }; posAutoSync.Text = "Z Auto Sync Setup"; posAutoSync.Dock = DockStyle.Fill;
-        developerSlot.Controls.Add(posAutoSync); ledgerHeader.Controls.Add(developerSlot, 0, 0);
-        var filters = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        var syncHealth = WinTheme.Button("Sync Health"); syncHealth.AutoSize = true;
-        syncHealth.Click += async (_, _) => await ShowSyncHealthAsync();
-        filters.Controls.AddRange([orderChoice, batchSearch, syncHealth]); ledgerHeader.Controls.Add(filters, 1, 0);
-        _ledgerWorkspace = new LedgerWorkspaceHost("Shift Cash Drop", actions, grid, footer, quickEntry, details: formShell, header: ledgerHeader);
+        recordTools.SetDeveloperSetup(posAutoSync);
+        recordTools.SyncHealthRequested += async (_, _) => await ShowSyncHealthAsync();
+        _ledgerWorkspace = new LedgerWorkspaceHost("Shift Cash Drop", actions, grid, footer, quickEntry, details: formShell, gridToolbar: recordTools);
         _ledgerWorkspace.ApplyLayout(LedgerChoice("Shift Cash Drop"));
         root.Dispose();
         return ModuleShell("\uE8C7", "Shift Cash Drop", "Record and track shift cash drops and register payouts.", _ledgerWorkspace);

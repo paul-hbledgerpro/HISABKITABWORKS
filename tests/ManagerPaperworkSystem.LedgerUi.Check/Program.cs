@@ -22,7 +22,7 @@ internal static class Program
         {
             Theme(mode);
             var notes=ReleaseHighlights.Load();
-            if(notes.Version!="1.0.182" || notes.Features.Length<5)throw new Exception("Incomplete release highlights.");
+            if(notes.Version!=typeof(WinTheme).Assembly.GetName().Version!.ToString(3) || notes.Features.Length==0)throw new Exception("Incomplete release highlights.");
             using var whatsNew = new WhatsNewForm(notes);
             if(whatsNew.AcceptButton is not Button { Text: "OK", DialogResult: DialogResult.OK })throw new Exception("Notice OK button is missing.");
             Capture(whatsNew,"whats-new-"+mode);
