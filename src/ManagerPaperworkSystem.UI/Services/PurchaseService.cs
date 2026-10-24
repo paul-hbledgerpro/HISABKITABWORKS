@@ -167,6 +167,7 @@ public sealed class PurchaseService
         CancellationToken ct = default)
     {
         using var db = _dbFactory.CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
         var inv = await db.PurchaseInvoices.Include(x => x.Lines).FirstOrDefaultAsync(x => x.Id == invoiceId, ct);
         if (inv is null) throw new Exception("Invoice not found.");
 
@@ -203,12 +204,14 @@ public sealed class PurchaseService
         }
 
         await db.SaveChangesAsync(ct);
-        await RecomputeCostsForStoreAsync(inv.StoreId, affectedKeys, ct);
+        await RecomputeCostsForStoreAsync(db, inv.StoreId, affectedKeys, ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task DeleteInvoiceAsync(int invoiceId, CancellationToken ct = default)
     {
         using var db = _dbFactory.CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
         var inv = await db.PurchaseInvoices.Include(x => x.Lines).FirstOrDefaultAsync(x => x.Id == invoiceId, ct);
         if (inv is null) return;
 
@@ -219,7 +222,8 @@ public sealed class PurchaseService
         db.PurchaseInvoices.Remove(inv);
         await db.SaveChangesAsync(ct);
 
-        await RecomputeCostsForStoreAsync(storeId, affectedKeys, ct);
+        await RecomputeCostsForStoreAsync(db, storeId, affectedKeys, ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<List<ProductCost>> GetProductCostsAsync(int storeId, CancellationToken ct = default)
@@ -468,17 +472,15 @@ public sealed class PurchaseService
         await db.SaveChangesAsync(ct);
     }
 
-    private async Task RecomputeCostsForStoreAsync(int storeId, HashSet<string> affectedKeys, CancellationToken ct)
+    private static async Task RecomputeCostsForStoreAsync(AppDbContext db, int storeId, HashSet<string> affectedKeys, CancellationToken ct)
     {
         if (affectedKeys.Count == 0) return;
 
-        using var db = _dbFactory.CreateDbContext();
         var invoices = await db.PurchaseInvoices.AsNoTracking()
             .Include(x => x.Lines)
             .Where(x => x.StoreId == storeId)
             .OrderByDescending(x => x.InvoiceDate)
             .ThenByDescending(x => x.Id)
-            .Take(2000)
             .ToListAsync(ct);
 
         foreach (var key in affectedKeys.Where(k => !string.IsNullOrWhiteSpace(k)))
@@ -498,7 +500,8 @@ public sealed class PurchaseService
                 if (bestInv is not null) break;
             }
 
-            var cost = await db.ProductCosts.FirstOrDefaultAsync(x => x.StoreId == storeId && x.ProductKey == key, ct);
+            var sku = bestLine?.ItemCode ?? (key.StartsWith("PACK:", StringComparison.Ordinal) ? key[5..].Split('|')[0] : "");
+            var cost = await FindProductCostAsync(db, storeId, key, CleanDatabaseText(sku, 80), ct);
 
             if (bestInv is null || bestLine is null)
             {

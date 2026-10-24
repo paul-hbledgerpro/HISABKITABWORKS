@@ -67,6 +67,21 @@ public sealed class InvoiceWorkflowTests : IAsyncLifetime, IAppPaths
         using var verify = _factory.CreateDbContext(); Assert.Equal(10, (await verify.ProductCosts.SingleAsync()).LastUnitCost);
         var alert = await verify.PriceAlerts.SingleAsync(); Assert.Equal(8, alert.OldUnitCost); Assert.Equal(10, alert.NewUnitCost);
     }
+    [Fact] public async Task FailedManualEditRollsBackInvoiceAndPriceTogether()
+    {
+        var service = new PurchaseService(_factory, this); var invoice = await Add(service);
+        using (var db = _factory.CreateDbContext()) await db.Database.ExecuteSqlRawAsync("CREATE TRIGGER reject_cost_update BEFORE UPDATE ON ProductCosts BEGIN SELECT RAISE(ABORT, 'simulated failure'); END;");
+        await Assert.ThrowsAsync<DbUpdateException>(() => service.UpdateInvoiceAsync(invoice.Id, invoice.InvoiceDate, null, "Supplier", "A-001", 20, "", null,
+            [new PurchaseInvoiceLine { ItemCode = "123456789012", ProductName = "Test 6 pack", Quantity = 1, UnitCost = 20 }]));
+        using var verify = _factory.CreateDbContext(); Assert.Equal(10, (await verify.PurchaseInvoices.SingleAsync()).Total); Assert.Equal(10, (await verify.ProductCosts.SingleAsync()).LastUnitCost);
+    }
+    [Fact] public async Task FailedManualDeletePreservesInvoiceAndProduct()
+    {
+        var service = new PurchaseService(_factory, this); var invoice = await Add(service);
+        using (var db = _factory.CreateDbContext()) await db.Database.ExecuteSqlRawAsync("CREATE TRIGGER reject_cost_delete BEFORE DELETE ON ProductCosts BEGIN SELECT RAISE(ABORT, 'simulated failure'); END;");
+        await Assert.ThrowsAsync<DbUpdateException>(() => service.DeleteInvoiceAsync(invoice.Id));
+        using var verify = _factory.CreateDbContext(); Assert.Equal(1, await verify.PurchaseInvoices.CountAsync()); Assert.Equal(1, await verify.ProductCosts.CountAsync());
+    }
     [Fact] public void PackAndSingleUnitCannotSharePriceKey()
     {
         Assert.NotEqual(InvoiceIdentity.ProductKey("123456789012", "Test 6 pack"), InvoiceIdentity.ProductKey("123456789012", "Test single"));

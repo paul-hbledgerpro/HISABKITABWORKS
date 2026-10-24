@@ -7,7 +7,7 @@
 - Developer Z Auto Sync Setup occupies a separate reserved header slot. Its existing Ctrl+D/password authorization remains required; client Sync Health is read-only.
 - Purchases adds a simple Invoice Inbox, Gmail sign-in, store invoice address, selective-forwarding guidance, historical month retrieval and Imported / Already Imported / Needs Review results. Uncertain invoices can be corrected in a review editor. The existing technical setup stays developer-only.
 - Local OCR handles supported single-image English scan pages (up to 25 pages and 30 million pixels per image). OCR always requires review. Unsupported scans/native-runtime failures retain their PDF for manual review. No invoice is sent to an AI service.
-- Store/database context is captured before invoice jobs await. Invoice, cost and price-alert changes commit atomically. Duplicate identities are checked against the full store history, including manual uploads. Conflicting date/total values go to review. Shared mailboxes connected to multiple stores are blocked to prevent cross-store posting.
+- Store/database context is captured before invoice jobs await. Invoice, cost and price-alert changes commit atomically, including manual edits and deletions. Duplicate identities are checked against the full store history, including manual uploads. Conflicting date/total values go to review. Shared mailboxes connected to multiple stores are blocked to prevent cross-store posting.
 - Product comparison distinguishes explicit packaging and stable UPCs; ambiguous descriptions remain separate. Costs are per invoice unit/package; no carton-to-single-item conversion is guessed. Older invoices do not overwrite a newer price baseline. Existing alerts include percentage changes and source invoices.
 - Owner/Admin users can edit names/email/roles/permitted stores, reset passwords separately, deactivate/reactivate, and delete unused accounts only. Service checks protect the last active administrator, prohibit non-admin changes and preserve used identities. Account edits are audited; existing accounts retain their previous all-store access until explicitly restricted.
 - Sync Health shows latest imported shift, pending drops, configured sync results and latest successful cloud backup. Seven verified local backups are retained per database alongside existing off-device backups. Failed cloud uploads no longer remove the only local verified copy.
@@ -17,7 +17,7 @@
 
 - WinForms Release build, zero warnings/errors.
 - Data tests: 21 passed, including legacy permission-schema upgrade, account authorization, last-admin protection, history preservation and audit.
-- POS/import tests: 58 passed with local SQL Express enabled. Covers same-number/different-store shifts, pending-drop application, retry/idempotency, closed periods, invoice duplicates/conflicts, captured database during store switch, transaction failure/rollback, packaging and historical prices.
+- POS/import tests: 60 passed with local SQL Express enabled. Covers same-number/different-store shifts, pending-drop application, retry/idempotency, closed periods, invoice duplicates/conflicts, captured database during store switch, transaction failure/rollback, packaging and historical prices.
 - Sync tests: 68 passed.
 - Independent SQL sessions tested exclusive same-store coordination and independent different-store locks.
 - A native CHECKSUM backup was restored into a separate random test database; both stores' seeded records were verified. Test databases and backup were removed afterward.

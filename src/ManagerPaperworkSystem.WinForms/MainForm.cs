@@ -147,11 +147,11 @@ internal sealed partial class MainForm : Form
             _backfillResultTimer.Start();
             BeginInvoke(new Action(ShowBackfillResult));
         };
-        _invoiceEmailSyncTimer.Tick += async (_, _) => await BeginDueInvoiceEmailSyncAsync();
-        _portalSyncRecoveryTimer.Tick += async (_, _) => await BeginDuePosPortalSyncAsync();
-        _backfillResultTimer.Tick += (_, _) => ShowBackfillResult();
-        _backfillResultTimer.Tick += async (_, _) => await ShowPendingResultAsync();
-        _backfillResultTimer.Tick += async (_, _) => await PromptOpeningCashAsync();
+        _invoiceEmailSyncTimer.Tick += async (_, _) => { if (!_loadingStores) await BeginDueInvoiceEmailSyncAsync(); };
+        _portalSyncRecoveryTimer.Tick += async (_, _) => { if (!_loadingStores) await BeginDuePosPortalSyncAsync(); };
+        _backfillResultTimer.Tick += (_, _) => { if (!_loadingStores) ShowBackfillResult(); };
+        _backfillResultTimer.Tick += async (_, _) => { if (!_loadingStores) await ShowPendingResultAsync(); };
+        _backfillResultTimer.Tick += async (_, _) => { if (!_loadingStores) await PromptOpeningCashAsync(); };
         FormClosed += (_, _) =>
         {
             _monthlyDeliveryTimer.Stop();
@@ -1191,43 +1191,61 @@ internal sealed partial class MainForm : Form
         if (_storeCombo.SelectedItem is not Store store || store.Id == _currentConnectionStoreId)
             return;
 
-        using (var accountDb = _dbFactory.CreateDbContext())
+        var previousDirectoryId = _currentConnectionStoreId;
+        var previousDataId = _currentStoreId;
+        var previousName = _session.StoreName;
+        var previousLastStoreId = _session.LastStoreId;
+        var wasEnabled = Enabled;
+        _loadingStores = true; _storeCombo.Enabled = false; Enabled = false;
+        try
         {
-            var account = await accountDb.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == _session.UserId);
-            if (account is null || !account.IsActive || !account.AllowsStore(store.Id))
+            using (var accountDb = _dbFactory.CreateDbContext())
             {
-                _loadingStores = true; try { _storeCombo.SelectedValue = _currentConnectionStoreId; } finally { _loadingStores = false; }
-                MessageBox.Show(this, "Your account is not permitted to access that store."); return;
+                var account = await accountDb.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == _session.UserId);
+                if (account is null || !account.IsActive || !account.AllowsStore(store.Id))
+                {
+                    _loadingStores = true; try { _storeCombo.SelectedValue = _currentConnectionStoreId; } finally { _loadingStores = false; }
+                    MessageBox.Show(this, "Your account is not permitted to access that store."); return;
+                }
+                _session.AllowedStoreIds = account.AllowedStoreIds;
             }
-            _session.AllowedStoreIds = account.AllowedStoreIds;
-        }
 
-        if (_ledgerWorkspace?.Entry.IsBusy == true)
+            if (_ledgerWorkspace?.Entry.IsBusy == true)
+            {
+                _loadingStores = true;
+                try { _storeCombo.SelectedValue = _currentConnectionStoreId; }
+                finally { _loadingStores = false; }
+                MessageBox.Show(this, "Please wait for the current cash entry to finish saving before switching stores.");
+                return;
+            }
+
+            _currentConnectionStoreId = store.Id;
+            _storeConnections.CurrentStoreId = store.Id;
+            await EnsureCurrentStoreDatabaseReadyAsync(store.Name);
+            _currentStoreId = await ResolveDataStoreIdAsync(store.Name);
+            LicenseRuntime.ConfigurePayrollStateForConnection(CurrentStoreConnectionString());
+            _session.LastStoreId = store.Id;
+            _session.StoreName = store.Name;
+            _status.Text = SessionStatusText(store.Name);
+
+            await SaveSelectedStorePreferenceAsync(store.Id, store.Name, store.Address);
+
+            ShowModule(_currentModule);
+            if (!DemoRuntime.IsEnabled)
+            {
+                _ = BeginMonthlyBankStatementDeliveryAsync();
+                _ = BeginDueInvoiceEmailSyncAsync();
+            }
+        }
+        catch (Exception ex)
         {
-            _loadingStores = true;
-            try { _storeCombo.SelectedValue = _currentConnectionStoreId; }
-            finally { _loadingStores = false; }
-            MessageBox.Show(this, "Please wait for the current cash entry to finish saving before switching stores.");
-            return;
+            _currentConnectionStoreId = previousDirectoryId; _currentStoreId = previousDataId;
+            _storeConnections.CurrentStoreId = previousDirectoryId;
+            _session.StoreName = previousName; _session.LastStoreId = previousLastStoreId;
+            _loadingStores = true; _storeCombo.SelectedValue = previousDirectoryId;
+            MessageBox.Show(this, "The store could not be changed. " + AppBootstrap.RedactSensitiveText(ex.Message), "Store Selection");
         }
-
-        _currentConnectionStoreId = store.Id;
-        _storeConnections.CurrentStoreId = store.Id;
-        await EnsureCurrentStoreDatabaseReadyAsync(store.Name);
-        _currentStoreId = await ResolveDataStoreIdAsync(store.Name);
-        LicenseRuntime.ConfigurePayrollStateForConnection(CurrentStoreConnectionString());
-        _session.LastStoreId = store.Id;
-        _session.StoreName = store.Name;
-        _status.Text = SessionStatusText(store.Name);
-
-        await SaveSelectedStorePreferenceAsync(store.Id, store.Name, store.Address);
-
-        ShowModule(_currentModule);
-        if (!DemoRuntime.IsEnabled)
-        {
-            _ = BeginMonthlyBankStatementDeliveryAsync();
-            _ = BeginDueInvoiceEmailSyncAsync();
-        }
+        finally { _loadingStores = false; if (!IsDisposed) { Enabled = wasEnabled; _storeCombo.Enabled = true; } }
     }
 
     private async Task ResetDemoDataAsync()
