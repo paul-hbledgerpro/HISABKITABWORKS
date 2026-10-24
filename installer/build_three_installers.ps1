@@ -135,7 +135,13 @@ function New-ClientUpdatePackage([string]$Version) {
     foreach ($required in @(
         "HISAB KITAB.exe",
         "Upgrade.exe",
-        "version.txt"
+        "version.txt",
+        "Tesseract.dll",
+        "x64/tesseract50.dll",
+        "x64/leptonica-1.82.0.dll",
+        "tessdata/eng.traineddata",
+        "tessdata/LICENSE.txt",
+        "tessdata/NOTICE.txt"
     )) {
         $requiredPath = Join-Path $clientPublish $required
         if (-not (Test-Path -LiteralPath $requiredPath)) {
@@ -154,7 +160,7 @@ function New-ClientUpdatePackage([string]$Version) {
         })
     }
 
-    foreach ($directoryName in @("Assets", "TaxRules")) {
+    foreach ($directoryName in @("Assets", "TaxRules", "x64", "tessdata")) {
         $directory = Join-Path $clientPublish $directoryName
         if (-not (Test-Path -LiteralPath $directory)) {
             continue
