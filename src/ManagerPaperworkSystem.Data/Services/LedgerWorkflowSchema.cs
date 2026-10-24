@@ -14,14 +14,14 @@ public static class LedgerWorkflowSchema
             if (opened) await connection.OpenAsync(ct);
             try
             {
-                foreach (var (table, column) in new[] { ("ShiftLogs", "PayoutPayee"), ("PendingShiftDrops", "Payee") })
+                foreach (var (table, column) in new[] { ("ShiftLogs", "PayoutPayee"), ("PendingShiftDrops", "Payee"), ("UserAccounts", "AllowedStoreIds") })
                 {
                     using var check = connection.CreateCommand(); check.CommandText = $"PRAGMA table_info([{table}])";
                     var columns = new List<string>();
                     await using (var reader = await check.ExecuteReaderAsync(ct)) while (await reader.ReadAsync(ct)) columns.Add(reader.GetString(1));
                     if (columns.Count > 0 && !columns.Contains(column, StringComparer.OrdinalIgnoreCase))
                     {
-                        var upgrade = table == "ShiftLogs"
+                        var upgrade = table == "UserAccounts" ? "ALTER TABLE UserAccounts ADD AllowedStoreIds TEXT NOT NULL DEFAULT ''" : table == "ShiftLogs"
                             ? "ALTER TABLE ShiftLogs ADD PayoutPayee TEXT NOT NULL DEFAULT ''"
                             : "ALTER TABLE PendingShiftDrops ADD Payee TEXT NOT NULL DEFAULT ''";
                         await db.Database.ExecuteSqlRawAsync(upgrade, ct);
@@ -37,6 +37,8 @@ public static class LedgerWorkflowSchema
         await db.Database.ExecuteSqlRawAsync("""
 IF COL_LENGTH('dbo.PosSalesSummaries','PayoutReason') < 8000
  ALTER TABLE dbo.PosSalesSummaries ALTER COLUMN PayoutReason nvarchar(4000) NOT NULL;
+IF OBJECT_ID('dbo.UserAccounts') IS NOT NULL AND COL_LENGTH('dbo.UserAccounts','AllowedStoreIds') IS NULL
+ ALTER TABLE dbo.UserAccounts ADD AllowedStoreIds nvarchar(2000) NOT NULL DEFAULT '';
 IF OBJECT_ID('dbo.PendingShiftDrops') IS NULL
 BEGIN
  CREATE TABLE dbo.PendingShiftDrops(Id int IDENTITY PRIMARY KEY,RequestId uniqueidentifier NOT NULL,StoreId int NOT NULL,ConfigurationId uniqueidentifier NOT NULL,PortalStoreName nvarchar(300) NOT NULL,Batch nvarchar(20) NOT NULL,[Drop] decimal(18,2) NOT NULL,Payout decimal(18,2) NOT NULL,Reason nvarchar(300) NOT NULL,UserId int NOT NULL,UserName nvarchar(120) NOT NULL,Status nvarchar(30) NOT NULL,Message nvarchar(1000) NOT NULL,CreatedUtc datetime2 NOT NULL,LastAttemptUtc datetime2 NULL,NotifiedUtc datetime2 NULL,ShiftId int NULL,Variance decimal(18,2) NULL);

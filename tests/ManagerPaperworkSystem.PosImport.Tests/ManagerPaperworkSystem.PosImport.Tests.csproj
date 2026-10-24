@@ -20,5 +20,8 @@
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/ShiftDropWorkflow.cs" Link="ShiftDropWorkflow.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/LedgerMonthService.cs" Link="LedgerMonthService.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/CashDropRollupService.cs" Link="CashDropRollupService.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/PurchaseService.cs" Link="PurchaseService.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/InvoiceImportService.cs" Link="InvoiceImportService.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/InvoiceValidation.cs" Link="InvoiceValidation.cs" />
   </ItemGroup>
 </Project>

@@ -21,24 +21,26 @@ public sealed class PurchaseService
         _paths = paths;
     }
 
+    public PurchaseService Capture()
+    {
+        using var db = _dbFactory.CreateDbContext();
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        if (db.Database.IsSqlServer()) options.UseSqlServer(db.Database.GetConnectionString());
+        else options.UseSqlite(db.Database.GetConnectionString());
+        return new PurchaseService(new FixedFactory(options.Options), _paths);
+    }
+    private sealed class FixedFactory(DbContextOptions<AppDbContext> options) : IDbContextFactory<AppDbContext>
+    {
+        public AppDbContext CreateDbContext() => new(options);
+    }
+
     private static string CleanDatabaseText(string? value, int maximumLength)
     {
         var clean = Regex.Replace((value ?? "").Trim(), @"\s+", " ");
         return clean.Length <= maximumLength ? clean : clean[..maximumLength].TrimEnd();
     }
 
-    private static string NormalizeProductKey(string? itemCode, string? name)
-    {
-        var code = (itemCode ?? "").Trim();
-        code = Regex.Replace(code, @"\s+", "");
-        code = code.ToUpperInvariant();
-
-        var s = (name ?? "").Trim();
-        s = Regex.Replace(s, @"\s+", " ");
-        s = s.ToUpperInvariant();
-
-        return CleanDatabaseText(string.IsNullOrWhiteSpace(code) ? s : $"{code}|{s}", 260);
-    }
+    private static string NormalizeProductKey(string? itemCode, string? name) => InvoiceIdentity.ProductKey(itemCode, name);
 
     public string? CopyInvoiceFileToAppData(int storeId, DateOnly invoiceDate, string? sourceFilePath)
     {
@@ -57,7 +59,7 @@ public sealed class PurchaseService
         Directory.CreateDirectory(invoicesRoot);
 
         var fileName = Path.GetFileName(actualPath);
-        var safeName = $"{DateTime.Now:yyyyMMdd_HHmmss}_{fileName}";
+        var safeName = $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}_{fileName}";
         foreach (var c in Path.GetInvalidFileNameChars()) safeName = safeName.Replace(c, '_');
 
         var destPath = Path.Combine(invoicesRoot, safeName);
@@ -98,6 +100,19 @@ public sealed class PurchaseService
         string userName,
         CancellationToken ct = default)
     {
+        // Capture the database before the first await; invoice + costs commit together.
+        using var db = _dbFactory.CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+        if (vendorId.HasValue && !await db.Vendors.AnyAsync(x => x.Id == vendorId.Value && x.StoreId == storeId, ct))
+            throw new InvalidOperationException("The selected vendor belongs to another store or is unavailable.");
+        var key = InvoiceIdentity.Key(vendorName, invoiceNumber);
+        if (!string.IsNullOrWhiteSpace(invoiceNumber))
+        {
+            var identities = await db.PurchaseInvoices.Where(x => x.StoreId == storeId)
+                .Select(x => new { x.VendorName, x.InvoiceNumber, x.InvoiceDate, x.Total }).ToListAsync(ct);
+            var duplicate = identities.FirstOrDefault(x => InvoiceIdentity.Key(x.VendorName, x.InvoiceNumber) == key);
+            if (duplicate is not null) throw new DuplicateInvoiceException(duplicate.InvoiceDate != invoiceDate || duplicate.Total != total);
+        }
         var copiedPath = CopyInvoiceFileToAppData(storeId, invoiceDate, sourceFilePath) ?? "";
 
         var inv = new PurchaseInvoice
@@ -131,11 +146,11 @@ public sealed class PurchaseService
                 .ToList()
         };
 
-        using var db = _dbFactory.CreateDbContext();
         db.PurchaseInvoices.Add(inv);
         await db.SaveChangesAsync(ct);
 
-        await ApplyCostTrackingAsync(inv, ct);
+        await ApplyCostTrackingAsync(db, inv, ct);
+        await transaction.CommitAsync(ct);
         return inv;
     }
 
@@ -233,7 +248,7 @@ public sealed class PurchaseService
             if (string.IsNullOrWhiteSpace(key)) continue;
 
             var sku = CleanDatabaseText(line.ItemCode, 80);
-            var existing = await db.ProductCosts.FirstOrDefaultAsync(x => x.StoreId == storeId && x.ProductKey == key, ct);
+            var existing = await FindProductCostAsync(db, storeId, key, sku, ct);
 
             if (existing is null)
             {
@@ -252,7 +267,7 @@ public sealed class PurchaseService
                 db.ProductCosts.Add(existing);
                 upserts++;
             }
-            else
+            else if (invoiceDate >= existing.LastInvoiceDate)
             {
                 if (existing.LastUnitCost != line.UnitCost)
                 {
@@ -376,16 +391,29 @@ public sealed class PurchaseService
         await db.SaveChangesAsync(ct);
     }
 
-    private async Task ApplyCostTrackingAsync(PurchaseInvoice inv, CancellationToken ct)
+    private static async Task<ProductCost?> FindProductCostAsync(AppDbContext db, int storeId, string key, string sku, CancellationToken ct)
     {
-        using var db = _dbFactory.CreateDbContext();
+        var existing = db.ProductCosts.Local.FirstOrDefault(x => x.StoreId == storeId && x.ProductKey == key)
+            ?? await db.ProductCosts.FirstOrDefaultAsync(x => x.StoreId == storeId && x.ProductKey == key, ct);
+        if (existing is null && key.StartsWith("PACK:", StringComparison.Ordinal))
+        {
+            var priorPackaging = await db.ProductCosts.Where(x => x.StoreId == storeId && x.Sku == sku).ToListAsync(ct);
+            existing = priorPackaging.Where(x => NormalizeProductKey(x.Sku, x.ProductName) == key)
+                .OrderByDescending(x => x.LastInvoiceDate).ThenByDescending(x => x.Id).FirstOrDefault();
+            if (existing is not null) existing.ProductKey = key;
+        }
+        return existing;
+    }
+
+    private static async Task ApplyCostTrackingAsync(AppDbContext db, PurchaseInvoice inv, CancellationToken ct)
+    {
         foreach (var line in inv.Lines)
         {
             var key = NormalizeProductKey(line.ItemCode, line.ProductName);
             if (string.IsNullOrWhiteSpace(key)) continue;
 
             var sku = CleanDatabaseText(line.ItemCode, 80);
-            var existing = await db.ProductCosts.FirstOrDefaultAsync(x => x.StoreId == inv.StoreId && x.ProductKey == key, ct);
+            var existing = await FindProductCostAsync(db, inv.StoreId, key, sku, ct);
             if (existing is null)
             {
                 existing = new ProductCost
@@ -402,7 +430,7 @@ public sealed class PurchaseService
                 };
                 db.ProductCosts.Add(existing);
             }
-            else
+            else if (inv.InvoiceDate >= existing.LastInvoiceDate)
             {
                 if (existing.LastUnitCost != line.UnitCost)
                 {

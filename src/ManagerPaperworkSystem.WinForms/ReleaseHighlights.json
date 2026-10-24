@@ -1,25 +1,25 @@
 {
-  "Version": "1.0.181",
+  "Version": "1.0.182",
   "Features": [
     {
-      "Title": "Side Entry Grid is now the default",
-      "Description": "Shift Cash Drop and Cash On Hand keep their full transaction grids, with entry fields beside them for faster recording."
+      "Title": "Easier cash entry and readable grids",
+      "Description": "Shift Cash Drop and Cash On Hand keep readable columns with horizontal scrolling. Buttons stay visible, amount fields select their existing value, and shifts can be typed or picked from a batch list. Use Newest First, Oldest First or batch search to organize shifts."
     },
     {
-      "Title": "Choose your preferred layout",
-      "Description": "Use View at the top to choose Classic Grid, Side Entry Grid or Guided Grid for each section. Your choices are remembered."
+      "Title": "Invoice Inbox and review",
+      "Description": "Purchases now has Invoice Inbox for Gmail connection, your store invoice address and import results. Review uncertain or scanned invoices before saving. Google sign-in remains subject to Google account access requirements."
     },
     {
-      "Title": "Remember payees and payout reasons",
-      "Description": "Type a new Paid To / Vendor or Purpose / Reason, or select a saved one. After a successful save, the choices are available in both sections for the same store."
+      "Title": "Safer invoice and price imports",
+      "Description": "Duplicate invoice checks cover the full store history. Invoice and product-price updates save together. Price comparisons distinguish packaging, and older backfills do not replace newer prices."
     },
     {
-      "Title": "Review before saving with Guided Grid",
-      "Description": "Guided Grid lets you review the entry before confirming. Changing layouts keeps an unfinished entry in place."
+      "Title": "Administrator account controls",
+      "Description": "Administrators can edit names, roles and permitted stores, reset passwords, or deactivate and reactivate accounts. Only unused accounts can be deleted; the last active administrator is protected."
     },
     {
-      "Title": "Existing drop and payout accounting continues",
-      "Description": "Verified batches update their shift and cash balance; pending drops wait for the matching store report. Existing corrections and month-close rules remain in place."
+      "Title": "Sync health and retained backups",
+      "Description": "Use Sync Health to see the latest import, pending drops, sync results and last off-device backup. Verified backups now retain seven local copies per database in addition to the existing cloud backup. Developer sync setup remains protected."
     }
   ]
 }

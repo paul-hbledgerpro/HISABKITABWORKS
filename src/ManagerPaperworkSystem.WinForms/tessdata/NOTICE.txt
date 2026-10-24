@@ -1,0 +1,5 @@
+English OCR model: tesseract-ocr/tessdata_fast, Apache-2.0 (see LICENSE.txt).
+Pinned source commit: 65727574dfcd264acbb0c3e07860e4e9e9b22185 (4.1.0).
+eng.traineddata SHA256: 7D4322BD2A7749724879683FC3912CB542F19906C83BCC1A52132556427170B2
+Runtime wrapper: Tesseract NuGet 5.2.0 (charlesw/tesseract), Apache-2.0.
+OCR runs offline; supported single-image scan pages produce review drafts only.

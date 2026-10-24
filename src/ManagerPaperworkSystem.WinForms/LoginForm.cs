@@ -711,6 +711,7 @@ internal sealed class LoginForm : Form
 
             var businesses = LicensedBusinessService.Load();
             return choices
+                .Where(x => x.StoreId is int id && (_validatedUser?.AllowsStore(id) ?? false))
                 .GroupBy(x => x.StoreId)
                 .Select(g => g.OrderByDescending(x => !string.IsNullOrWhiteSpace(x.ConnectionString)).First())
                 .OrderBy(x => StoreDirectoryPreferencesStore.OrderOf(x.StoreName, businesses))
@@ -1005,12 +1006,14 @@ internal sealed class LoginForm : Form
 
     private void SelectStore(MatchedStore store)
     {
+        if (!store.User.AllowsStore(store.StoreId)) { _error.Text = "This account is not permitted to access that store."; return; }
         _session.UserId = store.User.Id;
         _session.Username = store.User.Username;
         _session.DisplayName = string.IsNullOrWhiteSpace(store.User.DisplayName) ? store.User.Username : store.User.DisplayName;
         _session.Role = store.User.Role;
         _session.LastStoreId = store.StoreId;
         _session.StoreName = store.StoreName;
+        _session.AllowedStoreIds = store.User.AllowedStoreIds;
 
         if (ProgramServices.TryGet<AuthService>(out var auth))
             auth.SetStoreDbCreator(null);

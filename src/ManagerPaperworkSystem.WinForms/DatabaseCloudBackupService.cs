@@ -173,6 +173,7 @@ internal static class DatabaseCloudBackupService
                 }
 
                 string? localBackupPath = null;
+                var retained = false;
                 try
                 {
                     WriteLog(
@@ -182,6 +183,15 @@ internal static class DatabaseCloudBackupService
                     localBackupPath = await CreateVerifiedNativeBackupAsync(
                         business.DatabaseName,
                         cancellationToken);
+                    try
+                    {
+                        VerifiedBackupRetention.Keep(Path.Combine(AppBootstrap.AppDataPath, "Verified Database Backups"), business.DatabaseName, localBackupPath);
+                        retained = true;
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        WriteLog(business.BusinessName, false, "Retained-copy error; original backup kept. " + ex.Message);
+                    }
                     var uploaded = await client.UploadAsync(
                         business,
                         localBackupPath,
@@ -215,7 +225,7 @@ internal static class DatabaseCloudBackupService
                 }
                 finally
                 {
-                    TryDelete(localBackupPath);
+                    if (retained) TryDelete(localBackupPath);
                 }
             }
 
@@ -227,6 +237,9 @@ internal static class DatabaseCloudBackupService
             RunGate.Release();
         }
     }
+
+    public static DateTime? LastSuccessfulBackup(LicensedBusinessConnection business) =>
+        LoadState().LastSuccessfulUtc.TryGetValue(StoreDirectoryPreferencesStore.Key(business), out var time) ? time : null;
 
     public static void WriteLog(
         string businessName,

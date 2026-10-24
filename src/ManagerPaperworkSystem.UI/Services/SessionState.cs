@@ -14,6 +14,8 @@ public sealed class SessionState
 
     /// <summary>Store name for display.</summary>
     public string StoreName { get; set; } = "";
+    public string AllowedStoreIds { get; set; } = "";
+    public bool AllowsStore(int id) => new UserAccount { AllowedStoreIds = AllowedStoreIds }.AllowsStore(id);
 
     public bool IsAdmin => Role == UserRole.OwnerAdmin;
 
@@ -25,5 +27,6 @@ public sealed class SessionState
         Role = UserRole.Manager;
         LastStoreId = 0;
         StoreName = "";
+        AllowedStoreIds = "";
     }
 }

@@ -326,17 +326,17 @@ internal sealed class StoreManagerForm : Form
     }
 }
 
-internal sealed class UserAccountsForm : Form
+internal sealed partial class UserAccountsForm : Form
 {
     private readonly IAuthService _auth;
     private readonly DataGridView _grid = WinTheme.Grid();
 
-    public UserAccountsForm(IAuthService auth)
+    public UserAccountsForm(IAuthService auth, IDbContextFactory<AppDbContext> factory, ManagerPaperworkSystem.UI.Services.SessionState session)
     {
-        _auth = auth;
+        _auth = auth; _accountsFactory = factory; _accountsSession = session;
         WinTheme.Apply(this);
         Text = "User Accounts - HISAB KITAB";
-        Size = new Size(900, 560);
+        Size = new Size(1120, 620);
         Controls.Add(Build());
         Load += (_, _) => RefreshGrid();
     }
@@ -344,7 +344,7 @@ internal sealed class UserAccountsForm : Form
     private Control Build()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = WinTheme.Bg, Padding = new Padding(14) };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill };
         var add = WinTheme.Button("Add User", true);
@@ -367,6 +367,11 @@ internal sealed class UserAccountsForm : Form
         actions.Controls.Add(add);
         actions.Controls.Add(setPin);
         actions.Controls.Add(toggle);
+        foreach (var (caption, action) in new[] { ("Edit User", "Edit"), ("Reset Password", "Reset Password"), ("Delete User", "Delete") })
+        {
+            var button = WinTheme.Button(caption); button.Width = 150;
+            button.Click += async (_, _) => await ManageSelectedAsync(action); actions.Controls.Add(button);
+        }
         root.Controls.Add(actions, 0, 0);
         root.Controls.Add(_grid, 0, 1);
         return root;
@@ -374,6 +379,9 @@ internal sealed class UserAccountsForm : Form
 
     private async void RefreshGrid()
     {
+        try {
+        using var db = _accountsFactory.CreateDbContext();
+        await ManagerPaperworkSystem.Data.Services.AccountAdministration.RequireAdminAsync(db, _accountsSession.UserId);
         var users = await _auth.GetUsersAsync();
         _grid.DataSource = users.OrderBy(x => x.Username)
             .Select(x => new
@@ -383,6 +391,7 @@ internal sealed class UserAccountsForm : Form
                 x.Username,
                 x.Email,
                 x.Role,
+                Stores = x.AllowedStoreIds.Length == 0 ? "All configured stores" : x.AllowedStoreIds,
                 Pin = x.HasPin ? "Configured" : "Not Set",
                 x.IsActive,
                 x.CreatedUtc,
@@ -391,6 +400,7 @@ internal sealed class UserAccountsForm : Form
             .ToList();
         if (_grid.Columns.Contains("Id"))
             _grid.Columns["Id"]!.Visible = false;
+        } catch (Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.Message), "User Accounts"); }
     }
 
     private async Task ToggleSelectedAsync()
@@ -400,8 +410,7 @@ internal sealed class UserAccountsForm : Form
         if (!int.TryParse(_grid.CurrentRow.Cells["Id"].Value?.ToString(), out var id))
             return;
         var active = bool.TryParse(_grid.CurrentRow.Cells["IsActive"].Value?.ToString(), out var current) && current;
-        await _auth.SetUserActiveAsync(id, !active);
-        RefreshGrid();
+        await ManageSelectedAsync(active ? "Deactivate" : "Reactivate");
     }
 
     private void SetSelectedPin()

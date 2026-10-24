@@ -116,7 +116,12 @@ internal sealed partial class MainForm
                 try { await refresh(); }
                 catch (Exception ex) { MessageBox.Show(this, "The entry was saved, but the grid could not refresh. Click Refresh.\n" + AppBootstrap.RedactSensitiveText(ex.Message)); }
             }
-        }, () => LoadPayoutChoicesAsync(storeId, connection));
+        }, () => LoadPayoutChoicesAsync(storeId, connection), shift ? async () =>
+        {
+            await using var db = CapturedLedgerDb(connection);
+            var rows = await db.ShiftLogs.AsNoTracking().Where(x => x.StoreId == storeId && !x.IsCorrection && x.PosReportKey != "").ToListAsync();
+            return LedgerGridPresentation.Order(rows, false, "").Select(x => x.ShiftNo).Distinct().ToArray();
+        } : null);
     }
     private static void StackLegacyShiftDetails(TableLayoutPanel form)
     {

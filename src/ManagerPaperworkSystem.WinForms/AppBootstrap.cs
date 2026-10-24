@@ -64,7 +64,7 @@ internal static class AppBootstrap
         services.AddSingleton<IAuthService>(sp => sp.GetRequiredService<AuthService>());
         services.AddSingleton<IReportService, ReportService>();
         services.AddSingleton<PurchaseService>();
-        services.AddSingleton<InvoiceImportService>();
+        services.AddSingleton(_ => new InvoiceImportService(ScannedInvoiceReader.Read));
         services.AddSingleton<PosReportImportService>();
         services.AddSingleton<CheckPrintService>();
         services.AddSingleton<SessionState>();

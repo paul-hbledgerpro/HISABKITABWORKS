@@ -5,7 +5,7 @@ internal sealed record LedgerEntryDraft(string Batch, DateOnly Date, decimal Amo
 internal sealed class LedgerEntryPanel : UserControl
 {
     private readonly bool _shift;
-    private readonly TextBox _batch = new() { MaxLength = 20, Name = "LedgerBatch" };
+    private readonly ComboBox _batch = Choices("LedgerBatch");
     private readonly DateTimePicker _date = WinTheme.DatePicker();
     private readonly NumericUpDown _amount = new() { DecimalPlaces = 2, Maximum = 99999999, ThousandsSeparator = true, Name = "LedgerAmount" };
     private readonly NumericUpDown _payout = new() { DecimalPlaces = 2, Maximum = 99999999, ThousandsSeparator = true, Name = "LedgerRegisterPayout" };
@@ -17,14 +17,17 @@ internal sealed class LedgerEntryPanel : UserControl
     private readonly Button _back = WinTheme.Button("Back");
     private readonly Func<LedgerEntryDraft, Task> _submit;
     private readonly Func<Task<(string[] Payees, string[] Reasons)>> _choices;
-    private bool _review, _loading;
+    private readonly Func<Task<string[]>>? _batches;
+    private bool _loadingBatches;
+    private bool _review, _loading, _batchEdited;
     public bool IsBusy { get; private set; }
-    public bool HasDraft => _amount.Value != 0 || _payout.Value != 0 || _payee.Text.Length != 0 || _reason.Text.Length != 0;
+    public bool HasDraft => _batchEdited || _amount.Value != 0 || _payout.Value != 0 || _payee.Text.Length != 0 || _reason.Text.Length != 0;
     public LedgerLayout LayoutChoice { get; private set; }
 
-    public LedgerEntryPanel(bool shift, Func<LedgerEntryDraft, Task> submit, Func<Task<(string[] Payees, string[] Reasons)>> choices)
+    public LedgerEntryPanel(bool shift, Func<LedgerEntryDraft, Task> submit, Func<Task<(string[] Payees, string[] Reasons)>> choices, Func<Task<string[]>>? batches = null)
     {
-        _shift = shift; _submit = submit; _choices = choices;
+        _shift = shift; _submit = submit; _choices = choices; _batches = batches; _batch.MaxLength = 20;
+        SelectAmountOnFocus(_amount); SelectAmountOnFocus(_payout);
         Dock = DockStyle.Fill; BackColor = WinTheme.Panel; ForeColor = WinTheme.Text; Padding = new Padding(10);
         _save.Width = 145; _back.Width = 85;
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
@@ -43,8 +46,33 @@ internal sealed class LedgerEntryPanel : UserControl
             input.KeyDown += async (_, e) => { if (e.KeyCode == Keys.Enter && input is not ComboBox { DroppedDown: true }) { e.SuppressKeyPress = true; await SubmitAsync(); } };
         _payee.DropDown += async (_, _) => await RefreshChoicesAsync();
         _reason.DropDown += async (_, _) => await RefreshChoicesAsync();
+        _batch.TextUpdate += (_, _) => _batchEdited = true;
+        _batch.SelectionChangeCommitted += (_, _) => _batchEdited = true;
+        _batch.DropDown += async (_, _) => await RefreshBatchesAsync();
         HandleCreated += async (_, _) => await RefreshChoicesAsync();
         ApplyLayout(LedgerLayout.SideEntryGrid);
+    }
+    private static void SelectAmountOnFocus(NumericUpDown amount)
+    {
+        void Select() { if (!amount.IsDisposed) amount.Select(0, amount.Text.Length); }
+        void QueueSelection() { if (!amount.IsDisposed && amount.IsHandleCreated) amount.BeginInvoke((Action)Select); }
+        amount.Enter += (_, _) => QueueSelection();
+        amount.MouseUp += (_, _) => QueueSelection();
+        foreach (var text in amount.Controls.OfType<TextBox>()) text.MouseUp += (_, _) => QueueSelection();
+    }
+    internal async Task RefreshBatchesAsync()
+    {
+        if (_batches is null || _loadingBatches || IsDisposed) return;
+        _loadingBatches = true;
+        try
+        {
+            var values = await _batches(); if (IsDisposed) return;
+            var text = _batch.Text; _batch.BeginUpdate(); _batch.Items.Clear();
+            _batch.Items.AddRange(values.Distinct(StringComparer.OrdinalIgnoreCase).Cast<object>().ToArray());
+            _batch.SelectedIndex = -1; _batch.Text = text; _batch.EndUpdate();
+        }
+        catch (Exception ex) { if (!IsDisposed) _message.Text = "Batch list could not load. You can still type a batch. " + AppBootstrap.RedactSensitiveText(ex.Message); }
+        finally { _loadingBatches = false; }
     }
     internal static ComboBox Choices(string name) => new() { Name = name, DropDownStyle = ComboBoxStyle.DropDown, MaxLength = 200, AutoCompleteMode = AutoCompleteMode.SuggestAppend, AutoCompleteSource = AutoCompleteSource.ListItems, FlatStyle = FlatStyle.Standard };
     private void AddField(string label, Control input, int width)
@@ -106,7 +134,7 @@ internal sealed class LedgerEntryPanel : UserControl
         try
         {
             await _submit(draft); if (IsDisposed) return;
-            _amount.Value = _payout.Value = 0; _payee.SelectedIndex = _reason.SelectedIndex = -1; _payee.Text = _reason.Text = ""; _batch.Clear(); _review = false;
+            _amount.Value = _payout.Value = 0; _payee.SelectedIndex = _reason.SelectedIndex = _batch.SelectedIndex = -1; _payee.Text = _reason.Text = _batch.Text = ""; _review = false; _batchEdited = false;
             await RefreshChoicesAsync(); _message.Text = "Entry saved.";
         }
         catch (OperationCanceledException) { if (!IsDisposed) _message.Text = "Entry was not saved. Your values are still here."; }

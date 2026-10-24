@@ -404,7 +404,7 @@ internal sealed partial class MainForm
                     if (grid is not null) await DemoSelectFirstRowAsync(grid);
                     await DemoPointAtTextAsync("DEFAULT", form);
                 });
-                await DemoShowModalAsync(new UserAccountsForm(_services.GetRequiredService<IAuthService>()), 24, async form =>
+                await DemoShowModalAsync(new UserAccountsForm(_services.GetRequiredService<IAuthService>(), _dbFactory, _session), 24, async form =>
                 {
                     var grid = DemoControls<DataGridView>(form).FirstOrDefault(item => item.Rows.Count > 0);
                     if (grid is not null) await DemoSelectFirstRowAsync(grid);

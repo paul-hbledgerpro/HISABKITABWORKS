@@ -40,6 +40,28 @@ public sealed class ImportedInvoice
 /// </summary>
 public sealed class InvoiceImportService
 {
+    private readonly Func<string, CancellationToken, string>? _ocr;
+    public InvoiceImportService(Func<string, CancellationToken, string>? ocr = null) => _ocr = ocr;
+
+    private InvoiceImportResult ImportPdfWithScanFallback(string path, string? vendor, CancellationToken ct)
+    {
+        var result = ImportFromPdf(path, vendor);
+        if (_ocr is null || result.RawText.Count(char.IsLetterOrDigit) >= 60) return result;
+        try
+        {
+            var text = _ocr(path, ct);
+            if (string.IsNullOrWhiteSpace(text)) return result;
+            var rows = text.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+            var lines = ParseLineItemsEnhanced(rows);
+            if (lines.Count == 0) lines = ParseLineItems(rows);
+            return new InvoiceImportResult { Success = true, VendorName = vendor ?? GuessVendorName(text) ?? "",
+                InvoiceNumber = GuessInvoiceNumberEnhanced(text) ?? GuessInvoiceNumber(text) ?? "", InvoiceDate = GuessInvoiceDate(text),
+                Total = GuessTotalEnhanced(text) ?? GuessTotal(text), Lines = lines, RawText = text,
+                Warnings = { "Scanned PDF read with OCR. Verify the supplier, date, invoice number and every amount against the original before saving." } };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { result.Warnings.Add("This scan could not be read automatically. Review the PDF and enter its purchase details manually."); return result; }
+    }
     public async Task<InvoiceImportResult> ImportAsync(string filePath, string? selectedVendor = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
@@ -51,7 +73,7 @@ public sealed class InvoiceImportService
         {
             return ext switch
             {
-                ".pdf" => await Task.Run(() => ImportFromPdf(filePath, selectedVendor), ct),
+                ".pdf" => await Task.Run(() => ImportPdfWithScanFallback(filePath, selectedVendor, ct), ct),
                 ".xlsx" or ".xls" => await Task.Run(() => ImportFromExcel(filePath), ct),
                 ".csv" => await Task.Run(() => ImportFromCsv(filePath), ct),
                 _ => new InvoiceImportResult

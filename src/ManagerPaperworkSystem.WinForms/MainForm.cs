@@ -229,11 +229,14 @@ internal sealed partial class MainForm : Form
     private async Task BeginDueInvoiceEmailSyncAsync()
     {
         var storeKey = CurrentInvoiceEmailStoreKey();
+        var invoiceStoreId = _currentStoreId; var invoiceUserId = _session.UserId; var invoiceUserName = _session.DisplayName;
+        var invoiceSync = new InvoiceEmailSyncService(_paths, _invoiceImportService, _purchaseService.Capture());
+        var cloudSync = new CloudInvoiceInboxService(_paths, invoiceSync);
         var business = CurrentLicensedBusiness();
         var cloudConfigured = HasCloudInvoiceInbox(business);
         var cloudDue = !_cloudInvoiceLastSyncUtc.TryGetValue(storeKey, out var lastCloudSync)
                        || DateTime.UtcNow - lastCloudSync >= TimeSpan.FromHours(4);
-        var directEmailDue = _invoiceEmailSyncService.IsDue(
+        var directEmailDue = invoiceSync.IsDue(
             storeKey,
             TimeSpan.FromHours(4));
         if ((!cloudConfigured || !cloudDue) && !directEmailDue
@@ -247,12 +250,12 @@ internal sealed partial class MainForm : Form
             {
                 try
                 {
-                    var result = await _cloudInvoiceInboxService.SyncAsync(
+                    var result = await cloudSync.SyncAsync(
                         business,
                         storeKey,
-                        _currentStoreId,
-                        _session.UserId,
-                        _session.DisplayName);
+                        invoiceStoreId,
+                        invoiceUserId,
+                        invoiceUserName);
                     _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
                     var message =
                         $"Protected invoice inbox: {result.InvoicesImported} imported; " +
@@ -283,11 +286,11 @@ internal sealed partial class MainForm : Form
             {
                 try
                 {
-                    var result = await _invoiceEmailSyncService.SyncAsync(
+                    var result = await invoiceSync.SyncAsync(
                         storeKey,
-                        _currentStoreId,
-                        _session.UserId,
-                        _session.DisplayName);
+                        invoiceStoreId,
+                        invoiceUserId,
+                        invoiceUserName);
                     var message =
                         $"Invoice email sync: {result.InvoicesImported} imported; " +
                         $"{result.NeedsReview} need review.";
@@ -1114,6 +1117,7 @@ internal sealed partial class MainForm : Form
             var stores = (await db.Stores.AsNoTracking()
                     .Where(s => s.IsActive)
                     .ToListAsync())
+                .Where(store => _session.AllowsStore(store.Id))
                 .OrderBy(store =>
                     StoreDirectoryPreferencesStore.OrderOf(store.Name, businesses))
                 .ThenBy(store => store.Name)
@@ -1186,6 +1190,17 @@ internal sealed partial class MainForm : Form
 
         if (_storeCombo.SelectedItem is not Store store || store.Id == _currentConnectionStoreId)
             return;
+
+        using (var accountDb = _dbFactory.CreateDbContext())
+        {
+            var account = await accountDb.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == _session.UserId);
+            if (account is null || !account.IsActive || !account.AllowsStore(store.Id))
+            {
+                _loadingStores = true; try { _storeCombo.SelectedValue = _currentConnectionStoreId; } finally { _loadingStores = false; }
+                MessageBox.Show(this, "Your account is not permitted to access that store."); return;
+            }
+            _session.AllowedStoreIds = account.AllowedStoreIds;
+        }
 
         if (_ledgerWorkspace?.Entry.IsBusy == true)
         {
@@ -1740,7 +1755,7 @@ internal sealed partial class MainForm : Form
     private static void ConfigureResponsiveActionBar(FlowLayoutPanel panel)
     {
         panel.WrapContents = true;
-        panel.AutoScroll = true;
+        panel.AutoScroll = !Equals(panel.Tag, "LedgerActions");
 
         if (panel.Parent is not TableLayoutPanel table)
             return;
@@ -1794,16 +1809,19 @@ internal sealed partial class MainForm : Form
                     currentRowHeight = Math.Max(currentRowHeight, controlHeight);
                 }
 
-                desiredHeight += currentRowHeight;
+                desiredHeight += currentRowHeight + panel.Margin.Vertical;
                 desiredHeight = Math.Max(minimumHeight, desiredHeight);
 
                 var maximumHeight = Math.Max(
                     minimumHeight,
                     Math.Min(220, Math.Max(minimumHeight, table.ClientSize.Height / 3)));
-                var targetHeight = Math.Min(desiredHeight, maximumHeight);
+                var targetHeight = Equals(panel.Tag, "LedgerActions") ? desiredHeight : Math.Min(desiredHeight, maximumHeight);
 
                 if (Math.Abs(rowStyle.Height - targetHeight) >= 1f)
+                {
                     rowStyle.Height = targetHeight;
+                    if (table.IsHandleCreated) table.BeginInvoke((Action)(() => { if (!table.IsDisposed) table.PerformLayout(); }));
+                }
             }
             finally
             {
@@ -2124,6 +2142,11 @@ internal sealed partial class MainForm : Form
         int? loadedShiftEntryId = null;
         Button? saveDropButton = null;
         Button? addEntryButton = null;
+        List<ShiftLogEntry> cachedShiftRows = [];
+        var orderChoice = WinTheme.ComboBox(); orderChoice.Width = 145;
+        orderChoice.Items.AddRange(new object[] { "Newest First", "Oldest First" }); orderChoice.SelectedIndex = 0;
+        var batchSearch = WinTheme.TextBox(); batchSearch.Width = 160; batchSearch.PlaceholderText = "Search batch";
+        var batchOnlySort = false;
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Shift cash drop records for selected store"), 0, 3);
         var grossBox = (TextBox)((TableLayoutPanel)paymentSummary.GetControlFromPosition(0, 0)!).GetControlFromPosition(1, 0)!;
@@ -2154,8 +2177,8 @@ internal sealed partial class MainForm : Form
             {
                 saveDropButton.Enabled = updatingExistingRow;
                 saveDropButton.Text = updatingExistingRow
-                    ? "Save / Update Cash Drop"
-                    : "Select Auto-Synced Row";
+                    ? "Save Selected Drop"
+                    : "Select a Shift";
             }
 
             if (addEntryButton is not null)
@@ -2166,19 +2189,22 @@ internal sealed partial class MainForm : Form
         void refresh()
         {
             using var db = CreateDb();
-            var rows = db.ShiftLogs.AsNoTracking()
+            cachedShiftRows = db.ShiftLogs.AsNoTracking()
                 .Where(x => x.StoreId == _currentStoreId)
                 .ToList();
+            bindShiftRows();
+        }
+        void bindShiftRows()
+        {
+            var rows = cachedShiftRows;
             var latestCorrections = rows
                 .Where(item => item.IsCorrection && item.CorrectsId.HasValue)
                 .GroupBy(item => item.CorrectsId!.Value)
                 .ToDictionary(
                     group => group.Key,
                     group => group.OrderByDescending(item => item.CreatedUtc).First().Id);
-            grid.DataSource = rows.Where(x => x.Date >= _ledgerFrom && x.Date <= _ledgerTo)
-                .OrderByDescending(x => x.Date)
-                .ThenBy(x => NumericBatchOrder(x.ShiftNo))
-                .ThenBy(x => x.CreatedUtc)
+            grid.DataSource = LedgerGridPresentation.Order(rows.Where(x => x.Date >= _ledgerFrom && x.Date <= _ledgerTo),
+                orderChoice.SelectedIndex == 1, batchSearch.Text, batchOnlySort)
                 .Select(x => new
                 {
                     x.Id,
@@ -2213,6 +2239,15 @@ internal sealed partial class MainForm : Form
                 .ToList();
             HideId(grid);
         }
+        orderChoice.SelectedIndexChanged += (_, _) => { batchOnlySort = false; bindShiftRows(); };
+        batchSearch.TextChanged += (_, _) => bindShiftRows();
+        grid.ColumnHeaderMouseClick += (_, e) =>
+        {
+            if (e.ColumnIndex < 0 || grid.Columns[e.ColumnIndex].Name is not ("Batch" or "Date")) return;
+            var byBatch = grid.Columns[e.ColumnIndex].Name == "Batch";
+            orderChoice.SelectedIndex = orderChoice.SelectedIndex == 0 ? 1 : 0;
+            batchOnlySort = byBatch; bindShiftRows();
+        };
         grid.CellFormatting += (_, e) =>
         {
             if (e.RowIndex < 0 || !string.Equals(grid.Columns[e.ColumnIndex].DataPropertyName, "Variance", StringComparison.OrdinalIgnoreCase))
@@ -2634,7 +2669,6 @@ internal sealed partial class MainForm : Form
             autoSyncForm.ShowDialog(this);
             refresh();
         };
-        actions.Controls.Add(posAutoSync);
         RegisterDeveloperOnly(posAutoSync);
         var clear = MockActionButton("", "Clear Imported", width: 190);
         clear.Click += (_, _) => clearImported();
@@ -2698,7 +2732,15 @@ internal sealed partial class MainForm : Form
         grid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) _ledgerWorkspace?.FocusEntry(); };
         StackLegacyShiftDetails(form);
         var footer = root.GetControlFromPosition(0, 3)!;
-        _ledgerWorkspace = new LedgerWorkspaceHost("Shift Cash Drop", actions, grid, footer, quickEntry, details: formShell);
+        var ledgerHeader = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+        ledgerHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 185)); ledgerHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var developerSlot = new Panel { Dock = DockStyle.Fill }; posAutoSync.Text = "Z Auto Sync Setup"; posAutoSync.Dock = DockStyle.Fill;
+        developerSlot.Controls.Add(posAutoSync); ledgerHeader.Controls.Add(developerSlot, 0, 0);
+        var filters = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var syncHealth = WinTheme.Button("Sync Health"); syncHealth.AutoSize = true;
+        syncHealth.Click += async (_, _) => await ShowSyncHealthAsync();
+        filters.Controls.AddRange([orderChoice, batchSearch, syncHealth]); ledgerHeader.Controls.Add(filters, 1, 0);
+        _ledgerWorkspace = new LedgerWorkspaceHost("Shift Cash Drop", actions, grid, footer, quickEntry, details: formShell, header: ledgerHeader);
         _ledgerWorkspace.ApplyLayout(LedgerChoice("Shift Cash Drop"));
         root.Dispose();
         return ModuleShell("\uE8C7", "Shift Cash Drop", "Record and track shift cash drops and register payouts.", _ledgerWorkspace);
@@ -4989,6 +5031,15 @@ internal sealed partial class MainForm : Form
             clearPurchaseForm();
             await refreshAsync();
         }, true, 160);
+        AddSectionButton(actions, "Invoice Inbox", async () =>
+        {
+            if (DemoRuntime.IsEnabled) { ShowDemoIntegrationMessage("invoice inbox"); return; }
+            var storeId = _currentStoreId; var key = CurrentInvoiceEmailStoreKey();
+            var service = new InvoiceEmailSyncService(_paths, _invoiceImportService, _purchaseService.Capture());
+            using var inbox = new InvoiceInboxForm(_paths, service, key, _session.StoreName, storeId, _session.UserId, _session.DisplayName,
+                CurrentLicensedBusiness(), source => ImportPurchaseInvoiceAsync(refreshAsync, source));
+            inbox.ShowDialog(this); await refreshAsync();
+        }, width: 145);
         var emailInvoices = AddSectionButton(actions, "Email Invoices", async () =>
         {
             if (DemoRuntime.IsEnabled)
@@ -4997,21 +5048,24 @@ internal sealed partial class MainForm : Form
                 return;
             }
             var storeKey = CurrentInvoiceEmailStoreKey();
+            var invoiceStoreId = _currentStoreId;
+            var invoiceSync = new InvoiceEmailSyncService(_paths, _invoiceImportService, _purchaseService.Capture());
+            var cloudSync = new CloudInvoiceInboxService(_paths, invoiceSync);
             var business = CurrentLicensedBusiness();
             if (HasCloudInvoiceInbox(business) && business is not null)
             {
                 using var cloudInbox = new CloudInvoiceInboxForm(
-                    _cloudInvoiceInboxService,
+                    cloudSync,
                     business);
                 if (cloudInbox.ShowDialog(this) != DialogResult.OK || !cloudInbox.SyncRequested)
                     return;
 
                 try
                 {
-                    var result = await _cloudInvoiceInboxService.SyncAsync(
+                    var result = await cloudSync.SyncAsync(
                         business,
                         storeKey,
-                        _currentStoreId,
+                        invoiceStoreId,
                         _session.UserId,
                         _session.DisplayName);
                     _cloudInvoiceLastSyncUtc[storeKey] = DateTime.UtcNow;
@@ -5044,15 +5098,15 @@ internal sealed partial class MainForm : Form
                 return;
             }
 
-            using var setup = new InvoiceEmailSetupForm(_paths, _invoiceEmailSyncService, storeKey);
+            using var setup = new InvoiceEmailSetupForm(_paths, invoiceSync, storeKey);
             if (setup.ShowDialog(this) != DialogResult.OK)
                 return;
 
             try
             {
-                var syncResult = await _invoiceEmailSyncService.SyncAsync(
+                var syncResult = await invoiceSync.SyncAsync(
                     storeKey,
-                    _currentStoreId,
+                    invoiceStoreId,
                     _session.UserId,
                     _session.DisplayName,
                     setup.RequestedInvoiceMonth);
@@ -7461,7 +7515,7 @@ internal sealed partial class MainForm : Form
         return form.ShowDialog(this) == DialogResult.OK ? text.Text.Trim() : null;
     }
 
-    private async Task ImportPurchaseInvoiceAsync(Func<Task> refreshAsync)
+    private async Task ImportPurchaseInvoiceAsync(Func<Task> refreshAsync, string? sourcePath = null)
     {
         using var dialog = new OpenFileDialog
         {
@@ -7469,10 +7523,13 @@ internal sealed partial class MainForm : Form
             Filter = "Invoice files (*.pdf;*.xlsx;*.xls;*.csv)|*.pdf;*.xlsx;*.xls;*.csv|All files (*.*)|*.*",
             Multiselect = false
         };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (sourcePath is null && dialog.ShowDialog(this) != DialogResult.OK)
             return;
 
-        var result = await _invoiceImportService.ImportAsync(dialog.FileName);
+        sourcePath ??= dialog.FileName;
+        var storeId = _currentStoreId; var storeKey = CurrentInvoiceEmailStoreKey();
+        var purchase = _purchaseService.Capture();
+        var result = await _invoiceImportService.ImportAsync(sourcePath);
         if (!result.Success)
         {
             MessageBox.Show(this, string.Join(Environment.NewLine, result.Warnings.DefaultIfEmpty("Invoice import failed.")), "Import Invoice", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -7493,7 +7550,18 @@ internal sealed partial class MainForm : Form
                 }
             };
 
-        if (!ConfirmPurchaseInvoiceImport(result, imported, dialog.FileName))
+        if (result.Warnings.Count > 0 || imported.Any(x => InvoiceValidation.ReviewReason(x) is not null))
+        {
+            var reviewed = new List<ImportedInvoice>();
+            foreach (var draft in imported)
+            {
+                using var editor = new InvoiceDraftReviewForm(draft, sourcePath);
+                if (editor.ShowDialog(this) != DialogResult.OK || editor.Reviewed is null) return;
+                reviewed.Add(editor.Reviewed);
+            }
+            imported = reviewed;
+        }
+        if (!ConfirmPurchaseInvoiceImport(result, imported, sourcePath))
             return;
 
         var count = 0;
@@ -7501,19 +7569,25 @@ internal sealed partial class MainForm : Form
         {
             var lines = invoice.Lines ?? new List<PurchaseInvoiceLine>();
             var total = invoice.Total ?? (lines.Count > 0 ? lines.Sum(x => x.Quantity * x.UnitCost) : 0m);
-            await _purchaseService.AddInvoiceAsync(
-                _currentStoreId,
+            try { await purchase.AddInvoiceAsync(
+                storeId,
                 invoice.InvoiceDate ?? DateOnly.FromDateTime(DateTime.Today),
                 null,
                 string.IsNullOrWhiteSpace(invoice.VendorName) ? result.VendorName : invoice.VendorName,
                 string.IsNullOrWhiteSpace(invoice.InvoiceNumber) ? result.InvoiceNumber : invoice.InvoiceNumber,
                 total,
                 string.Join("; ", result.Warnings),
-                dialog.FileName,
+                sourcePath,
                 lines,
                 _session.UserId,
                 _session.DisplayName);
-            count++;
+            count++; }
+            catch (DuplicateInvoiceException ex)
+            {
+                InvoiceReviewJournal.Record(_paths, storeKey, sourcePath, ex.Conflicting ? "Needs Review" : "Already Imported", ex.Message);
+                MessageBox.Show(this, ex.Message, "Invoice Import"); continue;
+            }
+            InvoiceReviewJournal.Record(_paths, storeKey, sourcePath, "Imported", $"{invoice.VendorName} / {invoice.InvoiceNumber}");
         }
 
         await refreshAsync();

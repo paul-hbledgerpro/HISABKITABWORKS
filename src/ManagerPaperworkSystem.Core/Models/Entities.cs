@@ -105,6 +105,11 @@ public sealed class UserAccount : Entity
     public DateTime? LastLoginUtc { get; set; }
     public DateTime? LastChangedUtc { get; set; }
 
+    // Empty preserves existing access; a comma-separated directory-store allowlist restricts it.
+    [MaxLength(2000)] public string AllowedStoreIds { get; set; } = "";
+    public bool AllowsStore(int storeId) => string.IsNullOrWhiteSpace(AllowedStoreIds)
+        || AllowedStoreIds.Split(',').Any(value => int.TryParse(value, out var id) && id == storeId);
+
     [NotMapped]
     public string DisplayName => (FirstName + " " + LastName).Trim();
 

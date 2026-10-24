@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="tessdata\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="ReleaseHighlights.json" LogicalName="HisabKitab.ReleaseHighlights.json" />
   </ItemGroup>
 
@@ -46,6 +47,7 @@
     <PackageReference Include="PuppeteerSharp" Version="25.3.4" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.7" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.4" />
+    <PackageReference Include="Tesseract" Version="5.2.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -54,6 +56,7 @@
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\PdfRuntime.cs" Link="Shared\PdfRuntime.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\ReportService.cs" Link="Shared\ReportService.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\PurchaseService.cs" Link="Shared\PurchaseService.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\InvoiceValidation.cs" Link="Shared\InvoiceValidation.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\InvoiceImportService.cs" Link="Shared\InvoiceImportService.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\PosReportImportService.cs" Link="Shared\PosReportImportService.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\CheckPrintService.cs" Link="Shared\CheckPrintService.cs" />

@@ -11,8 +11,9 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         typeof(ThemePreferences).GetProperty(nameof(ThemePreferences.Choice))!.SetValue(null, "Light");
         var output = Path.GetFullPath(args.Single()); Directory.CreateDirectory(output);
+        WorkflowChecks.Run(output);
         var notes = ReleaseHighlights.Load();
-        Assert(notes.Version == "1.0.181" && notes.Features.Length == 5, "Release highlights match the update");
+        Assert(notes.Version == "1.0.182" && notes.Features.Length == 5, "Release highlights match the update");
         using (var notice = new WhatsNewForm(notes))
         {
             Assert(notice.AcceptButton is Button { Text: "OK", DialogResult: DialogResult.OK }, "Release notice has OK button");
@@ -21,7 +22,7 @@ internal static class Program
             notice.Show(); notice.PerformLayout();
             using var capture = new Bitmap(notice.Width, notice.Height);
             notice.DrawToBitmap(capture, new Rectangle(Point.Empty, capture.Size));
-            capture.Save(Path.Combine(output, "whats-new-v181.png"));
+            capture.Save(Path.Combine(output, "whats-new-v182.png"));
             notice.Hide();
         }
         var prefs = Path.Combine(output, "preferences-" + Guid.NewGuid().ToString("N"));
@@ -50,7 +51,8 @@ internal static class Program
             entry.RefreshChoicesAsync().GetAwaiter().GetResult();
             Assert(vendor.Items.Count == 2 && vendor.Text == "Supplier", "Choices deduplicate without losing typed value");
             Assert(vendor.DropDownStyle == ComboBoxStyle.DropDown && purpose.DropDownStyle == ComboBoxStyle.DropDown, "Both lists accept new names");
-            entry.Controls.Find("LedgerBatch", true).OfType<TextBox>().FirstOrDefault()?.AppendText("3019");
+            var batchBox = entry.Controls.Find("LedgerBatch", true).OfType<ComboBox>().FirstOrDefault();
+            if (batchBox is not null) batchBox.Text = "3019";
             if (isShift) ((NumericUpDown)entry.Controls.Find("LedgerRegisterPayout", true).Single()).Value = 10;
             foreach (var layout in Enum.GetValues<LedgerLayout>())
             {

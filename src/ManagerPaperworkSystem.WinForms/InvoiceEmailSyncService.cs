@@ -69,6 +69,14 @@ internal sealed class InvoiceEmailSyncService
 
     public GmailOAuthService GmailOAuth => _gmailOAuth;
 
+    public void VerifyMailboxIsolation(string storeKey, InvoiceEmailSyncSettings settings)
+    {
+        if (settings.Enabled && !string.IsNullOrWhiteSpace(settings.EmailAddress) && LoadAll().Any(x =>
+            !string.Equals(NormalizeStoreKey(x.Key), NormalizeStoreKey(storeKey), StringComparison.OrdinalIgnoreCase)
+            && x.Value.Enabled && string.Equals(x.Value.EmailAddress.Trim(), settings.EmailAddress.Trim(), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("This mailbox is already connected to another store. Use a separate mailbox or this store's dedicated invoice address so invoices cannot be posted to the wrong store.");
+    }
+
     public InvoiceEmailSyncSettings GetSettings(string storeKey)
     {
         var all = LoadAll();
@@ -79,6 +87,7 @@ internal sealed class InvoiceEmailSyncService
 
     public void SaveSettings(string storeKey, InvoiceEmailSyncSettings settings)
     {
+        VerifyMailboxIsolation(storeKey, settings);
         settings.PasswordOrAppPassword = NormalizePassword(settings);
         var all = LoadAll();
         all[NormalizeStoreKey(storeKey)] = settings;
@@ -138,8 +147,10 @@ internal sealed class InvoiceEmailSyncService
         DateOnly? invoiceMonth = null,
         CancellationToken ct = default)
     {
+        var purchase = _purchaseService.Capture();
         var settings = GetSettings(storeKey);
         ValidateSettings(settings);
+        VerifyMailboxIsolation(storeKey, settings);
 
         var safeStoreKey = MakeSafeFileName(NormalizeStoreKey(storeKey));
         var inboxFolder = Path.Combine(_paths.AppDataDirectory, "Invoice Email Inbox", safeStoreKey);
@@ -149,11 +160,6 @@ internal sealed class InvoiceEmailSyncService
 
         var processed = settings.ProcessedAttachmentHashes
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var existingInvoices = await _purchaseService.GetInvoicesAsync(storeId, ct);
-        var existingKeys = existingInvoices
-            .Select(invoice => InvoiceKey(invoice.VendorName, invoice.InvoiceNumber))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         var messagesChecked = 0;
         var attachmentsFound = 0;
         var importedCount = 0;
@@ -217,7 +223,7 @@ internal sealed class InvoiceEmailSyncService
                         }
                     };
 
-                var candidateInvoices = monthStart.HasValue
+                var candidateInvoices = monthStart.HasValue && parseResult.Success && invoices.All(x => x.InvoiceDate.HasValue)
                     ? invoices
                         .Where(invoice => invoice.InvoiceDate.HasValue
                                           && invoice.InvoiceDate.Value >= monthStart.Value
@@ -233,46 +239,24 @@ internal sealed class InvoiceEmailSyncService
 
                 if (!parseResult.Success
                     || candidateInvoices.Count == 0
-                    || candidateInvoices.Any(invoice => !IsVerified(invoice)))
+                    || parseResult.Warnings.Count > 0 || candidateInvoices.Any(invoice => !IsVerified(invoice)))
                 {
-                    MoveToReview(storedPath, reviewFolder);
+                    var reviewPath = MoveToReview(storedPath, reviewFolder);
+                    InvoiceReviewJournal.Record(_paths, storeKey, reviewPath, "Needs Review", ReviewDetail(parseResult, candidateInvoices));
                     processed.Add(hash);
                     reviewCount++;
                     continue;
                 }
 
-                var importedFromAttachment = 0;
                 foreach (var invoice in candidateInvoices)
                 {
-                    var key = InvoiceKey(invoice.VendorName, invoice.InvoiceNumber);
-                    if (existingKeys.Contains(key))
-                    {
-                        duplicateCount++;
-                        continue;
-                    }
-
-                    var lines = invoice.Lines ?? new List<PurchaseInvoiceLine>();
-                    await _purchaseService.AddInvoiceAsync(
-                        storeId,
-                        invoice.InvoiceDate!.Value,
-                        null,
-                        invoice.VendorName,
-                        invoice.InvoiceNumber,
-                        invoice.Total!.Value,
-                        $"Automatically imported from {message.From.Mailboxes.FirstOrDefault()?.Address ?? "client email"}; subject: {message.Subject}",
-                        storedPath,
-                        lines,
-                        userId,
-                        userName,
-                        ct);
-                    existingKeys.Add(key);
-                    importedCount++;
-                    importedFromAttachment++;
+                    var status = await ImportOneAsync(purchase, storeKey, storeId, userId, userName, invoice, storedPath, reviewFolder,
+                        $"Email invoice: {message.From.Mailboxes.FirstOrDefault()?.Address}; {message.Subject}", ct);
+                    if (status == "Imported") importedCount++;
+                    else if (status == "Already Imported") duplicateCount++;
+                    else reviewCount++;
                 }
-
-                if (importedFromAttachment > 0 || candidateInvoices.All(invoice =>
-                        existingKeys.Contains(InvoiceKey(invoice.VendorName, invoice.InvoiceNumber))))
-                    processed.Add(hash);
+                processed.Add(hash);
             }
         }
 
@@ -367,6 +351,7 @@ internal sealed class InvoiceEmailSyncService
         IReadOnlyList<string> pdfPaths,
         CancellationToken ct = default)
     {
+        var purchase = _purchaseService.Capture();
         var safeStoreKey = MakeSafeFileName(NormalizeStoreKey(storeKey));
         var reviewFolder = Path.Combine(
             _paths.AppDataDirectory,
@@ -375,10 +360,6 @@ internal sealed class InvoiceEmailSyncService
             "Needs Review");
         Directory.CreateDirectory(reviewFolder);
 
-        var existingInvoices = await _purchaseService.GetInvoicesAsync(storeId, ct);
-        var existingKeys = existingInvoices
-            .Select(invoice => InvoiceKey(invoice.VendorName, invoice.InvoiceNumber))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var imported = 0;
         var duplicates = 0;
         var needsReview = 0;
@@ -401,53 +382,50 @@ internal sealed class InvoiceEmailSyncService
                     }
                 };
 
-            if (!parseResult.Success || invoices.Count == 0 || invoices.Any(invoice => !IsVerified(invoice)))
+            if (!parseResult.Success || invoices.Count == 0 || parseResult.Warnings.Count > 0 || invoices.Any(invoice => !IsVerified(invoice)))
             {
-                MoveToReview(pdfPath, reviewFolder);
+                var reviewPath = MoveToReview(pdfPath, reviewFolder);
+                InvoiceReviewJournal.Record(_paths, storeKey, reviewPath, "Needs Review", ReviewDetail(parseResult, invoices));
                 needsReview++;
                 continue;
             }
 
             foreach (var invoice in invoices)
             {
-                var key = InvoiceKey(invoice.VendorName, invoice.InvoiceNumber);
-                if (!existingKeys.Add(key))
-                {
-                    duplicates++;
-                    continue;
-                }
-
-                await _purchaseService.AddInvoiceAsync(
-                    storeId,
-                    invoice.InvoiceDate!.Value,
-                    null,
-                    invoice.VendorName,
-                    invoice.InvoiceNumber,
-                    invoice.Total!.Value,
-                    "Automatically imported from the store's protected HISAB KITAB invoice inbox.",
-                    pdfPath,
-                    invoice.Lines,
-                    userId,
-                    userName,
-                    ct);
-                imported++;
+                var status = await ImportOneAsync(purchase, storeKey, storeId, userId, userName, invoice, pdfPath, reviewFolder,
+                    "Protected store invoice inbox", ct);
+                if (status == "Imported") imported++;
+                else if (status == "Already Imported") duplicates++;
+                else needsReview++;
             }
         }
 
         return new InvoicePdfImportResult(imported, duplicates, needsReview, reviewFolder);
     }
 
-    private static bool IsVerified(ImportedInvoice invoice)
-        => !string.IsNullOrWhiteSpace(invoice.VendorName)
-           && !invoice.VendorName.Equals("Unknown", StringComparison.OrdinalIgnoreCase)
-           && !string.IsNullOrWhiteSpace(invoice.InvoiceNumber)
-           && invoice.InvoiceDate is not null
-           && invoice.Total is > 0m
-           && invoice.Lines.Count > 0
-           && invoice.Lines.All(line =>
-               !string.IsNullOrWhiteSpace(line.ProductName)
-               && line.Quantity > 0m
-               && line.UnitCost > 0m);
+    private static string ReviewDetail(InvoiceImportResult result, IEnumerable<ImportedInvoice> invoices) =>
+        string.Join(" ", result.Warnings.Concat(invoices.Select(InvoiceValidation.ReviewReason).Where(x => x is not null))
+            .DefaultIfEmpty("Confirm the original invoice details before recording this purchase."));
+
+    private static bool IsVerified(ImportedInvoice invoice) => InvoiceValidation.ReviewReason(invoice) is null;
+
+    private async Task<string> ImportOneAsync(PurchaseService purchase, string storeKey, int storeId, int userId, string userName,
+        ImportedInvoice invoice, string file, string reviewFolder, string notes, CancellationToken ct)
+    {
+        var status = "Imported"; var detail = $"{invoice.VendorName} / {invoice.InvoiceNumber}";
+        try
+        {
+            await purchase.AddInvoiceAsync(storeId, invoice.InvoiceDate!.Value, null, invoice.VendorName, invoice.InvoiceNumber,
+                invoice.Total!.Value, notes, file, invoice.Lines, userId, userName, ct);
+        }
+        catch (DuplicateInvoiceException ex)
+        {
+            status = ex.Conflicting ? "Needs Review" : "Already Imported"; detail = ex.Message;
+            if (ex.Conflicting) file = MoveToReview(file, reviewFolder);
+        }
+        InvoiceReviewJournal.Record(_paths, storeKey, file, status, detail);
+        return status;
+    }
 
     private static void ValidateSettings(InvoiceEmailSyncSettings settings)
     {
@@ -640,12 +618,13 @@ internal sealed class InvoiceEmailSyncService
         return safe.Length <= 120 ? safe : safe[..120];
     }
 
-    private static void MoveToReview(string source, string reviewFolder)
+    private static string MoveToReview(string source, string reviewFolder)
     {
         var target = Path.Combine(reviewFolder, Path.GetFileName(source));
         if (File.Exists(target))
             target = Path.Combine(reviewFolder,
                 $"{Path.GetFileNameWithoutExtension(source)}_{Guid.NewGuid():N}{Path.GetExtension(source)}");
-        File.Move(source, target);
+        File.Copy(source, target);
+        return target;
     }
 }

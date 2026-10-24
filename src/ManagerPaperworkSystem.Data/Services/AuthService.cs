@@ -62,6 +62,8 @@ public sealed class AuthService : IAuthService
         var normalized = username.ToLowerInvariant();
         if (await db.Users.AnyAsync(u => u.Username.ToLower() == normalized, ct))
             throw new InvalidOperationException("That username already exists.");
+        if (await db.Users.AnyAsync(ct)) await AccountAdministration.RequireAdminAsync(db, ActivityAuditContext.Current?.UserId ?? 0, ct);
+        else if (role != UserRole.OwnerAdmin) throw new InvalidOperationException("The first account must be an Owner/Admin.");
 
         var (hash, salt) = PasswordHasher.HashPassword(password);
         var (aHash, aSalt) = PasswordHasher.HashPassword(securityAnswer.Trim());
@@ -189,6 +191,7 @@ public sealed class AuthService : IAuthService
             throw new ArgumentException("PIN must contain exactly 4 digits.", nameof(pin));
 
         using var db = CreateDb();
+        await AccountAdministration.RequireAdminAsync(db, ActivityAuditContext.Current?.UserId ?? 0, ct);
         var user = await db.Users.FirstOrDefaultAsync(x => x.Id == userId, ct);
         if (user is null)
             throw new InvalidOperationException("User not found.");
@@ -209,9 +212,6 @@ public sealed class AuthService : IAuthService
     public async Task SetUserActiveAsync(int userId, bool isActive, CancellationToken ct = default)
     {
         using var db = CreateDb();
-        var user = await db.Users.FirstOrDefaultAsync(x => x.Id == userId, ct);
-        if (user is null) return;
-        user.IsActive = isActive;
-        await db.SaveChangesAsync(ct);
+        await AccountAdministration.ChangeAsync(db, ActivityAuditContext.Current?.UserId ?? 0, userId, isActive ? "Reactivate" : "Deactivate", ct: ct);
     }
 }
