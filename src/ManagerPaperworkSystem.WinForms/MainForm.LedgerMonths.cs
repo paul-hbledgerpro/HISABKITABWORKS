@@ -39,11 +39,12 @@ internal sealed partial class MainForm
         var key = CurrentStoreConnectionString() + "|" + storeId + "|" + month;
         if (_openingPrompts.Contains(key)) return;
         await using var db = CreateDb();
-        if (await db.CashOnHand.AnyAsync(x => x.StoreId == storeId && x.Date == month && x.Reference == "CARRY_FORWARD")) return;
         if (storeId != _currentStoreId || _currentModule != "Cash On Hand") return;
+        if (!await LedgerMonthService.TryClaimOpeningPromptAsync(db, storeId, month)) return;
+        if (storeId != _currentStoreId || _currentModule != "Cash On Hand" || IsDisposed) return;
         _openingPrompts.Add(key);
         using var form = new Form { Text = $"Opening Cash — {month:MMMM yyyy}", ClientSize = new Size(430, 175), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false }; WinTheme.Apply(form);
-        var label = new Label { Text = $"Enter this store's opening cash on hand for {month:MMMM yyyy}.", Dock = DockStyle.Top, Height = 60, Padding = new Padding(12) };
+        var label = new Label { Text = $"Enter this store's opening cash on hand for {month:MMMM yyyy}. You can close this reminder and use Set Carry Forward later.", Dock = DockStyle.Top, Height = 70, Padding = new Padding(12) };
         var amount = new NumericUpDown { DecimalPlaces = 2, Maximum = 99999999, Dock = DockStyle.Top, Font = WinTheme.BodyFont(14) };
         var save = WinTheme.Button("Save Opening Cash", true); save.Dock = DockStyle.Bottom; form.Controls.Add(amount); form.Controls.Add(label); form.Controls.Add(save); form.AcceptButton = save;
         form.FormClosing += (_, e) => { if (!save.Enabled) e.Cancel = true; };

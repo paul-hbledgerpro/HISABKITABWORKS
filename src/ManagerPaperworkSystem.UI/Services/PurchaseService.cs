@@ -150,6 +150,7 @@ public sealed class PurchaseService
         await db.SaveChangesAsync(ct);
 
         await ApplyCostTrackingAsync(db, inv, ct);
+        await ReconcileInvoicePriceHistoryAsync(db, storeId, inv.Lines.Select(l => NormalizeProductKey(l.ItemCode, l.ProductName)).ToHashSet(), ct, inv.Id);
         await transaction.CommitAsync(ct);
         return inv;
     }
@@ -205,6 +206,7 @@ public sealed class PurchaseService
 
         await db.SaveChangesAsync(ct);
         await RecomputeCostsForStoreAsync(db, inv.StoreId, affectedKeys, ct);
+        await ReconcileInvoicePriceHistoryAsync(db, inv.StoreId, affectedKeys, ct);
         await transaction.CommitAsync(ct);
     }
 
@@ -223,6 +225,7 @@ public sealed class PurchaseService
         await db.SaveChangesAsync(ct);
 
         await RecomputeCostsForStoreAsync(db, storeId, affectedKeys, ct);
+        await ReconcileInvoicePriceHistoryAsync(db, storeId, affectedKeys, ct);
         await transaction.CommitAsync(ct);
     }
 
@@ -233,6 +236,94 @@ public sealed class PurchaseService
             .Where(x => x.StoreId == storeId)
             .OrderBy(x => x.ProductName)
             .ToListAsync(ct);
+    }
+
+    public async Task<List<ProductCost>> GetProductCostsForPeriodAsync(int storeId, DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        using var db = _dbFactory.CreateDbContext();
+        var costs = await db.ProductCosts.AsNoTracking().Where(x => x.StoreId == storeId).ToListAsync(ct);
+        var costsByKey = costs.GroupBy(x => NormalizeProductKey(x.Sku, x.ProductName))
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.LastInvoiceDate).ThenByDescending(x => x.Id).First());
+        var invoices = await db.PurchaseInvoices.AsNoTracking().Include(x => x.Lines)
+            .Where(x => x.StoreId == storeId && x.InvoiceDate >= from && x.InvoiceDate <= to)
+            .OrderBy(x => x.InvoiceDate).ThenBy(x => x.Id).ToListAsync(ct);
+        var result = costs.Where(x => x.LastInvoiceDate >= from && x.LastInvoiceDate <= to)
+            .GroupBy(x => NormalizeProductKey(x.Sku, x.ProductName)).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.LastInvoiceDate).First());
+        foreach (var invoice in invoices)
+        foreach (var line in invoice.Lines.OrderBy(x => x.Id))
+        {
+            var key = NormalizeProductKey(line.ItemCode, line.ProductName);
+            costsByKey.TryGetValue(key, out var cost);
+            if (cost is null || line.UnitCost <= 0 || line.Quantity <= 0) continue;
+            // Return a period snapshot; never overwrite the latest stored cost with historical data.
+            if (result.TryGetValue(key, out var newer) && newer.LastInvoiceDate > invoice.InvoiceDate) continue;
+            result[key] = new ProductCost { Id = cost.Id, StoreId = storeId, ProductKey = key, ProductName = line.ProductName,
+                Sku = line.ItemCode, LastUnitCost = line.UnitCost, LastInvoiceDate = invoice.InvoiceDate,
+                LastVendorName = invoice.VendorName, LastInvoiceNumber = invoice.InvoiceNumber, UpdatedUtc = invoice.CreatedUtc };
+        }
+        return result.Values.OrderBy(x => x.ProductName).ToList();
+    }
+
+    public async Task RepairInvoicePriceHistoryAsync(int storeId, CancellationToken ct = default)
+    {
+        using var db = _dbFactory.CreateDbContext();
+        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+        const string repair = "Invoice price history repaired v184";
+        if (await db.ActivityLogs.AnyAsync(x => x.StoreId == storeId && x.Action == repair, ct)) return;
+        await ReconcileInvoicePriceHistoryAsync(db, storeId, null, ct);
+        db.ActivityLogs.Add(new ActivityLogEntry { StoreId = storeId, Action = repair, EntityType = "PriceAlert",
+            Description = "Rebuilt missing chronological comparisons from stored invoice lines.", OccurredUtc = DateTime.UtcNow });
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    private static async Task ReconcileInvoicePriceHistoryAsync(AppDbContext db, int storeId, HashSet<string>? affectedKeys, CancellationToken ct, int? changedInvoiceId = null)
+    {
+        var invoices = await db.PurchaseInvoices.AsNoTracking().Include(x => x.Lines).Where(x => x.StoreId == storeId)
+            .OrderBy(x => x.InvoiceDate).ThenBy(x => x.Id).ToListAsync(ct);
+        var alerts = await db.PriceAlerts.Where(x => x.StoreId == storeId && x.AlertType == PriceAlertType.PriceChange).ToListAsync(ct);
+        var previous = new Dictionary<string, (PurchaseInvoice Invoice, PurchaseInvoiceLine Line)>();
+        foreach (var invoice in invoices)
+        foreach (var group in invoice.Lines.Where(l => l.UnitCost > 0 && l.Quantity > 0)
+            .GroupBy(l => NormalizeProductKey(l.ItemCode, l.ProductName)))
+        {
+            var key = group.Key;
+            if (string.IsNullOrWhiteSpace(key) || (affectedKeys is not null && !affectedKeys.Contains(key))) continue;
+            var line = group.OrderBy(x => x.Id).Last();
+            if (previous.TryGetValue(key, out var prior))
+            {
+                // A new invoice changes only its own comparison and the next purchase's baseline.
+                // Do not recreate unrelated historical alerts that an owner has deleted.
+                if (changedInvoiceId.HasValue && invoice.Id != changedInvoiceId && prior.Invoice.Id != changedInvoiceId)
+                { previous[key] = (invoice, line); continue; }
+                var matches = alerts.Where(a => NormalizeProductKey(a.Sku, a.ProductName) == key
+                    && (a.PurchaseInvoiceId == invoice.Id || (a.PurchaseInvoiceId == null && a.InvoiceDate == invoice.InvoiceDate
+                    && InvoiceIdentity.Key(a.VendorName, a.InvoiceNumber) == InvoiceIdentity.Key(invoice.VendorName, invoice.InvoiceNumber))))
+                    .OrderBy(x => x.Id).ToList();
+                if (prior.Line.UnitCost == line.UnitCost)
+                    db.PriceAlerts.RemoveRange(matches);
+                else
+                {
+                    var alert = matches.FirstOrDefault();
+                    if (alert is null)
+                    {
+                        alert = new PriceAlert { StoreId = storeId, CreatedUtc = DateTime.UtcNow };
+                        db.PriceAlerts.Add(alert); alerts.Add(alert);
+                    }
+                    else if (alert.OldUnitCost != prior.Line.UnitCost || alert.NewUnitCost != line.UnitCost)
+                    { alert.IsRead = false; alert.ReadUtc = null; }
+                    db.PriceAlerts.RemoveRange(matches.Skip(1));
+                    alert.ProductKey = key; alert.ProductName = line.ProductName; alert.Sku = line.ItemCode;
+                    alert.OldUnitCost = prior.Line.UnitCost; alert.NewUnitCost = line.UnitCost;
+                    alert.Direction = line.UnitCost > prior.Line.UnitCost ? PriceChangeDirection.Up : PriceChangeDirection.Down;
+                    alert.OldVendorName = prior.Invoice.VendorName; alert.OldInvoiceNumber = prior.Invoice.InvoiceNumber;
+                    alert.VendorName = invoice.VendorName; alert.InvoiceNumber = invoice.InvoiceNumber;
+                    alert.InvoiceDate = invoice.InvoiceDate; alert.PurchaseInvoiceId = invoice.Id;
+                }
+            }
+            previous[key] = (invoice, line);
+        }
+        await db.SaveChangesAsync(ct);
     }
 
     public async Task<(int upsertCount, int alertCount)> ImportProductCostsAsync(

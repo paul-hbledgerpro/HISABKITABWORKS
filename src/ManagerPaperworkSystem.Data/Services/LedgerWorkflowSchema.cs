@@ -14,6 +14,16 @@ public static class LedgerWorkflowSchema
             if (opened) await connection.OpenAsync(ct);
             try
             {
+                foreach (var column in new[] { "OpeningPromptPending", "OpeningPromptShownUtc" })
+                {
+                    using var check = connection.CreateCommand(); check.CommandText = "PRAGMA table_info([LedgerMonths])";
+                    var columns = new List<string>();
+                    await using (var reader = await check.ExecuteReaderAsync(ct)) while (await reader.ReadAsync(ct)) columns.Add(reader.GetString(1));
+                    if (columns.Count > 0 && !columns.Contains(column, StringComparer.OrdinalIgnoreCase))
+                        await db.Database.ExecuteSqlRawAsync(column == "OpeningPromptPending"
+                            ? "ALTER TABLE LedgerMonths ADD OpeningPromptPending INTEGER NOT NULL DEFAULT 0"
+                            : "ALTER TABLE LedgerMonths ADD OpeningPromptShownUtc TEXT NULL", ct);
+                }
                 foreach (var (table, column) in new[] { ("ShiftLogs", "PayoutPayee"), ("PendingShiftDrops", "Payee"), ("UserAccounts", "AllowedStoreIds") })
                 {
                     using var check = connection.CreateCommand(); check.CommandText = $"PRAGMA table_info([{table}])";
@@ -59,6 +69,10 @@ BEGIN
  CREATE TABLE dbo.ShiftPayoutRollups(Id int IDENTITY PRIMARY KEY,SummaryId int NOT NULL,AppliedAmount decimal(18,2) NOT NULL,AppliedReason nvarchar(max) NOT NULL);
  CREATE UNIQUE INDEX IX_ShiftPayoutRollups_SummaryId ON dbo.ShiftPayoutRollups(SummaryId);
 END;
+IF COL_LENGTH('dbo.LedgerMonths','OpeningPromptPending') IS NULL
+ ALTER TABLE dbo.LedgerMonths ADD OpeningPromptPending bit NOT NULL DEFAULT 0;
+IF COL_LENGTH('dbo.LedgerMonths','OpeningPromptShownUtc') IS NULL
+ ALTER TABLE dbo.LedgerMonths ADD OpeningPromptShownUtc datetime2 NULL;
 """, ct);
         // Database enforcement also protects against late sync and older clients.
         foreach (var (table, date, end) in new[] {("ShiftLogs","Date","Date"),("CashOnHand","Date","Date"),("CheckPayouts","Date","Date"),("PosSalesSummaries","ReportFrom","ReportTo")})

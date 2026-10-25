@@ -57,6 +57,7 @@
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\ReportService.cs" Link="Shared\ReportService.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\PurchaseService.cs" Link="Shared\PurchaseService.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\InvoiceValidation.cs" Link="Shared\InvoiceValidation.cs" />
+    <Compile Include="..\ManagerPaperworkSystem.UI\Services\InvoicePrintedTotals.cs" Link="Shared\InvoicePrintedTotals.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\InvoiceImportService.cs" Link="Shared\InvoiceImportService.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\PosReportImportService.cs" Link="Shared\PosReportImportService.cs" />
     <Compile Include="..\ManagerPaperworkSystem.UI\Services\CheckPrintService.cs" Link="Shared\CheckPrintService.cs" />

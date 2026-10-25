@@ -26,6 +26,7 @@ internal sealed class InvoiceEmailSyncSettings
     public string PasswordOrAppPassword { get; set; } = "";
     public string MailFolder { get; set; } = "INBOX";
     public DateTime? LastSuccessfulSyncUtc { get; set; }
+    public int AttachmentProcessingVersion { get; set; }
     public List<string> ProcessedAttachmentHashes { get; set; } = new();
 }
 
@@ -46,6 +47,7 @@ internal sealed record InvoicePdfImportResult(
 
 internal sealed class InvoiceEmailSyncService
 {
+    private const int AttachmentProcessingVersion = 1;
     private static readonly byte[] Entropy =
         Encoding.UTF8.GetBytes("HISAB-KITAB-INVOICE-EMAIL-SYNC-V1");
 
@@ -148,9 +150,11 @@ internal sealed class InvoiceEmailSyncService
         CancellationToken ct = default)
     {
         var purchase = _purchaseService.Capture();
+        var syncStartedUtc = DateTime.UtcNow;
         var settings = GetSettings(storeKey);
         ValidateSettings(settings);
         VerifyMailboxIsolation(storeKey, settings);
+        var recheckRecent = settings.AttachmentProcessingVersion < AttachmentProcessingVersion;
 
         var safeStoreKey = MakeSafeFileName(NormalizeStoreKey(storeKey));
         var inboxFolder = Path.Combine(_paths.AppDataDirectory, "Invoice Email Inbox", safeStoreKey);
@@ -176,7 +180,7 @@ internal sealed class InvoiceEmailSyncService
         async Task ProcessMessageAsync(MimeMessage message)
         {
             messagesChecked++;
-            foreach (var attachment in message.BodyParts.OfType<MimePart>())
+            foreach (var attachment in InvoiceEmailSearchPolicy.PdfParts(message.Body))
             {
                 var fileName = attachment.FileName ?? attachment.ContentDisposition?.FileName ?? "";
                 var isPdf = fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
@@ -192,7 +196,7 @@ internal sealed class InvoiceEmailSyncService
                 var bytes = memory.ToArray();
                 var hash = Convert.ToHexString(SHA256.HashData(bytes));
                 if (!seenThisRun.Add(hash)
-                    || (!monthStart.HasValue && processed.Contains(hash)))
+                    || (!monthStart.HasValue && !recheckRecent && processed.Contains(hash)))
                 {
                     duplicateCount++;
                     continue;
@@ -201,9 +205,7 @@ internal sealed class InvoiceEmailSyncService
                 var received = message.Date == DateTimeOffset.MinValue
                     ? DateTime.Now
                     : message.Date.LocalDateTime;
-                var safeAttachmentName = string.IsNullOrWhiteSpace(fileName)
-                    ? "invoice.pdf"
-                    : fileName;
+                var safeAttachmentName = InvoiceEmailSearchPolicy.PdfFileName(fileName);
                 var storedName = $"{received:yyyyMMdd_HHmmss}_{hash[..12]}_{MakeSafeFileName(safeAttachmentName)}";
                 var storedPath = Path.Combine(inboxFolder, storedName);
                 await File.WriteAllBytesAsync(storedPath, bytes, ct);
@@ -239,10 +241,11 @@ internal sealed class InvoiceEmailSyncService
 
                 if (!parseResult.Success
                     || candidateInvoices.Count == 0
-                    || parseResult.Warnings.Count > 0 || candidateInvoices.Any(invoice => !IsVerified(invoice)))
+                    || HasBlockingWarnings(parseResult))
                 {
                     var reviewPath = MoveToReview(storedPath, reviewFolder);
-                    InvoiceReviewJournal.Record(_paths, storeKey, reviewPath, "Needs Review", ReviewDetail(parseResult, candidateInvoices));
+                    InvoiceReviewJournal.Record(_paths, storeKey, reviewPath, "Needs Review",
+                        $"{parseResult.VendorName} / {parseResult.InvoiceNumber} — {ReviewDetail(parseResult, candidateInvoices)}");
                     processed.Add(hash);
                     reviewCount++;
                     continue;
@@ -250,6 +253,12 @@ internal sealed class InvoiceEmailSyncService
 
                 foreach (var invoice in candidateInvoices)
                 {
+                    if (!IsVerified(invoice))
+                    {
+                        var reviewPath = MoveToReview(storedPath, reviewFolder);
+                        InvoiceReviewJournal.Record(_paths, storeKey, reviewPath, "Needs Review", $"{invoice.VendorName} / {invoice.InvoiceNumber}: {InvoiceValidation.ReviewReason(invoice)}");
+                        reviewCount++; continue;
+                    }
                     var status = await ImportOneAsync(purchase, storeKey, storeId, userId, userName, invoice, storedPath, reviewFolder,
                         $"Email invoice: {message.From.Mailboxes.FirstOrDefault()?.Address}; {message.Subject}", ct);
                     if (status == "Imported") importedCount++;
@@ -264,19 +273,14 @@ internal sealed class InvoiceEmailSyncService
         {
             using var gmail = await _gmailOAuth.GetConnectedServiceAsync(storeKey, ct);
             foldersScanned.Add("Gmail API (read-only)");
-            var queryStart = monthStart?.AddDays(-7).ToDateTime(TimeOnly.MinValue)
-                             ?? (settings.LastSuccessfulSyncUtc ?? DateTime.UtcNow.AddDays(-45)).AddDays(-2);
-            var query = $"has:attachment filename:pdf after:{queryStart:yyyy/MM/dd}";
-            if (monthEnd.HasValue)
-                query += $" before:{monthEnd.Value.AddDays(14):yyyy/MM/dd}";
+            var query = InvoiceEmailSearchPolicy.GmailQuery(recheckRecent ? null : settings.LastSuccessfulSyncUtc, monthStart, syncStartedUtc);
 
             string? pageToken = null;
-            var remaining = monthStart.HasValue ? int.MaxValue : 500;
             do
             {
                 var list = gmail.Users.Messages.List("me");
                 list.Q = query;
-                list.MaxResults = (long)Math.Min(500, remaining);
+                list.MaxResults = 500;
                 list.PageToken = pageToken;
                 var response = await list.ExecuteAsync(ct);
                 foreach (var summary in response.Messages ?? Enumerable.Empty<Google.Apis.Gmail.v1.Data.Message>())
@@ -292,11 +296,8 @@ internal sealed class InvoiceEmailSyncService
                     await using var messageStream = new MemoryStream(raw, writable: false);
                     var message = await MimeMessage.LoadAsync(messageStream, ct);
                     await ProcessMessageAsync(message);
-                    remaining--;
-                    if (remaining <= 0)
-                        break;
                 }
-                pageToken = remaining > 0 ? response.NextPageToken : null;
+                pageToken = response.NextPageToken;
             } while (!string.IsNullOrWhiteSpace(pageToken));
         }
         else
@@ -308,16 +309,14 @@ internal sealed class InvoiceEmailSyncService
                 ? SearchQuery.DeliveredAfter(monthStart.Value.AddDays(-7).ToDateTime(TimeOnly.MinValue))
                     .And(SearchQuery.DeliveredBefore(monthEnd!.Value.AddDays(14).ToDateTime(TimeOnly.MinValue)))
                 : SearchQuery.DeliveredAfter(
-                    (settings.LastSuccessfulSyncUtc ?? DateTime.UtcNow.AddDays(-45)).AddDays(-2));
+                    ((recheckRecent ? null : settings.LastSuccessfulSyncUtc) ?? syncStartedUtc.AddDays(-45)).AddDays(-2));
 
             foreach (var folder in folders)
             {
                 await folder.OpenAsync(FolderAccess.ReadOnly, ct);
                 foldersScanned.Add(folder.FullName);
                 var ids = await folder.SearchAsync(searchQuery, ct);
-                var idsToProcess = monthStart.HasValue
-                    ? ids.OrderBy(uid => uid.Id)
-                    : ids.OrderByDescending(uid => uid.Id).Take(500).OrderBy(uid => uid.Id);
+                var idsToProcess = ids.OrderBy(uid => uid.Id);
                 foreach (var id in idsToProcess)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -329,7 +328,10 @@ internal sealed class InvoiceEmailSyncService
         }
 
         if (!monthStart.HasValue)
-            settings.LastSuccessfulSyncUtc = DateTime.UtcNow;
+        {
+            settings.LastSuccessfulSyncUtc = syncStartedUtc;
+            settings.AttachmentProcessingVersion = AttachmentProcessingVersion;
+        }
         settings.ProcessedAttachmentHashes = processed.TakeLast(5000).ToList();
         SaveSettings(storeKey, settings);
 
@@ -382,7 +384,7 @@ internal sealed class InvoiceEmailSyncService
                     }
                 };
 
-            if (!parseResult.Success || invoices.Count == 0 || parseResult.Warnings.Count > 0 || invoices.Any(invoice => !IsVerified(invoice)))
+            if (!parseResult.Success || invoices.Count == 0 || HasBlockingWarnings(parseResult))
             {
                 var reviewPath = MoveToReview(pdfPath, reviewFolder);
                 InvoiceReviewJournal.Record(_paths, storeKey, reviewPath, "Needs Review", ReviewDetail(parseResult, invoices));
@@ -392,6 +394,12 @@ internal sealed class InvoiceEmailSyncService
 
             foreach (var invoice in invoices)
             {
+                if (!IsVerified(invoice))
+                {
+                    var reviewPath = MoveToReview(pdfPath, reviewFolder);
+                    InvoiceReviewJournal.Record(_paths, storeKey, reviewPath, "Needs Review", $"{invoice.VendorName} / {invoice.InvoiceNumber}: {InvoiceValidation.ReviewReason(invoice)}");
+                    needsReview++; continue;
+                }
                 var status = await ImportOneAsync(purchase, storeKey, storeId, userId, userName, invoice, pdfPath, reviewFolder,
                     "Protected store invoice inbox", ct);
                 if (status == "Imported") imported++;
@@ -409,10 +417,18 @@ internal sealed class InvoiceEmailSyncService
 
     private static bool IsVerified(ImportedInvoice invoice) => InvoiceValidation.ReviewReason(invoice) is null;
 
+    private static bool HasBlockingWarnings(InvoiceImportResult result) => result.Warnings.Any(x =>
+        !System.Text.RegularExpressions.Regex.IsMatch(x, @"^Multiple invoices detected \(\d+\)\. You can import them all at once\.$"));
+
     private async Task<string> ImportOneAsync(PurchaseService purchase, string storeKey, int storeId, int userId, string userName,
         ImportedInvoice invoice, string file, string reviewFolder, string notes, CancellationToken ct)
     {
         var status = "Imported"; var detail = $"{invoice.VendorName} / {invoice.InvoiceNumber}";
+        if (invoice.Adjustments.Count > 0)
+        {
+            var charges = "Printed invoice adjustments: " + string.Join("; ", invoice.Adjustments.Select(x => $"{x.Label} {x.Amount:N2}"));
+            notes = charges + ". " + notes; detail += ". " + charges;
+        }
         try
         {
             await purchase.AddInvoiceAsync(storeId, invoice.InvoiceDate!.Value, null, invoice.VendorName, invoice.InvoiceNumber,

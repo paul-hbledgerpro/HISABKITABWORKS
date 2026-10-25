@@ -6,9 +6,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Length >= 3 && args[0] == "--invoices") { InvoiceImportChecks.RunAsync(Path.GetFullPath(args[1]), args.Skip(2).ToArray()).GetAwaiter().GetResult(); return; }
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        if (args.Length == 2 && args[0] == "--cost-periods") { CostPeriodChecks.Run(Path.GetFullPath(args[1])); return; }
         typeof(ThemePreferences).GetProperty(nameof(ThemePreferences.Choice))!.SetValue(null, "Light");
         if (args.Length == 2 && args[0] == "--toolbar") { ShiftToolbarChecks.Run(Path.GetFullPath(args[1])); return; }
         if (args.Length == 2 && args[0] == "--themes") { ThemeChecks.Run(Path.GetFullPath(args[1])); return; }

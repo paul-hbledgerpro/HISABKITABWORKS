@@ -54,7 +54,9 @@ public sealed class InvoiceWorkflowTests : IAsyncLifetime, IAppPaths
     [Fact] public async Task OldBackfillDoesNotReverseLatestPriceAndRepeatedProductsShareOneCost()
     {
         var service = new PurchaseService(_factory, this); await Add(service, cost: 12); await Add(service, "OLD", cost: 5, day: 1);
-        using var db = _factory.CreateDbContext(); Assert.Equal(12, (await db.ProductCosts.SingleAsync()).LastUnitCost); Assert.Empty(await db.PriceAlerts.ToListAsync());
+        using var db = _factory.CreateDbContext(); Assert.Equal(12, (await db.ProductCosts.SingleAsync()).LastUnitCost);
+        var alert = await db.PriceAlerts.SingleAsync(); Assert.Equal(5, alert.OldUnitCost); Assert.Equal(12, alert.NewUnitCost);
+        Assert.Equal(new DateOnly(2026, 10, 10), alert.InvoiceDate);
     }
     [Fact] public async Task ExistingPackPriceIsReusedWithoutCreatingADuplicateProduct()
     {
@@ -81,6 +83,58 @@ public sealed class InvoiceWorkflowTests : IAsyncLifetime, IAppPaths
         using (var db = _factory.CreateDbContext()) await db.Database.ExecuteSqlRawAsync("CREATE TRIGGER reject_cost_delete BEFORE DELETE ON ProductCosts BEGIN SELECT RAISE(ABORT, 'simulated failure'); END;");
         await Assert.ThrowsAsync<DbUpdateException>(() => service.DeleteInvoiceAsync(invoice.Id));
         using var verify = _factory.CreateDbContext(); Assert.Equal(1, await verify.PurchaseInvoices.CountAsync()); Assert.Equal(1, await verify.ProductCosts.CountAsync());
+    }
+    [Fact] public async Task HistoricalChangesAreChronologicalIdempotentAndStoreScoped()
+    {
+        var service = new PurchaseService(_factory, this);
+        await Add(service, "NEW", cost: 12, day: 20);
+        await Add(service, "OLD", cost: 8, day: 1);
+        await Add(service, "MIDDLE", cost: 10, day: 10);
+        await Add(service, "OTHER", store: 2, cost: 99, day: 5);
+        using (var db = _factory.CreateDbContext())
+        {
+            var rows = await db.PriceAlerts.OrderBy(x => x.InvoiceDate).ToListAsync();
+            Assert.Equal(2, rows.Count); Assert.All(rows, x => Assert.Equal(1, x.StoreId));
+            Assert.Equal((8m, 10m), (rows[0].OldUnitCost, rows[0].NewUnitCost));
+            Assert.Equal((10m, 12m), (rows[1].OldUnitCost, rows[1].NewUnitCost));
+            rows[0].IsRead = true; await db.SaveChangesAsync();
+        }
+        await service.RepairInvoicePriceHistoryAsync(1); await service.RepairInvoicePriceHistoryAsync(1);
+        using var verify = _factory.CreateDbContext(); Assert.Equal(2, await verify.PriceAlerts.CountAsync());
+        Assert.True((await verify.PriceAlerts.OrderBy(x => x.InvoiceDate).FirstAsync()).IsRead);
+        Assert.Equal(12, (await verify.ProductCosts.SingleAsync(x => x.StoreId == 1)).LastUnitCost);
+    }
+    [Fact] public async Task RepairRestoresMissingHistoryAndPeriodSnapshotDoesNotAlterLatestCost()
+    {
+        var service = new PurchaseService(_factory, this);
+        await Add(service, "OCT", cost: 12);
+        await service.AddInvoiceAsync(1, new(2026, 9, 30), null, "Supplier", "SEP", 8, "", null,
+            [new PurchaseInvoiceLine { ItemCode = "123456789012", ProductName = "Test 6 pack", Quantity = 1, UnitCost = 8 }], 1, "Owner");
+        using (var db = _factory.CreateDbContext()) { db.PriceAlerts.RemoveRange(db.PriceAlerts); await db.SaveChangesAsync(); }
+        await service.RepairInvoicePriceHistoryAsync(1);
+        var september = await service.GetProductCostsForPeriodAsync(1, new(2026, 9, 1), new(2026, 9, 30));
+        Assert.Equal(8, Assert.Single(september).LastUnitCost);
+        Assert.Empty(await service.GetProductCostsForPeriodAsync(2, new(2026, 9, 1), new(2026, 9, 30)));
+        using var verify = _factory.CreateDbContext(); Assert.Equal(12, (await verify.ProductCosts.SingleAsync()).LastUnitCost);
+        Assert.Equal(new DateOnly(2026, 10, 10), (await verify.PriceAlerts.SingleAsync()).InvoiceDate);
+    }
+    [Fact] public async Task UnchangedHistoricalPriceDoesNotProduceAnAlert()
+    {
+        var service = new PurchaseService(_factory, this); await Add(service, "LATEST", cost: 10);
+        await Add(service, "EARLY", cost: 10, day: 1); await service.RepairInvoicePriceHistoryAsync(1);
+        using var db = _factory.CreateDbContext(); Assert.Empty(await db.PriceAlerts.ToListAsync());
+    }
+    [Fact] public async Task CompletedRepairAndUnrelatedImportsDoNotRecreateDeletedHistoricalAlerts()
+    {
+        var service = new PurchaseService(_factory, this);
+        await Add(service, "FIRST", cost: 5, day: 1); await Add(service, "SECOND", cost: 8, day: 2);
+        await service.RepairInvoicePriceHistoryAsync(1);
+        using (var db = _factory.CreateDbContext()) { db.PriceAlerts.RemoveRange(db.PriceAlerts); await db.SaveChangesAsync(); }
+        await service.RepairInvoicePriceHistoryAsync(1);
+        await Add(service, "THIRD", cost: 12, day: 3);
+        using var verify = _factory.CreateDbContext();
+        var alert = await verify.PriceAlerts.SingleAsync(); Assert.Equal("THIRD", alert.InvoiceNumber);
+        Assert.Equal(8, alert.OldUnitCost); Assert.Equal(12, alert.NewUnitCost);
     }
     [Fact] public void PackAndSingleUnitCannotSharePriceKey()
     {

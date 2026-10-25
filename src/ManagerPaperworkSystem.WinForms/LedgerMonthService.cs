@@ -6,6 +6,19 @@ namespace ManagerPaperworkSystem.WinForms;
 
 internal static class LedgerMonthService
 {
+    // Claim before displaying so dismissal survives restarts and a second Windows session.
+    public static async Task<bool> TryClaimOpeningPromptAsync(AppDbContext db, int storeId, DateOnly month)
+    {
+        month = Month(month);
+        var previous = month.AddMonths(-1);
+        return await db.LedgerMonths.Where(x => x.StoreId == storeId && x.Month == month
+            && x.OpeningPromptPending && x.OpeningPromptShownUtc == null && !x.IsClosed && x.OpeningCash == null
+            && db.LedgerMonths.Any(p => p.StoreId == storeId && p.Month == previous && p.IsClosed)
+            && !db.CashOnHand.Any(c => c.StoreId == storeId && c.Date == month && c.Reference == "CARRY_FORWARD"))
+            .ExecuteUpdateAsync(set => set.SetProperty(x => x.OpeningPromptPending, false)
+                .SetProperty(x => x.OpeningPromptShownUtc, DateTime.UtcNow)) == 1;
+    }
+
     public static DateOnly Month(DateOnly date) => new(date.Year, date.Month, 1);
     public static decimal BalanceThrough(IEnumerable<CashOnHandEntry> rows, DateOnly through) => ManagerPaperworkSystem.Core.Services.CashBalanceCalculator.BalanceThrough(rows, through);
     public static decimal OpeningForRange(IEnumerable<CashOnHandEntry> rows, DateOnly from) => ManagerPaperworkSystem.Core.Services.CashBalanceCalculator.OpeningForRange(rows, from);
@@ -20,7 +33,7 @@ internal static class LedgerMonthService
         if (period is null) { period = new LedgerMonth { StoreId = storeId, Month = month }; db.LedgerMonths.Add(period); }
         var existing = await db.CashOnHand.Where(x => x.StoreId == storeId && x.Date == month && x.Reference == "CARRY_FORWARD").ToListAsync();
         if (existing.Count > 0) throw new InvalidOperationException("A carry-forward entry already exists. Review it in Cash On Hand rather than adding a second opening balance.");
-        period.OpeningCash = amount; period.OpeningBy = userName;
+        period.OpeningCash = amount; period.OpeningBy = userName; period.OpeningPromptPending = false;
         db.CashOnHand.Add(new CashOnHandEntry { StoreId = storeId, Date = month, CashAdded = amount, Reference = "CARRY_FORWARD", Description = "Opening cash for " + month.ToString("MMMM yyyy"), CreatedByUserId = userId, CreatedByName = userName });
         await db.SaveChangesAsync(); await tx.CommitAsync();
     }
@@ -39,7 +52,16 @@ internal static class LedgerMonthService
         }
         var period = await db.LedgerMonths.SingleOrDefaultAsync(x => x.StoreId == storeId && x.Month == month);
         if (period is null) { period = new LedgerMonth { StoreId = storeId, Month = month }; db.LedgerMonths.Add(period); }
+        var newlyClosed = closed && !period.IsClosed;
         period.IsClosed = closed; period.ClosedUtc = closed ? DateTime.UtcNow : null; period.ClosedBy = actor;
+        if (newlyClosed)
+        {
+            var nextMonth = month.AddMonths(1);
+            var next = await db.LedgerMonths.SingleOrDefaultAsync(x => x.StoreId == storeId && x.Month == nextMonth);
+            if (next is null) { next = new LedgerMonth { StoreId = storeId, Month = nextMonth }; db.LedgerMonths.Add(next); }
+            if (!next.IsClosed && next.OpeningCash is null && next.OpeningPromptShownUtc is null)
+                next.OpeningPromptPending = true;
+        }
         db.ActivityLogs.Add(new ActivityLogEntry { StoreId = storeId, OccurredUtc = DateTime.UtcNow, Action = closed ? "Month closed" : "Month reopened", EntityType = "LedgerMonth", EntityId = period.Id, Description = $"{month:MMMM yyyy}: {actor}" });
         await db.SaveChangesAsync(); await tx.CommitAsync();
     }

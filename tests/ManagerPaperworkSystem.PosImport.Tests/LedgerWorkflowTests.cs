@@ -109,6 +109,14 @@ public class LedgerWorkflowTests
             var zero=await ShiftDropWorkflow.RecordAsync(db,1,config,portal,"1554",0,0,"",1,"Owner",false);
             Assert.Equal("Applied",zero.Status);Assert.Equal(-100,zero.Variance);
             await Assert.ThrowsAsync<InvalidOperationException>(()=>ShiftDropWorkflow.RecordAsync(db,1,config,portal,"1554",0,0,"",1,"Owner",false));
+            // A new close arms the next period once, across independent SQL sessions.
+            var previousMonth = LedgerMonthService.Month(DateOnly.FromDateTime(DateTime.Today)).AddMonths(-1);
+            db.Stores.Add(new Store { Name = "Opening prompt fixture" }); await db.SaveChangesAsync();
+            var promptStore = await db.Stores.Where(x => x.Name == "Opening prompt fixture").Select(x => x.Id).SingleAsync();
+            Assert.False(await LedgerMonthService.TryClaimOpeningPromptAsync(db, promptStore, previousMonth.AddMonths(1)));
+            await LedgerMonthService.SetClosedAsync(db, promptStore, previousMonth, true, "Owner");
+            await using (var firstSession = Db()) Assert.True(await LedgerMonthService.TryClaimOpeningPromptAsync(firstSession, promptStore, previousMonth.AddMonths(1)));
+            await using (var secondSession = Db()) Assert.False(await LedgerMonthService.TryClaimOpeningPromptAsync(secondSession, promptStore, previousMonth.AddMonths(1)));
         }
         finally {if(!name.StartsWith("HK_Ledger_Test_") || name.Length!=47) throw new Exception("Unexpected test database name.");await db.Database.EnsureDeletedAsync();}
     }

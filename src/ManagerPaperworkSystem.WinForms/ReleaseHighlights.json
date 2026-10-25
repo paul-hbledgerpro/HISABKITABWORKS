@@ -1,13 +1,17 @@
 {
-  "Version": "1.0.183",
+  "Version": "1.0.184",
   "Features": [
     {
-      "Title": "Nine appearance choices",
-      "Description": "Open Settings > Appearance to choose Light, Dark, Same as Windows, Classic Blue & Orange, Graphite & Orange, Midnight & Gold, Teal & Ivory, Slate & Blue, or Charcoal & Emerald. Your choice is saved for this Windows account. Existing preferences are kept. Over and short amounts remain green and red."
+      "Title": "More supplier invoices recognized",
+      "Description": "AK Wholesale and other supported supplier PDFs now account for printed taxes, shipping and discounts when checking invoice totals. The next normal email check rechecks recent attachments automatically. Existing purchases are protected against duplicates. For older invoices, open Invoice Inbox, select Include month and Check Invoices. PDFs needing corrections remain available in Needs Review."
     },
     {
-      "Title": "Cleaner batch search and sorting",
-      "Description": "Shift Cash Drop now has a compact toolbar directly above the records in all three layouts. Search batches with the magnifying-glass field, clear the search with X or Esc, and use the filter menu to sort by business date or batch number. Sync Health is beside these controls. Automatic sync setup remains protected for developer access."
+      "Title": "Product costs and price history by period",
+      "Description": "Product Costs and Price Alerts now have visible Current Month, Previous Month, Current Year, Previous Year and Custom period choices. Price changes compare purchases in invoice-date order, including older invoices imported later. Missing comparisons from saved invoice lines are rebuilt once when you open either section. Two purchases of the same product and pack size are needed to show a change."
+    },
+    {
+      "Title": "Opening cash reminder only after Month Close",
+      "Description": "Closing a completed month enables one opening-cash reminder for the next month. Dismissing it is remembered across restarts. A month already in progress will no longer trigger daily reminders. You can still use Set Carry Forward when ready."
     }
   ]
 }

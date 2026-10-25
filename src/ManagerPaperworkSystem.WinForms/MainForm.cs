@@ -5737,6 +5737,12 @@ internal sealed partial class MainForm : Form
     private Control BuildProductCosts()
     {
         var root = SectionRoot(245, 72);
+        var storeId = _currentStoreId;
+        var connection = CurrentStoreConnectionString();
+        var purchaseService = _purchaseService.Capture();
+        var costFrom = new DateOnly(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var costTo = DateOnly.FromDateTime(DateTime.Today);
+        var historyRepaired = false;
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = WinTheme.Bg };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
@@ -5785,9 +5791,9 @@ internal sealed partial class MainForm : Form
         var stats = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg };
         right.Controls.Add(stats, 0, 0);
         var tracked = MetricCard(stats, "Products Tracked", "0", WinTheme.Copper, "", 205, 86);
-        var changes = MetricCard(stats, "Cost Changes (30 Days)", "0", WinTheme.Green, "", 220, 86);
-        var increase = MetricCard(stats, "Highest Increase (30 Days)", "+0.00%", WinTheme.Red, "", 245, 86);
-        var historyShell = MockBorderCard("Recent Cost History (Last 3)", "\uE823", 34);
+        var changes = MetricCard(stats, "Changes in Period", "0", WinTheme.Green, "", 220, 86);
+        var increase = MetricCard(stats, "Highest Increase", "+0.00%", WinTheme.Red, "", 245, 86);
+        var historyShell = MockBorderCard("Recent Costs in Period (Last 3)", "\uE823", 34);
         right.Controls.Add((Control)historyShell.Parent!, 0, 1);
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = WinTheme.Bg, Padding = new Padding(0, 8, 0, 8) };
@@ -5798,16 +5804,23 @@ internal sealed partial class MainForm : Form
 
         async Task refreshAsync()
         {
-            var costs = await _purchaseService.GetProductCostsAsync(_currentStoreId);
+            if (!historyRepaired) { await purchaseService.RepairInvoicePriceHistoryAsync(storeId); historyRepaired = true; }
+            var costs = await purchaseService.GetProductCostsForPeriodAsync(storeId, costFrom, costTo);
+            using var db = CreateDb();
+            if (_currentStoreId != storeId || CurrentStoreConnectionString() != connection || grid.IsDisposed) return;
+            var periodAlerts = await db.PriceAlerts.AsNoTracking().Where(x => x.StoreId == storeId && x.InvoiceDate >= costFrom && x.InvoiceDate <= costTo).ToListAsync();
+            if (_currentStoreId != storeId || CurrentStoreConnectionString() != connection || grid.IsDisposed) return;
+            decimal Change(PriceAlert a) => a.OldUnitCost == 0 ? 0 : (a.NewUnitCost - a.OldUnitCost) / a.OldUnitCost * 100;
+            string CostChange(ProductCost c) { var a = periodAlerts.Where(x => x.ProductKey == c.ProductKey).OrderByDescending(x => x.InvoiceDate).ThenByDescending(x => x.Id).FirstOrDefault(); return a is null ? "Baseline / unchanged" : PercentText(Change(a)); }
             grid.DataSource = costs
-                .Select(x => new { x.Id, Select = false, Product = x.ProductName, SKU = x.Sku, Category = "", LastVendor = x.LastVendorName, UnitCost = x.LastUnitCost, AvgCost = x.LastUnitCost, Stock = "", LastDate = x.LastInvoiceDate, Change30Days = "", Actions = "" })
+                .Select(x => new { x.Id, Select = false, Product = x.ProductName, SKU = x.Sku, Category = "", LastVendor = x.LastVendorName, UnitCost = x.LastUnitCost, AvgCost = x.LastUnitCost, Stock = "", LastDate = x.LastInvoiceDate, LatestChange = CostChange(x), Actions = "" })
                 .ToList();
             HideId(grid);
             tracked.Text = costs.Count.ToString(CultureInfo.InvariantCulture);
-            changes.Text = costs.Count(x => x.UpdatedUtc >= DateTime.UtcNow.AddDays(-30)).ToString(CultureInfo.InvariantCulture);
-            increase.Text = costs.Count > 0 ? "+0.00%" : "+0.00%";
-            var recent = costs.OrderByDescending(x => x.UpdatedUtc).Take(3)
-                .Select(x => new[] { x.LastVendorName, x.LastInvoiceDate.ToString("M/d/yyyy", CultureInfo.InvariantCulture), x.LastUnitCost.ToString("C4"), "" })
+            changes.Text = periodAlerts.Count.ToString(CultureInfo.InvariantCulture);
+            increase.Text = PercentText(periodAlerts.Select(Change).Where(x => x > 0).DefaultIfEmpty(0).Max());
+            var recent = costs.OrderByDescending(x => x.LastInvoiceDate).Take(3)
+                .Select(x => new[] { x.LastVendorName, x.LastInvoiceDate.ToString("M/d/yyyy", CultureInfo.InvariantCulture), x.LastUnitCost.ToString("C4"), CostChange(x) })
                 .ToList();
             var existingHistory = historyShell.GetControlFromPosition(0, 1);
             if (existingHistory is not null)
@@ -5817,7 +5830,6 @@ internal sealed partial class MainForm : Form
             }
             historyShell.Controls.Add(BuildMiniTable(new[] { "Vendor", "Date", "Unit Cost", "Change" }, recent), 0, 1);
         }
-        void refresh() => _ = refreshAsync();
         AddSectionButton(actions, "Home", (_, _) => ShowModule("Dashboard"), width: 150);
         AddSectionButton(actions, "Add Product", (_, _) => MessageBox.Show(this, "Product costs are created from imported invoice line items.", "Product Costs", MessageBoxButtons.OK, MessageBoxIcon.Information), true, 190);
         AddSectionButton(actions, "Import Invoice", async () => await ImportProductCostsAsync(refreshAsync), width: 190);
@@ -5841,13 +5853,16 @@ internal sealed partial class MainForm : Form
             await refreshAsync();
         }, width: 205, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Refresh", async () => await refreshAsync(), width: 150);
-        refresh();
-        return ModuleShell("\uE71B", "Product Costs", "Track item costs, vendors, and price history.", root);
+        _pendingModuleActivation = refreshAsync;
+        var periodHost = AddCostPeriodBar(root, async (from, to) => { costFrom = from; costTo = to; await refreshAsync(); });
+        return ModuleShell("\uE71B", "Product Costs", "Costs from invoices in the selected period. Price changes require two purchases of the same product and pack size.", periodHost);
     }
 
     private Control BuildPriceAlerts()
     {
         var root = SectionRoot(246, 72);
+        var storeId = _currentStoreId; var connection = CurrentStoreConnectionString();
+        var purchaseService = _purchaseService.Capture(); var historyRepaired = false;
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = WinTheme.Bg };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
@@ -5867,7 +5882,6 @@ internal sealed partial class MainForm : Form
         var minChange = SectionCombo("All", "5%+", "10%+", "20%+");
         var product = SectionTextBox("Search by product name or SKU...");
         var threshold = SectionTextBox("10.00", rightAlign: true);
-        var alertPeriod = CreateStandardPeriodCombo();
         AddMockField(filters, "Category", category, 0, 0, 105);
         AddMockField(filters, "Supplier", supplier, 1, 0, 105);
         AddMockField(filters, "Status", status, 2, 0, 90);
@@ -5875,8 +5889,6 @@ internal sealed partial class MainForm : Form
         AddMockField(filters, "Search Product", product, 1, 1, 135);
         AddMockField(filters, "Alert Threshold (%)", threshold, 2, 1, 155);
         AddMockField(filters, "Auto Alert", SectionCombo("On", "Off"), 0, 2, 105);
-        AddMockField(filters, "Period *", alertPeriod, 1, 2, 105);
-        filters.SetColumnSpan(filters.GetControlFromPosition(1, 2)!, 2);
 
         var statGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = WinTheme.Bg };
         statGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
@@ -5937,24 +5949,22 @@ internal sealed partial class MainForm : Form
         });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Change", DataPropertyName = nameof(PriceAlertGridRow.Change), HeaderText = "Change", ReadOnly = true, MinimumWidth = 88, FillWeight = 70 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", DataPropertyName = nameof(PriceAlertGridRow.Status), HeaderText = "Status", ReadOnly = true, MinimumWidth = 82, FillWeight = 65 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Created", DataPropertyName = nameof(PriceAlertGridRow.Created), HeaderText = "Created", ReadOnly = true, MinimumWidth = 130, FillWeight = 110, DefaultCellStyle = new DataGridViewCellStyle { Format = "g" } });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "InvoiceDate", DataPropertyName = nameof(PriceAlertGridRow.InvoiceDate), HeaderText = "Invoice Date", ReadOnly = true, MinimumWidth = 130, FillWeight = 110, DefaultCellStyle = new DataGridViewCellStyle { Format = "d" } });
         root.Controls.Add(grid, 0, 2);
         root.Controls.Add(BuildGridFooter("Showing price alerts for selected store"), 0, 3);
 
-        var alertFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-        var alertTo = DateTime.Today;
-        var previousAlertPeriod = "Current Month";
-        var changingAlertPeriod = false;
+        var alertFrom = new DateOnly(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var alertTo = DateOnly.FromDateTime(DateTime.Today);
 
-        void refresh()
+        async Task refreshAsync()
         {
+            if (!historyRepaired) { await purchaseService.RepairInvoicePriceHistoryAsync(storeId); historyRepaired = true; }
+            if (_currentStoreId != storeId || CurrentStoreConnectionString() != connection || grid.IsDisposed) return;
             using var db = CreateDb();
-            var fromDate = alertFrom.Date;
-            var toExclusive = alertTo.Date.AddDays(1);
-            var rows = db.PriceAlerts.AsNoTracking()
-                .Where(x => x.StoreId == _currentStoreId && x.CreatedUtc >= fromDate && x.CreatedUtc < toExclusive)
-                .OrderByDescending(x => x.CreatedUtc)
-                .ToList();
+            var rows = await db.PriceAlerts.AsNoTracking()
+                .Where(x => x.StoreId == storeId && x.InvoiceDate >= alertFrom && x.InvoiceDate <= alertTo)
+                .OrderByDescending(x => x.InvoiceDate).ThenByDescending(x => x.Id).ToListAsync();
+            if (_currentStoreId != storeId || CurrentStoreConnectionString() != connection || grid.IsDisposed) return;
             var invoiceSources = db.PurchaseInvoices.AsNoTracking()
                 .Where(x => x.StoreId == _currentStoreId && x.FilePath != "")
                 .OrderByDescending(x => x.InvoiceDate)
@@ -5983,7 +5993,7 @@ internal sealed partial class MainForm : Form
                         NewInvoiceDetails = $"{x.VendorName} • Invoice {x.InvoiceNumber}".Trim(' ', '•'),
                         Change = PercentText(pct),
                         Status = x.IsRead ? "Read" : "New",
-                        Created = x.CreatedUtc
+                        Created = x.CreatedUtc, InvoiceDate = x.InvoiceDate
                     };
                 })
                 .ToList();
@@ -5998,24 +6008,6 @@ internal sealed partial class MainForm : Form
             highPriority.Text = rows.Count(x => !x.IsRead && Math.Abs(x.OldUnitCost == 0 ? 0 : ((x.NewUnitCost - x.OldUnitCost) / x.OldUnitCost) * 100m) >= 10m).ToString(CultureInfo.InvariantCulture);
             resolved.Text = rows.Count(x => x.IsRead).ToString(CultureInfo.InvariantCulture);
         }
-        alertPeriod.SelectedIndexChanged += (_, _) =>
-        {
-            if (changingAlertPeriod)
-                return;
-
-            if (!TryResolveStandardPeriod(alertPeriod.Text, alertFrom, alertTo, out var selectedFrom, out var selectedTo))
-            {
-                changingAlertPeriod = true;
-                alertPeriod.SelectedItem = previousAlertPeriod;
-                changingAlertPeriod = false;
-                return;
-            }
-
-            alertFrom = selectedFrom;
-            alertTo = selectedTo;
-            previousAlertPeriod = alertPeriod.Text;
-            refresh();
-        };
         grid.CellContentClick += (_, e) =>
         {
             if (e.RowIndex < 0 || grid.Rows[e.RowIndex].DataBoundItem is not PriceAlertGridRow alertRow)
@@ -6030,14 +6022,14 @@ internal sealed partial class MainForm : Form
         AddSectionButton(actions, "Manage Alerts", async () =>
         {
             await _purchaseService.MarkAllAlertsReadAsync(_currentStoreId);
-            refresh();
+            await refreshAsync();
         }, width: 190);
         AddSectionButton(actions, "Mark Read", async () =>
         {
             var id = SelectedId(grid);
             if (id is null) return;
             await _purchaseService.MarkAlertsReadAsync(_currentStoreId, new[] { id.Value });
-            refresh();
+            await refreshAsync();
         }, width: 170);
         AddSectionButton(actions, "Create Rule", (_, _) => MessageBox.Show(this, "Alert rules use the threshold and auto alert controls above.", "Price Alerts", MessageBoxButtons.OK, MessageBoxIcon.Information), width: 170, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Update Selected", async () =>
@@ -6045,30 +6037,31 @@ internal sealed partial class MainForm : Form
             var id = SelectedId(grid);
             if (id is null) return;
             await _purchaseService.MarkAlertsReadAsync(_currentStoreId, new[] { id.Value });
-            refresh();
+            await refreshAsync();
         }, width: 200, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Resolve Selected", async () =>
         {
             var id = SelectedId(grid);
             if (id is null) return;
             await _purchaseService.MarkAlertsReadAsync(_currentStoreId, new[] { id.Value });
-            refresh();
+            await refreshAsync();
         }, width: 200);
         AddSectionButton(actions, "Delete Selected", async () =>
         {
             var id = SelectedId(grid);
             if (id is null) return;
             await _purchaseService.DeleteAlertsAsync(_currentStoreId, new[] { id.Value });
-            refresh();
+            await refreshAsync();
         }, width: 200, enabled: _session.IsAdmin);
         AddSectionButton(actions, "Mark All Read", async () =>
         {
             await _purchaseService.MarkAllAlertsReadAsync(_currentStoreId);
-            refresh();
+            await refreshAsync();
         }, width: 180);
-        AddSectionButton(actions, "Refresh", (_, _) => refresh(), width: 145);
-        refresh();
-        return ModuleShell("\uE7BA", "Price Alerts", "Review supplier cost changes and alert thresholds.", root);
+        AddSectionButton(actions, "Refresh", async () => await refreshAsync(), width: 145);
+        _pendingModuleActivation = refreshAsync;
+        var periodHost = AddCostPeriodBar(root, async (from, to) => { alertFrom = from; alertTo = to; await refreshAsync(); });
+        return ModuleShell("\uE7BA", "Price Alerts", "Changes by invoice date. Two imported purchases of the same product and pack size are needed for comparison.", periodHost);
     }
 
     private Control BuildActivityLog()
@@ -10004,6 +9997,7 @@ internal sealed class PurchaseInvoiceGridRow
 
 internal sealed class PriceAlertGridRow
 {
+    public DateOnly InvoiceDate { get; set; }
     public int Id { get; set; }
     public bool Select { get; set; }
     public string Priority { get; set; } = "";

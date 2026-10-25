@@ -32,6 +32,8 @@ public sealed class LedgerMonth
     public DateOnly Month { get; set; }
     public bool IsClosed { get; set; }
     public DateTime? ClosedUtc { get; set; }
+    public bool OpeningPromptPending { get; set; }
+    public DateTime? OpeningPromptShownUtc { get; set; }
     [MaxLength(120)] public string ClosedBy { get; set; } = "";
     [Column(TypeName="decimal(18,2)")] public decimal? OpeningCash { get; set; }
     [MaxLength(120)] public string OpeningBy { get; set; } = "";

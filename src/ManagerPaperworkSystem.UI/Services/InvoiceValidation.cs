@@ -10,8 +10,11 @@ public static class InvoiceValidation
         if (invoice.Lines.Any(x => string.IsNullOrWhiteSpace(x.ProductName) || x.Quantity <= 0 || x.UnitCost <= 0))
             return "One or more product quantities or costs need review.";
         var subtotal = invoice.Lines.Sum(x => x.Amount ?? decimal.Round(x.Quantity * x.UnitCost, 2));
-        if (Math.Abs(subtotal - invoice.Total.Value) > 0.02m)
-            return $"Line items total {subtotal:N2}; invoice total {invoice.Total:N2}. Confirm taxes, shipping, discounts and missing lines.";
+        if (invoice.PrintedSubtotal.HasValue && Math.Abs(subtotal - invoice.PrintedSubtotal.Value) > 0.02m)
+            return $"Line items total {subtotal:N2}; printed subtotal {invoice.PrintedSubtotal:N2}. Review missing or misread product lines.";
+        var reconciled = subtotal + invoice.Adjustments.Sum(x => x.Amount);
+        if (Math.Abs(reconciled - invoice.Total.Value) > 0.02m)
+            return $"Line items plus identified charges/discounts total {reconciled:N2}; invoice total {invoice.Total:N2}. Confirm taxes, shipping, discounts and missing lines.";
         return null;
     }
 }

@@ -12,6 +12,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2"><PrivateAssets>all</PrivateAssets></PackageReference>
     <PackageReference Include="ClosedXML" Version="0.102.3" />
     <PackageReference Include="PdfPig" Version="0.1.13" />
+    <PackageReference Include="MailKit" Version="4.17.0" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/InvoiceEmailSearchPolicy.cs" Link="InvoiceEmailSearchPolicy.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/PosReportImportService.cs" Link="PosReportImportService.cs" />
     <ProjectReference Include="../../src/ManagerPaperworkSystem.Data/ManagerPaperworkSystem.Data.csproj" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalZReportHistory.cs" Link="PortalZReportHistory.cs" />
@@ -23,5 +25,6 @@
     <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/PurchaseService.cs" Link="PurchaseService.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/InvoiceImportService.cs" Link="InvoiceImportService.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/InvoiceValidation.cs" Link="InvoiceValidation.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/InvoicePrintedTotals.cs" Link="InvoicePrintedTotals.cs" />
   </ItemGroup>
 </Project>

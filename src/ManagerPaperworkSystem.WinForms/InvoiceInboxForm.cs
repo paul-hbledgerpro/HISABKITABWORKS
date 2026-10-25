@@ -83,7 +83,8 @@ internal sealed class InvoiceInboxForm : Form
             // Each source reports its own result so a mailbox error cannot hide an inbox result.
             if (service.GetSettings(key).Enabled)
                 try { var r = await service.SyncAsync(key, storeId, userId, userName, older.Checked ? DateOnly.FromDateTime(month.Value) : null);
-                    messages.Add($"Gmail: {r.InvoicesImported} Imported · {r.DuplicatesSkipped} Already Imported · {r.NeedsReview} Needs Review"); }
+                    messages.Add($"Gmail: {r.MessagesChecked} emails checked · {r.AttachmentsFound} PDFs found · {r.InvoicesImported} Imported · {r.DuplicatesSkipped} Already Imported · {r.NeedsReview} Needs Review"
+                        + (r.NeedsReview > 0 ? "\nNeeds Review PDFs were fetched. Select one below to see why it was not posted, then use Review / Import Selected." : "")); }
                 catch (Exception ex) { messages.Add("Gmail: " + AppBootstrap.RedactSensitiveText(ex.Message)); }
             if (!string.IsNullOrWhiteSpace(business?.InvoiceInboxApiUrl))
                 try { var r = await new CloudInvoiceInboxService(paths, service).SyncAsync(business, key, storeId, userId, userName);

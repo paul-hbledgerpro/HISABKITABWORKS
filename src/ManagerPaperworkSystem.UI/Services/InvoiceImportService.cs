@@ -25,6 +25,8 @@ public sealed class InvoiceImportResult
 
 public sealed class ImportedInvoice
 {
+    public decimal? PrintedSubtotal { get; set; }
+    public List<InvoiceAdjustment> Adjustments { get; } = new();
     public int? PageNumber { get; init; }
     public string VendorName { get; init; } = "";
     public string InvoiceNumber { get; init; } = "";
@@ -46,6 +48,7 @@ public sealed class InvoiceImportService
     private InvoiceImportResult ImportPdfWithScanFallback(string path, string? vendor, CancellationToken ct)
     {
         var result = ImportFromPdf(path, vendor);
+        InvoicePrintedTotals.Apply(result);
         if (_ocr is null || result.RawText.Count(char.IsLetterOrDigit) >= 60) return result;
         try
         {
@@ -83,6 +86,7 @@ public sealed class InvoiceImportService
                 }
             };
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             return new InvoiceImportResult
@@ -848,7 +852,7 @@ public sealed class InvoiceImportService
     private static bool IsAkWholesale(string text)
     {
         var t = (text ?? "").ToUpperInvariant();
-        return t.Contains("AK WHOLESALE")
+        return Regex.IsMatch(t, @"\bAK\s+WHOLESALE\b")
                || Regex.IsMatch(t, @"\bAKWHOLESALE\.COM\b");
     }
 
@@ -1373,9 +1377,10 @@ public sealed class InvoiceImportService
         }
         invDate ??= GuessInvoiceDate(raw);
 
-        // Balance is the final amount in AK invoices (label "Balance").
-        var total = FindLabeledMoney(allLines,
-            "balance", "balance due", "amount due", "grand total", "total");
+        // A payment changes Balance, not the value of the purchase.
+        var printedTotal = Regex.Matches(raw, @"(?im)^Total\s+\$?([\d,]+\.\d{2})\s*$").Cast<Match>().LastOrDefault();
+        var total = printedTotal is null ? null : MoneyOrNull(printedTotal.Groups[1].Value);
+        total ??= FindLabeledMoney(allLines, "grand total", "total", "balance", "balance due", "amount due");
         total ??= GuessTotal(raw);
 
         // Extract line items using position-based parsing (most reliable for AK template)
