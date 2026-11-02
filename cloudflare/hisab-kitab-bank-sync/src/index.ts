@@ -1,4 +1,5 @@
 import { authenticateRequest } from "./auth";
+import { sendShiftShortage } from "./shift-shortage";
 import { decryptSecret, encryptSecret, fromBase64, sha256Hex } from "./crypto";
 import {
   claimLinkSession,
@@ -56,8 +57,10 @@ async function route(request: Request, env: WorkerEnv, ctx: ExecutionContext): P
 
   const bodyText = request.method === "GET" || request.method === "HEAD"
     ? ""
-    : await readLimitedText(request, url.pathname === "/api/reports/email" ? 12_000_000 : 256_000);
+    : await readLimitedText(request, url.pathname === "/api/reports/email" ? 12_000_000 : url.pathname === "/api/alerts/shift-shortage" ? 1_600_000 : 256_000);
   const authenticated = await authenticateRequest(request, env, bodyText);
+  if (request.method === "POST" && url.pathname === "/api/alerts/shift-shortage")
+    return sendShiftShortage(env, authenticated, bodyText);
 
   if (request.method === "POST" && url.pathname === "/api/bank/link-session") {
     return createLinkSession(request, env, authenticated);

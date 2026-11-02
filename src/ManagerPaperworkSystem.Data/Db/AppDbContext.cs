@@ -21,6 +21,8 @@ public sealed class AppDbContext : DbContext
 
     public DbSet<ShiftLogEntry> ShiftLogs => Set<ShiftLogEntry>();
     public DbSet<PendingShiftDrop> PendingShiftDrops => Set<PendingShiftDrop>();
+    public DbSet<ShiftShortageSettings> ShiftShortageSettings => Set<ShiftShortageSettings>();
+    public DbSet<ShiftShortageEmail> ShiftShortageEmails => Set<ShiftShortageEmail>();
     public DbSet<LedgerMonth> LedgerMonths => Set<LedgerMonth>();
     public DbSet<ShiftPayoutRollup> ShiftPayoutRollups => Set<ShiftPayoutRollup>();
     public DbSet<CashOnHandEntry> CashOnHand => Set<CashOnHandEntry>();
@@ -46,6 +48,8 @@ public sealed class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<ShiftShortageSettings>().Property(x => x.StoreId).ValueGeneratedNever();
+        modelBuilder.Entity<ShiftShortageEmail>().HasIndex(x => new { x.StoreId, x.Status, x.NextAttemptUtc });
         modelBuilder.Entity<PendingShiftDrop>().HasIndex(x => x.RequestId).IsUnique();
         modelBuilder.Entity<PendingShiftDrop>().HasIndex(x => new {x.StoreId,x.Batch});
         modelBuilder.Entity<LedgerMonth>().HasIndex(x => new {x.StoreId,x.Month}).IsUnique();
@@ -308,7 +312,7 @@ public sealed class AppDbContext : DbContext
 
     private static bool IsNoisyDetailEntity(object entity) => entity is
         PosSalesTenderLine or PosSalesHourlyLine or PosSalesDepartmentLine or
-        PurchaseInvoiceLine or PayrollEntry;
+        PurchaseInvoiceLine or PayrollEntry or ShiftShortageEmail;
 
     private static bool IsSensitiveProperty(string name) =>
         name.Contains("Password", StringComparison.OrdinalIgnoreCase) ||
@@ -351,6 +355,7 @@ public sealed class AppDbContext : DbContext
         Store => "Stores",
         UserAccount => "User Accounts",
         AppSettings => "Settings",
+        ManagerPaperworkSystem.Core.Models.ShiftShortageSettings => "Shift Shortage Alerts",
         _ => entity.GetType().Name
     };
 

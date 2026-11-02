@@ -26,7 +26,7 @@ export function html(body: string, status = 200): Response {
   });
 }
 
-export async function readLimitedText(request: Request, maxBytes = 256_000): Promise<string> {
+export async function readLimitedText(request: Pick<Request, "headers" | "body">, maxBytes = 256_000): Promise<string> {
   const declaredLength = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new HttpError(413, "Request body is too large.");

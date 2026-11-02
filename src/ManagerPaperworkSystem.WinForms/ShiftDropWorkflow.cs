@@ -77,5 +77,6 @@ internal static class ShiftDropWorkflow
         if (cash is not null) { cash.Date = shift.Date; cash.CashAdded = request.Drop; cash.PayoutAmount = 0; cash.IsPayout = false; cash.Description = "Auto: Cash Drop from Shift Log " + shift.ShiftNo; cash.CreatedByUserId = request.UserId; cash.CreatedByName = request.UserName; }
         request.Status = "Applied"; request.NotifiedUtc = null; request.ShiftId = shift.Id; request.Variance = shift.Variance;
         request.Message = $"Batch {shift.ShiftNo} — {shift.Date:M/d/yyyy}";
+        await ShiftShortageService.QueueAsync(db, shift, request.UserName);
     }
 }

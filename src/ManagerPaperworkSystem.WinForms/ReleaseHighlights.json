@@ -1,13 +1,13 @@
 {
+  "Version": "1.0.187",
   "Features": [
     {
-      "Title": "Keep entering shift drops",
-      "Description": "After a successful shift drop save and the result message, the cursor returns to Shift / Batch Number. Previous entry values clear so you can enter the next batch without pressing Record Shift Drop again."
+      "Description": "Owners can enable Shift Shortage Alerts in Settings for each store, choose a shortage limit, and add up to ten recipient emails. Only owners and password-unlocked developers can change this setup.",
+      "Title": "Owner-controlled shift shortage emails"
     },
     {
-      "Title": "Keep entering cash payouts",
-      "Description": "After a successful payout save, the cursor returns to Payout Amount with the default value selected. Enter the next payout directly. This works in all three ledger layouts."
+      "Description": "When an entered drop is short by more than the chosen limit, a detailed email and PDF show the shortage prominently in red. Waiting drops are checked after their report arrives. Delivery retries in the background, with status available in the alert settings.",
+      "Title": "Detailed reports and background delivery"
     }
-  ],
-  "Version": "1.0.186"
+  ]
 }

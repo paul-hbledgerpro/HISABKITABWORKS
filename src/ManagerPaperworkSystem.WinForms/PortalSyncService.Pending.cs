@@ -47,6 +47,9 @@ internal static partial class PortalSyncService
             }
         }
         foreach (var result in results) WriteLog(result);
+        try { await ShiftShortageDelivery.SendDueAsync(db, storeId, settings.StoreGuid, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        { WriteLog(new PortalSyncRunResult(settings.BusinessName, false, false, "Shortage email remains queued: " + AppBootstrap.RedactSensitiveText(ex.Message))); }
         return results;
     }
 }

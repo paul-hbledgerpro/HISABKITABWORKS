@@ -67,13 +67,13 @@ internal sealed class LiveBankSyncClient : IDisposable
         return await ReadAsync<List<LiveBankConnection>>(response, cancellationToken);
     }
 
-    private static LiveBankClientIdentity CurrentIdentity()
+    private static LiveBankClientIdentity CurrentIdentity(string? storeGuid = null)
     {
         var license = LicenseRuntime.CurrentLicense
                       ?? throw new InvalidOperationException("A valid PC license is required before connecting a bank.");
         var identity = DeviceLicenseService.GetOrCreateIdentity();
         return new LiveBankClientIdentity(
-            LicenseRuntime.ActiveStoreGuid,
+            storeGuid ?? LicenseRuntime.ActiveStoreGuid,
             license.CustomerId,
             license.LicenseId,
             identity.DeviceId,
@@ -90,9 +90,10 @@ internal sealed class LiveBankSyncClient : IDisposable
         HttpMethod method,
         string path,
         byte[] bodyBytes,
-        bool hasJsonBody)
+        bool hasJsonBody,
+        string? storeGuid = null)
     {
-        var identity = CurrentIdentity();
+        var identity = CurrentIdentity(storeGuid);
         var proof = DeviceLicenseService.CreateGatewayRequestProof(
             method.Method,
             path,
@@ -158,6 +159,22 @@ internal sealed class LiveBankSyncClient : IDisposable
         _ = await ReadAsync<ReportEmailResponse>(response, cancellationToken);
     }
 
+    public async Task<ShortageEmailResult> SendShortageAsync(string storeGuid, object payload, CancellationToken ct)
+    {
+        EnsureConfigured();
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
+        using var request = CreateSignedRequest(HttpMethod.Post, "/api/alerts/shift-shortage", bytes, true, storeGuid);
+        using var response = await _http.SendAsync(request, ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            return new(false, true, "Delivery needs developer review to avoid a duplicate email.");
+        if ((int)response.StatusCode == 429)
+            return new(false, false, "Email limit reached. Delivery will retry without purchasing extra capacity.");
+        if (!response.IsSuccessStatusCode)
+            return new(false, false, "Email service unavailable (" + (int)response.StatusCode + "). Automatic retry is queued.");
+        var result = await response.Content.ReadFromJsonAsync<ReportEmailResponse>(JsonOptions, ct);
+        return result?.Sent == true ? new(true, false, "Accepted by email service") : new(false, false, "Waiting for email service confirmation.");
+    }
+
     private void EnsureConfigured()
     {
         if (!IsConfigured)
@@ -203,6 +220,7 @@ internal sealed record ReportEmailRequest(
     string PdfBase64);
 
 internal sealed record ReportEmailResponse(bool Sent, string MessageId);
+internal sealed record ShortageEmailResult(bool Sent, bool Attention, string Message);
 
 internal sealed record LiveBankConnection(
     string ConnectionId,

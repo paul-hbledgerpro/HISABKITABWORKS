@@ -104,6 +104,7 @@ internal sealed partial class MainForm : Form
 
         Controls.Add(BuildRoot());
         _monthlyDeliveryTimer.Tick += async (_, _) => await BeginMonthlyBankStatementDeliveryAsync();
+        _shortageEmailTimer.Tick += async (_, _) => await DeliverShiftShortagesAsync();
         Load += async (_, _) =>
         {
             await LoadStoresAsync();
@@ -142,6 +143,8 @@ internal sealed partial class MainForm : Form
             }
             _ = BeginDueInvoiceEmailSyncAsync();
             _monthlyDeliveryTimer.Start();
+            _shortageEmailTimer.Start();
+            _ = DeliverShiftShortagesAsync();
             _invoiceEmailSyncTimer.Start();
             _portalSyncRecoveryTimer.Start();
             _backfillResultTimer.Start();
@@ -155,6 +158,8 @@ internal sealed partial class MainForm : Form
         FormClosed += (_, _) =>
         {
             _monthlyDeliveryTimer.Stop();
+            _shortageEmailTimer.Stop();
+            _shortageEmailTimer.Dispose();
             _monthlyDeliveryTimer.Dispose();
             _invoiceEmailSyncTimer.Stop();
             _invoiceEmailSyncTimer.Dispose();
@@ -776,6 +781,9 @@ internal sealed partial class MainForm : Form
         });
         settings.DropDownItems.Add(appearance);
         settings.DropDownItems.Add(MenuItem("Month Close / History...",async(_,_)=>await ManageLedgerMonthAsync()));
+        var shortageAlerts = MenuItem("Shift Shortage Alerts...", async (_, _) => await ManageShiftShortageAsync());
+        settings.DropDownItems.Add(shortageAlerts);
+        settings.DropDownOpening += (_, _) => shortageAlerts.Enabled = _session.IsAdmin || _developerSettingsUnlocked;
 
         var help = new ToolStripMenuItem("Help") { ForeColor = Color.White };
         var updateItem = MenuItem("Check for Updates...", async (_, _) => await AppUpdateStartupService.CheckManuallyAsync(this));
@@ -2358,8 +2366,14 @@ internal sealed partial class MainForm : Form
                 CreatedByName = _session.DisplayName
             };
             db.ShiftLogs.Add(entry);
-            await db.SaveChangesAsync();
-            await SyncShiftLogAccountingAsync(entry.Date);
+            await using (var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable))
+            {
+                await db.SaveChangesAsync();
+                await SyncShiftLogAccountingAsync(entry.Date, db);
+                await ShiftShortageService.QueueAsync(db, entry, _session.DisplayName);
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
             refresh();
             clearAllShiftFields();
         }
@@ -2528,6 +2542,8 @@ internal sealed partial class MainForm : Form
                 await db.SaveChangesAsync();
                 await SyncShiftLogAccountingAsync(oldDate, db);
                 if (correctionEntry.Date != oldDate) await SyncShiftLogAccountingAsync(correctionEntry.Date, db);
+                await ShiftShortageService.QueueAsync(db, correctionEntry, _session.DisplayName);
+                await db.SaveChangesAsync();
                 await transaction.CommitAsync();
             }
             catch (Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message), "Shift Cash Drop"); return; }
@@ -2584,6 +2600,8 @@ internal sealed partial class MainForm : Form
                 entry.PayoutReason = reason.Text.Trim();
                 await db.SaveChangesAsync();
                 await SyncShiftLogAccountingAsync(entry.Date, db);
+                await ShiftShortageService.QueueAsync(db, entry, _session.DisplayName);
+                await db.SaveChangesAsync();
                 await transaction.CommitAsync();
             }
             catch (Exception ex) { MessageBox.Show(this, AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message), "Shift Cash Drop"); return; }

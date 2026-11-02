@@ -7,6 +7,7 @@ public static class LedgerWorkflowSchema
 {
     public static async Task EnsureAsync(AppDbContext db, CancellationToken ct = default)
     {
+        await ShiftShortageSchema.EnsureAsync(db, ct);
         if (db.Database.IsSqlite())
         {
             var connection = db.Database.GetDbConnection();
