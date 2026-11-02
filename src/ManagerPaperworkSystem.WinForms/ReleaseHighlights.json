@@ -1,13 +1,13 @@
 {
-  "Version": "1.0.185",
   "Features": [
     {
-      "Title": "Startup after Month Close is fixed",
-      "Description": "HISAB KITAB now opens after a completed month is closed. Startup cleanup leaves closed-month records untouched and only repairs missing legacy values in editable records. Closed months remain protected, and the next month remains available for normal entries."
+      "Title": "Keep entering shift drops",
+      "Description": "After a successful shift drop save and the result message, the cursor returns to Shift / Batch Number. Previous entry values clear so you can enter the next batch without pressing Record Shift Drop again."
     },
     {
-      "Title": "Month Close does not require license activation",
-      "Description": "A closed-month database protection message is no longer treated as a license or connection repair request. Your saved license and connection settings are retained. You do not need to reopen a closed month or re-enter a license because of Month Close."
+      "Title": "Keep entering cash payouts",
+      "Description": "After a successful payout save, the cursor returns to Payout Amount with the default value selected. Enter the next payout directly. This works in all three ledger layouts."
     }
-  ]
+  ],
+  "Version": "1.0.186"
 }

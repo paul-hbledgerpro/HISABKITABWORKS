@@ -10,6 +10,7 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        if (args.Length == 1 && args[0] == "--repeat-entry") { RepeatEntryChecks.Run(); return; }
         if (args.Length == 2 && args[0] == "--cost-periods") { CostPeriodChecks.Run(Path.GetFullPath(args[1])); return; }
         typeof(ThemePreferences).GetProperty(nameof(ThemePreferences.Choice))!.SetValue(null, "Light");
         if (args.Length == 2 && args[0] == "--toolbar") { ShiftToolbarChecks.Run(Path.GetFullPath(args[1])); return; }

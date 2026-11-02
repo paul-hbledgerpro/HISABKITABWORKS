@@ -128,17 +128,29 @@ internal sealed class LedgerEntryPanel : UserControl
         }
         if (LayoutChoice == LedgerLayout.GuidedGrid && !_review)
         {
-            _review = true; UpdateState(); _message.Text = $"Confirm {( _shift ? "batch " + draft.Batch : draft.Payee)}: {draft.Amount:C2}" + (_shift ? $"; payout {draft.Payout:C2}." : "."); return;
+            _review = true; UpdateState(); _message.Text = $"Confirm {( _shift ? "batch " + draft.Batch : draft.Payee)}: {draft.Amount:C2}" + (_shift ? $"; payout {draft.Payout:C2}." : "."); _save.Focus(); return;
         }
+        var saved = false;
         IsBusy = true; UpdateState();
         try
         {
             await _submit(draft); if (IsDisposed) return;
             _amount.Value = _payout.Value = 0; _payee.SelectedIndex = _reason.SelectedIndex = _batch.SelectedIndex = -1; _payee.Text = _reason.Text = _batch.Text = ""; _review = false; _batchEdited = false;
             await RefreshChoicesAsync(); _message.Text = "Entry saved.";
+            saved = true;
         }
         catch (OperationCanceledException) { if (!IsDisposed) _message.Text = "Entry was not saved. Your values are still here."; }
         catch (Exception ex) { if (!IsDisposed) _message.Text = AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message); }
-        finally { IsBusy = false; if (!IsDisposed) { var message = _message.Text; UpdateState(); _message.Text = message; } }
+        finally
+        {
+            IsBusy = false;
+            if (!IsDisposed)
+            {
+                var message = _message.Text; UpdateState(); _message.Text = message;
+                // Restore focus only after the controls are enabled, and after the
+                // result dialog/grid refresh. The next entry needs no toolbar click.
+                if (saved && Visible) FocusEntry();
+            }
+        }
     }
 }
