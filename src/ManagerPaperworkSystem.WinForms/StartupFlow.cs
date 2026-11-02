@@ -28,6 +28,15 @@ internal static class StartupFlow
 
     public static bool HandleDatabaseStartupFailure(Exception ex)
     {
+        if (DatabaseStartupFailurePolicy.IsClosedPeriod(ex))
+        {
+            MessageBox.Show(
+                "Database startup was blocked by closed-month protection. This is not a license activation error.\n\n" +
+                "Your saved license and connection settings have been kept. Install the latest HISAB KITAB update and try again. " +
+                "If it continues, send this message to support.\n\n" + AppBootstrap.RedactSensitiveText(ex.GetBaseException().Message),
+                "Closed Month — Startup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
         var message =
             "HISAB KITAB could not connect to the saved database connection.\n\n" +
             $"{AppBootstrap.RedactSensitiveText(ex.Message)}\n\n" +

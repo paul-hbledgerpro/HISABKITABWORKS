@@ -104,18 +104,6 @@ public static class DbInitializer
                     IF COL_LENGTH(N'[dbo].[ShiftLogs]', N'CorrectionReason') IS NULL
                         ALTER TABLE [dbo].[ShiftLogs] ADD [CorrectionReason] NVARCHAR(300) NOT NULL DEFAULT '';
 
-                    -- Legacy databases and older import paths can contain NULL in
-                    -- columns that the current EF model reads as required strings.
-                    -- Normalize them before any dashboard query materializes rows.
-                    UPDATE [dbo].[ShiftLogs]
-                    SET [Employee] = COALESCE([Employee], ''),
-                        [ShiftNo] = COALESCE([ShiftNo], ''),
-                        [PayoutReason] = COALESCE([PayoutReason], ''),
-                        [PosReportKey] = COALESCE([PosReportKey], ''),
-                        [PosReportPath] = COALESCE([PosReportPath], ''),
-                        [CreatedByName] = COALESCE([CreatedByName], ''),
-                        [CreatedByUserId] = COALESCE([CreatedByUserId], 0),
-                        [CorrectionReason] = COALESCE([CorrectionReason], '');
                     IF NOT EXISTS (
                         SELECT 1 FROM sys.indexes
                         WHERE name = 'UX_ShiftLogs_PosSalesSummaryId'
@@ -132,6 +120,7 @@ public static class DbInitializer
                             WHERE [PosReportKey] <> '';
                 END";
             await shiftCmd.ExecuteNonQueryAsync(ct);
+            await ShiftLogStartupNormalization.RunAsync(conn, sqlServer: true, ct);
 
             using var posSummaryMigrationCmd = conn.CreateCommand();
             posSummaryMigrationCmd.CommandText = @"
@@ -258,20 +247,7 @@ public static class DbInitializer
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosReportPath", "TEXT NOT NULL DEFAULT ''", ct);
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "PosReportStoreIdentity", "TEXT NOT NULL DEFAULT ''", ct);
             await EnsureSqliteColumnAsync(conn, "ShiftLogs", "CorrectionReason", "TEXT NOT NULL DEFAULT ''", ct);
-            using (var normalizeShiftCmd = conn.CreateCommand())
-            {
-                normalizeShiftCmd.CommandText = @"
-                    UPDATE ShiftLogs
-                    SET Employee = COALESCE(Employee, ''),
-                        ShiftNo = COALESCE(ShiftNo, ''),
-                        PayoutReason = COALESCE(PayoutReason, ''),
-                        PosReportKey = COALESCE(PosReportKey, ''),
-                        PosReportPath = COALESCE(PosReportPath, ''),
-                        CreatedByName = COALESCE(CreatedByName, ''),
-                        CreatedByUserId = COALESCE(CreatedByUserId, 0),
-                        CorrectionReason = COALESCE(CorrectionReason, '')";
-                await normalizeShiftCmd.ExecuteNonQueryAsync(ct);
-            }
+            await ShiftLogStartupNormalization.RunAsync(conn, sqlServer: false, ct);
             using (var shiftIndexCmd = conn.CreateCommand())
             {
                 shiftIndexCmd.CommandText =

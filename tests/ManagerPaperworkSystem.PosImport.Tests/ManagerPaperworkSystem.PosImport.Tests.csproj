@@ -14,6 +14,7 @@
     <PackageReference Include="PdfPig" Version="0.1.13" />
     <PackageReference Include="MailKit" Version="4.17.0" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/InvoiceEmailSearchPolicy.cs" Link="InvoiceEmailSearchPolicy.cs" />
+    <Compile Include="../../src/ManagerPaperworkSystem.WinForms/DatabaseStartupFailurePolicy.cs" Link="DatabaseStartupFailurePolicy.cs" />
     <Compile Include="../../src/ManagerPaperworkSystem.UI/Services/PosReportImportService.cs" Link="PosReportImportService.cs" />
     <ProjectReference Include="../../src/ManagerPaperworkSystem.Data/ManagerPaperworkSystem.Data.csproj" />
     <Compile Include="../../src/ManagerPaperworkSystem.WinForms/PortalZReportHistory.cs" Link="PortalZReportHistory.cs" />
